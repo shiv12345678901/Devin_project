@@ -18,6 +18,8 @@ import { api } from '../api/client'
 import type { CacheStats, HistoryEntry } from '../api/types'
 import { formatRelative, formatRuntime, useRuns } from '../store/runs'
 import type { Run, RunStatus, RunTool } from '../store/runs'
+import { useToast } from '../store/toast'
+import { useConfirm } from '../components/ConfirmDialog'
 
 type ToolLike = RunTool | 'regenerate' | 'text-to-image' | 'html-to-image' | 'image-to-screenshots' | string | undefined
 
@@ -337,6 +339,8 @@ export default function Processes() {
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [filter, setFilter] = useState<'all' | RunTool>('all')
+  const toast = useToast()
+  const confirmDialog = useConfirm()
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -378,12 +382,23 @@ export default function Processes() {
   }, [runs, history, filter])
 
   const clearCache = async () => {
-    if (!confirm('Clear the AI response cache?')) return
+    const ok = await confirmDialog({
+      title: 'Clear the AI response cache?',
+      message: 'Subsequent generations will hit the AI provider again until the cache warms up.',
+      confirmLabel: 'Clear cache',
+      variant: 'danger',
+    })
+    if (!ok) return
     try {
       await api.clearCache()
       await refresh()
+      toast.push({ variant: 'success', message: 'AI response cache cleared.' })
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e))
+      toast.push({
+        variant: 'error',
+        title: 'Clear cache failed',
+        message: e instanceof Error ? e.message : String(e),
+      })
     }
   }
 
@@ -460,8 +475,13 @@ export default function Processes() {
         {runs.length > 0 && (
           <button
             className="btn-ghost text-xs"
-            onClick={() => {
-              if (confirm('Clear the local process log? (Backend history is not affected.)')) clear()
+            onClick={async () => {
+              const ok = await confirmDialog({
+                title: 'Clear the local process log?',
+                message: 'Only your browser-local list of runs is cleared. Backend history is not affected.',
+                confirmLabel: 'Clear log',
+              })
+              if (ok) clear()
             }}
           >
             <Trash2 size={12} /> Clear log

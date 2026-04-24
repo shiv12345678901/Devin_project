@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { CheckCircle2, Loader2, Server, Cpu, Sparkles, Presentation, XCircle, AlertTriangle } from 'lucide-react'
 import { api } from '../api/client'
 import type { OutputFormat, PreflightResponse } from '../api/types'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 type CheckStatus = 'idle' | 'running' | 'pass' | 'fail' | 'warn'
 
@@ -48,6 +49,7 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
   const [data, setData] = useState<PreflightResponse | null>(null)
   const [loadingKey, setLoadingKey] = useState<keyof PreflightResponse['checks'] | null>('platform')
   const [error, setError] = useState<string | null>(null)
+  const dialogRef = useFocusTrap<HTMLDivElement>(true)
 
   useEffect(() => {
     let cancelled = false
@@ -114,9 +116,11 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
         aria-hidden
       />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="preflight-title"
+        tabIndex={-1}
         className="relative w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-lg dark:border-white/10 dark:bg-slate-900"
       >
         <h2

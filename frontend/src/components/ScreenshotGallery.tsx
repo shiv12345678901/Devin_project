@@ -1,6 +1,7 @@
 import { Download, Eye, Package } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { useToast } from '../store/toast'
 
 interface Props {
   /**
@@ -18,6 +19,17 @@ export default function ScreenshotGallery(props: Props) {
   // props.screenshotFolder is intentionally unused — see Props docs.
   const [preview, setPreview] = useState<string | null>(null)
   const [zipping, setZipping] = useState(false)
+  const toast = useToast()
+
+  // Esc closes the lightbox preview.
+  useEffect(() => {
+    if (!preview) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreview(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [preview])
 
   if (files.length === 0) {
     return (
@@ -45,7 +57,11 @@ export default function ScreenshotGallery(props: Props) {
       a.remove()
       URL.revokeObjectURL(url)
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err))
+      toast.push({
+        variant: 'error',
+        title: 'Download failed',
+        message: err instanceof Error ? err.message : String(err),
+      })
     } finally {
       setZipping(false)
     }

@@ -3,13 +3,47 @@ import type { ReactNode } from 'react'
 import { MAX_RUNS, RunsContext, STORAGE_KEY } from './runs'
 import type { Run, RunsContextValue } from './runs'
 
+/** Sanitize a single persisted run.
+ *
+ * Returns null if the entry is structurally bogus (missing required keys,
+ * wrong types). Without this, an arbitrary localStorage payload could
+ * crash the Processes / Library / Home views by reaching r.tool.split etc.
+ */
+function migrateRun(value: unknown): Run | null {
+  if (!value || typeof value !== 'object') return null
+  const r = value as Partial<Run>
+  if (typeof r.id !== 'string' || typeof r.tool !== 'string') return null
+  if (!['text-to-video', 'html-to-video', 'image-to-video'].includes(r.tool)) return null
+  if (typeof r.startedAt !== 'number') return null
+  if (!['running', 'success', 'error', 'cancelled'].includes(r.status as string)) {
+    r.status = 'error'
+  }
+  // Mark anything still flagged "running" on first load as cancelled — the
+  // SSE stream that owned it died with the previous tab.
+  if (r.status === 'running') {
+    r.status = 'cancelled'
+    r.endedAt = r.endedAt ?? Date.now()
+  }
+  if (r.screenshotFiles && !Array.isArray(r.screenshotFiles)) {
+    r.screenshotFiles = []
+  }
+  if (typeof r.inputPreview !== 'string') r.inputPreview = ''
+  return r as Run
+}
+
 function load(): Run[] {
   if (typeof window === 'undefined') return []
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
-    const parsed = JSON.parse(raw) as Run[]
-    return Array.isArray(parsed) ? parsed : []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    const cleaned: Run[] = []
+    for (const entry of parsed) {
+      const migrated = migrateRun(entry)
+      if (migrated) cleaned.push(migrated)
+    }
+    return cleaned
   } catch {
     return []
   }

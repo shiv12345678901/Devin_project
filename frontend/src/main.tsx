@@ -5,15 +5,21 @@ import App from './App.tsx'
 import { RunsProvider } from './store/RunsProvider'
 import { SettingsProvider } from './store/SettingsProvider'
 import { TrackedGenerationProvider } from './hooks/useTrackedGenerate'
+import { ToastProvider } from './store/ToastProvider'
+import { ConfirmProvider } from './components/ConfirmDialog'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <SettingsProvider>
-      <RunsProvider>
-        <TrackedGenerationProvider>
-          <App />
-        </TrackedGenerationProvider>
-      </RunsProvider>
+      <ToastProvider>
+        <ConfirmProvider>
+          <RunsProvider>
+            <TrackedGenerationProvider>
+              <App />
+            </TrackedGenerationProvider>
+          </RunsProvider>
+        </ConfirmProvider>
+      </ToastProvider>
     </SettingsProvider>
   </StrictMode>,
 )

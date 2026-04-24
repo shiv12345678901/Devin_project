@@ -14,10 +14,12 @@ import {
 import { api } from '../api/client'
 import { useRuns } from '../store/runs'
 import { BRAND_SWATCHES, useSettings, type ThemeMode } from '../store/settings'
+import { useConfirm } from '../components/ConfirmDialog'
 
 export default function Settings() {
   const { settings, update, reset } = useSettings()
   const { clear, runs } = useRuns()
+  const confirm = useConfirm()
   const [pingState, setPingState] = useState<'idle' | 'pinging' | 'ok' | 'error'>('idle')
   const [pingError, setPingError] = useState('')
 
@@ -221,8 +223,14 @@ export default function Settings() {
             type="button"
             className="btn-danger"
             disabled={runs.length === 0}
-            onClick={() => {
-              if (confirm(`Remove all ${runs.length} local run entries?`)) clear()
+            onClick={async () => {
+              const ok = await confirm({
+                title: `Remove all ${runs.length} local run entries?`,
+                message: 'Only the local Processes log is cleared. Backend output files are not affected.',
+                confirmLabel: 'Clear',
+                variant: 'danger',
+              })
+              if (ok) clear()
             }}
           >
             <Trash2 size={14} /> Clear history

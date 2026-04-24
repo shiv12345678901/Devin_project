@@ -15,6 +15,8 @@ import {
 
 import { api } from '../api/client'
 import HtmlPreviewModal from '../components/HtmlPreviewModal'
+import { useToast } from '../store/toast'
+import { useConfirm } from '../components/ConfirmDialog'
 
 type AssetKind = 'html' | 'screenshot'
 type SortKey = 'name-asc' | 'name-desc'
@@ -35,6 +37,8 @@ export default function Library() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [preview, setPreview] = useState<Preview | null>(null)
   const [working, setWorking] = useState(false)
+  const toast = useToast()
+  const confirm = useConfirm()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -114,7 +118,11 @@ export default function Library() {
       a.remove()
       URL.revokeObjectURL(url)
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e))
+      toast.push({
+        variant: 'error',
+        title: 'Bulk download failed',
+        message: e instanceof Error ? e.message : String(e),
+      })
     } finally {
       setWorking(false)
     }
@@ -122,20 +130,29 @@ export default function Library() {
 
   const onDeleteSelected = async () => {
     if (selected.size === 0) return
-    if (
-      !confirm(`Permanently delete ${selected.size} file${selected.size === 1 ? '' : 's'}?`)
-    )
-      return
+    const ok = await confirm({
+      title: `Delete ${selected.size} file${selected.size === 1 ? '' : 's'}?`,
+      message: 'This permanently removes the files from the backend output folder.',
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    })
+    if (!ok) return
     setWorking(true)
     try {
       const type = kind === 'screenshot' ? 'screenshot' : 'html'
       await Promise.all(
         [...selected].map((name) => api.deleteFile(type as 'screenshot' | 'html', name)),
       )
+      const removed = selected.size
       setSelected(new Set())
       await load()
+      toast.push({ variant: 'success', message: `Deleted ${removed} file${removed === 1 ? '' : 's'}.` })
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e))
+      toast.push({
+        variant: 'error',
+        title: 'Delete failed',
+        message: e instanceof Error ? e.message : String(e),
+      })
     } finally {
       setWorking(false)
     }

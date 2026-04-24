@@ -5,6 +5,7 @@ import ScreenshotGallery from '../components/ScreenshotGallery'
 import SettingsPanel from '../components/SettingsPanel'
 import { api } from '../api/client'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
+import { useToast } from '../store/toast'
 import type { GenerateSettings } from '../api/types'
 
 const defaultSettings: GenerateSettings = {
@@ -19,6 +20,7 @@ export default function HtmlToVideo() {
   const [html, setHtml] = useState('')
   const [settings, setSettings] = useState<GenerateSettings>(defaultSettings)
   const { state, generateFromHtml } = useTrackedGenerate('html-to-video')
+  const toast = useToast()
   const running = state.status === 'running'
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -31,8 +33,13 @@ export default function HtmlToVideo() {
     try {
       const { html: pretty } = await api.beautify(html)
       setHtml(pretty)
+      toast.push({ variant: 'success', message: 'HTML beautified.' })
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err))
+      toast.push({
+        variant: 'error',
+        title: 'Beautify failed',
+        message: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 
@@ -40,8 +47,13 @@ export default function HtmlToVideo() {
     try {
       const { html: mini } = await api.minify(html)
       setHtml(mini)
+      toast.push({ variant: 'success', message: 'HTML minified.' })
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err))
+      toast.push({
+        variant: 'error',
+        title: 'Minify failed',
+        message: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 

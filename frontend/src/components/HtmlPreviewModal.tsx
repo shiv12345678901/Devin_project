@@ -1,6 +1,7 @@
 import { ExternalLink, X } from 'lucide-react'
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 interface Props {
   /** What kind of asset to preview — controls the rendered body. */
@@ -15,6 +16,7 @@ interface Props {
 }
 
 export default function HtmlPreviewModal({ kind, src, title, subtitle, onClose }: Props) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -36,7 +38,14 @@ export default function HtmlPreviewModal({ kind, src, title, subtitle, onClose }
         onClick={onClose}
         aria-hidden
       />
-      <div className="glass-strong relative flex h-full max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="glass-strong relative flex h-full max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden"
+      >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-3 dark:border-white/10">
           <div className="min-w-0">
             <div className="truncate font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
