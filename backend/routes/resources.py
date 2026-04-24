@@ -20,25 +20,47 @@ resources_bp = Blueprint('resources', __name__)
 
 # ─── File Serving ──────────────────────────────────────────────────────────
 
+def _safe_child(base_folder, user_path):
+    """Resolve user_path relative to base_folder, rejecting traversal.
+
+    Returns the absolute path inside base_folder, or None if the request
+    would escape the folder.
+    """
+    abs_base = os.path.abspath(base_folder)
+    candidate = os.path.abspath(os.path.join(base_folder, user_path))
+    if candidate == abs_base or candidate.startswith(abs_base + os.sep):
+        return candidate
+    return None
+
+
 @resources_bp.route('/screenshots/<path:filename>')
 def get_screenshot(filename):
     """Serve screenshot file."""
-    file_path = os.path.join(OUTPUT_FOLDER, filename)
-    if os.path.exists(file_path):
-        return send_file(file_path, mimetype='image/png')
-    # Walk output for batch subfolders
-    for root, dirs, files in os.walk('output'):
-        if filename in files:
-            return send_file(os.path.join(root, filename), mimetype='image/png')
+    safe = _safe_child(OUTPUT_FOLDER, filename)
+    if safe is None:
+        return jsonify({'error': 'Invalid file path'}), 403
+    if os.path.exists(safe):
+        return send_file(safe, mimetype='image/png')
+
+    # Fall back to walking output/ for batch subfolders, still constrained.
+    abs_output = os.path.abspath('output')
+    basename = os.path.basename(filename)
+    for root, _dirs, files in os.walk(abs_output):
+        if basename in files:
+            candidate = os.path.abspath(os.path.join(root, basename))
+            if candidate.startswith(abs_output + os.sep):
+                return send_file(candidate, mimetype='image/png')
     return jsonify({'error': 'File not found'}), 404
 
 
-@resources_bp.route('/html/<filename>')
+@resources_bp.route('/html/<path:filename>')
 def get_html(filename):
     """Serve HTML file."""
-    file_path = os.path.join(HTML_FOLDER, filename)
-    if os.path.exists(file_path):
-        return send_file(file_path, mimetype='text/html')
+    safe = _safe_child(HTML_FOLDER, filename)
+    if safe is None:
+        return jsonify({'error': 'Invalid file path'}), 403
+    if os.path.exists(safe):
+        return send_file(safe, mimetype='text/html')
     return jsonify({'error': 'File not found'}), 404
 
 
@@ -133,7 +155,9 @@ def regenerate():
         if not html_filename:
             return jsonify({'error': 'No HTML filename provided'}), 400
 
-        html_path = os.path.join(HTML_FOLDER, html_filename)
+        html_path = _safe_child(HTML_FOLDER, html_filename)
+        if html_path is None:
+            return jsonify({'error': 'Invalid file path'}), 403
         if not os.path.exists(html_path):
             return jsonify({'error': 'HTML file not found'}), 404
 

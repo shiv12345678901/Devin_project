@@ -61,23 +61,43 @@ class PerformanceMetrics:
             return f"{minutes}m {secs:.0f}s"
     
     def get_summary(self, operation_id):
-        """Get formatted summary of operation metrics."""
+        """Get formatted summary of operation metrics.
+
+        Works while an operation is still running — in that case we report
+        elapsed time instead of crashing on the missing duration_seconds
+        key (which is only set by end()).
+        """
         metrics = self.get_metrics(operation_id)
         if not metrics:
             return None
-        
+
+        if 'duration_seconds' not in metrics:
+            start = self.start_times.get(operation_id, time.time())
+            elapsed = time.time() - start
+            return {
+                'operation_id': operation_id,
+                'duration': self.format_duration(elapsed),
+                'duration_seconds': round(elapsed, 3),
+                'duration_ms': round(elapsed * 1000, 2),
+                'status': metrics.get('status', 'running'),
+                'start_time': metrics.get('start_time'),
+                'end_time': 'N/A',
+                'metadata': metrics.get('metadata', {}),
+            }
+
         summary = {
             'operation_id': operation_id,
             'duration': self.format_duration(metrics['duration_seconds']),
+            'duration_seconds': metrics['duration_seconds'],
             'duration_ms': metrics['duration_ms'],
             'status': metrics['status'],
             'start_time': metrics['start_time'],
-            'end_time': metrics.get('end_time', 'N/A')
+            'end_time': metrics.get('end_time', 'N/A'),
         }
-        
+
         if 'metadata' in metrics:
             summary['metadata'] = metrics['metadata']
-        
+
         return summary
 
 
