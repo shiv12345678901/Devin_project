@@ -11,6 +11,13 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# ─── Env ───────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env.local
+
 # ─── Backend (Python / Flask) ──────────────────────────────────────────────
 backend/config/config.py
 backend/output/

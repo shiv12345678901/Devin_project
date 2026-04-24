@@ -1,10 +1,27 @@
-"""Configuration file for TextBro / Screenshot Studio.
+"""Configuration for TextBro / Screenshot Studio.
 
-Copy this file to ``config.py`` and fill in your actual values.
+Copy this file to ``config.py`` (which is gitignored) and fill in your
+actual values. Every entry can also be supplied through an environment
+variable (or a ``.env`` file in the project root) — env wins over the
+literal default below, so you can keep an unredacted ``config.py`` empty
+on shared machines.
+
+Env vars used:
+    API_KEY, API_URL, MODEL_VISION, MODEL_VISION_FALLBACK
+    HOST, PORT, DEBUG, MAX_CONTENT_LENGTH_BYTES
+    CORS_ORIGINS  (comma-separated allowlist; ``*`` for wide-open)
+    RATE_LIMIT, RATE_LIMIT_DEFAULT  (e.g. RATE_LIMIT_DEFAULT="60/minute;10/second")
+    PREFLIGHT_CACHE_SECS
 
 The backend talks to any OpenAI-compatible chat-completions endpoint
 (OpenAI, Groq, Together, NVIDIA NIM, a local llama.cpp server, …).
 """
+import os
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.environ.get(name, default)
+
 
 # ─── API Configuration ─────────────────────────────────────────────────────
 #
@@ -13,8 +30,8 @@ The backend talks to any OpenAI-compatible chat-completions endpoint
 # chat completions — each entry in MODELS_CONFIG below provides its own
 # `api_key` so you can mix providers if you want.
 
-API_KEY = "your-api-key-here"
-API_URL = "https://api.groq.com/openai/v1"   # OpenAI-compatible endpoint
+API_KEY = _env("API_KEY", "your-api-key-here")
+API_URL = _env("API_URL", "https://api.groq.com/openai/v1")
 
 # ─── Chat Models (used by src/core/ai_client.py) ───────────────────────────
 #
@@ -24,38 +41,42 @@ API_URL = "https://api.groq.com/openai/v1"   # OpenAI-compatible endpoint
 
 MODELS_CONFIG = {
     "default": {
-        "model": "llama-3.1-70b-versatile",
+        "model": _env("MODEL_DEFAULT", "llama-3.1-70b-versatile"),
         "temperature": 0.2,
         "top_p": 0.9,
-        "max_tokens": 16384,
+        "max_tokens": int(_env("MAX_TOKENS_DEFAULT", "16384")),
         "api_key": API_KEY,
     },
     "fast": {
-        "model": "llama-3.1-8b-instant",
+        "model": _env("MODEL_FAST", "llama-3.1-8b-instant"),
         "temperature": 0.3,
         "top_p": 0.9,
-        "max_tokens": 8192,
+        "max_tokens": int(_env("MAX_TOKENS_FAST", "8192")),
         "api_key": API_KEY,
     },
     "quality": {
-        "model": "llama-3.1-70b-versatile",
+        "model": _env("MODEL_QUALITY", "llama-3.1-70b-versatile"),
         "temperature": 0.1,
         "top_p": 0.9,
-        "max_tokens": 16384,
+        "max_tokens": int(_env("MAX_TOKENS_QUALITY", "16384")),
         "api_key": API_KEY,
     },
 }
 
 # ─── Vision Model (used by src/core/vision_client.py) ──────────────────────
 
-MODEL_VISION = "llama-3.2-90b-vision-preview"
-MODEL_VISION_FALLBACK = "llama-3.2-11b-vision-preview"
+MODEL_VISION = _env("MODEL_VISION", "llama-3.2-90b-vision-preview")
+MODEL_VISION_FALLBACK = _env("MODEL_VISION_FALLBACK", "llama-3.2-11b-vision-preview")
 
 # ─── Application Settings ──────────────────────────────────────────────────
+#
+# Defaults mirror the safe values used by ``app.py`` when run as a script.
+# DEBUG defaults to False to avoid the Werkzeug debugger (which is
+# remote-code-execution-by-design) being on accidentally.
 
-DEBUG = True
-PORT = 5000
-HOST = "0.0.0.0"
+DEBUG = _env("DEBUG", "0").lower() in {"1", "true", "yes", "on"}
+PORT = int(_env("PORT", "5000"))
+HOST = _env("HOST", "127.0.0.1")  # bind to loopback by default
 
 # ─── Output Folders (relative to backend/) ─────────────────────────────────
 
@@ -69,6 +90,9 @@ DEFAULT_VIEWPORT_HEIGHT = 1080
 DEFAULT_ZOOM = 2.1
 DEFAULT_OVERLAP = 15
 MAX_SCREENSHOTS_LIMIT = 50
+
+# Cap on how many pages we'll rasterize from a PDF in /extract-from-image.
+PDF_MAX_PAGES = int(_env("PDF_MAX_PAGES", "100"))
 
 # ─── AI Settings ───────────────────────────────────────────────────────────
 
@@ -84,14 +108,14 @@ POWERPOINT_VIDEO_FOLDER = "output/videos"
 
 # ─── Slide Settings ────────────────────────────────────────────────────────
 
-DEFAULT_SLIDE_DURATION = 3.0          # seconds per slide
+DEFAULT_SLIDE_DURATION = 5.0          # seconds per slide
 DEFAULT_TRANSITION_TYPE = "fade"      # fade | push | wipe | none
 DEFAULT_TRANSITION_DURATION = 0.5     # seconds for transition
 
 # ─── Video Export Settings ─────────────────────────────────────────────────
 
-VIDEO_RESOLUTION_WIDTH = 3840   # 4K width
-VIDEO_RESOLUTION_HEIGHT = 2160  # 4K height
+VIDEO_RESOLUTION_WIDTH = 1920
+VIDEO_RESOLUTION_HEIGHT = 1080
 VIDEO_FPS = 30
 VIDEO_QUALITY = 5               # 1-5, where 5 is highest
 VIDEO_FORMAT = "mp4"

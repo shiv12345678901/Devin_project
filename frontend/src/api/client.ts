@@ -4,10 +4,22 @@ import type {
   GenerateSettings,
   HistoryEntry,
   ListResponse,
+  PreflightResponse,
   SseEvent,
 } from './types'
 
-const API_BASE: string = (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? ''
+// Base URL for the Flask backend. Starts from the build-time env var, but can
+// be overridden at runtime from the Settings page via `setBackendBaseUrl()` —
+// that way users can point the UI at a different host without a rebuild.
+let API_BASE: string = (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? ''
+
+export function setBackendBaseUrl(url: string): void {
+  API_BASE = (url ?? '').trim()
+}
+
+export function getBackendBaseUrl(): string {
+  return API_BASE
+}
 
 function buildUrl(path: string): string {
   if (!API_BASE) return path
@@ -67,17 +79,42 @@ export const api = {
   list: () => getJson<ListResponse>('/list'),
   history: () => getJson<HistoryEntry[]>('/history'),
   deleteFile: async (type: 'screenshot' | 'html', filename: string) => {
-    const res = await fetch(buildUrl(`/delete/${type}/${encodeURIComponent(filename)}`), {
+    // Encode each path segment separately. encodeURIComponent would escape
+    // `/` as `%2F`, which Werkzeug's dev server does NOT decode back to `/`
+    // in PATH_INFO — so the <path:filename> converter would get a literal
+    // `%2F` and fail to match any file on disk. Screenshots inside batch
+    // subfolders (e.g. `batch 3/5(1).png`) rely on the split-and-join
+    // treatment.
+    const encoded = filename.split('/').map(encodeURIComponent).join('/')
+    const res = await fetch(buildUrl(`/delete/${type}/${encoded}`), {
       method: 'DELETE',
     })
     return parseJson<{ success?: boolean; error?: string }>(res)
   },
 
+  preflight: () => getJson<PreflightResponse>('/preflight'),
+
   cacheStats: () => getJson<CacheStats>('/cache/stats'),
   clearCache: () => postJson<{ success: boolean; message: string }>('/cache/clear', {}),
 
-  screenshotUrl: (filename: string) => buildUrl(`/screenshots/${filename}`),
+  screenshotUrl: (filename: string) =>
+    buildUrl(`/screenshots/${filename.split('/').map(encodeURIComponent).join('/')}`),
   htmlUrl: (filename: string) => buildUrl(`/html/${encodeURIComponent(filename)}`),
+  thumbnailUrl: (filename: string) =>
+    buildUrl(`/thumbnails/${encodeURIComponent(filename)}`),
+
+  uploadThumbnail: async (
+    file: File,
+  ): Promise<{ success: boolean; filename: string; url: string; size_bytes: number }> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const r = await fetch(buildUrl('/upload-thumbnail'), { method: 'POST', body: fd })
+    if (!r.ok) {
+      const msg = await r.text()
+      throw new Error(`Upload failed (${r.status}): ${msg}`)
+    }
+    return r.json()
+  },
 
   downloadZip: async (files: string[], name = 'screenshots'): Promise<Blob> => {
     const res = await fetch(buildUrl('/download-zip'), {

@@ -19,9 +19,19 @@ openai>=1.35.0,<2.0.0
 # Optional: production WSGI server (Linux/Mac only)
 gunicorn==21.2.0 ; platform_system != "Windows"
 
+# Configuration loading
+python-dotenv>=1.0.0
+
+# Optional rate limiting (enabled when RATE_LIMIT=on)
+flask-limiter>=3.5.0
+
+# Optional ffmpeg-python for slide MP4 export (Windows path also has python-pptx)
+ffmpeg-python>=0.2.0
+
 # PowerPoint automation (Windows only)
 python-pptx==0.6.23 ; platform_system == "Windows"
 pywin32==306 ; platform_system == "Windows"
 
 # Testing (optional)
 hypothesis==6.92.1
+pytest>=7.4.0

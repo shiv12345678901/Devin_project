@@ -26,10 +26,16 @@ const initialState: GenerationState = { status: 'idle', progress: 0 }
 export function useGenerate() {
   const [state, setState] = useState<GenerationState>(initialState)
   const abortRef = useRef<AbortController | null>(null)
+  // Track the live operation id in a ref so cancel() can read it without
+  // closing over potentially-stale state. The previous version captured
+  // state.operationId via useCallback deps, which meant a Cancel click in
+  // the same render that emitted `started` would still cancel `undefined`.
+  const opIdRef = useRef<string | null>(null)
 
   const reset = useCallback(() => {
     abortRef.current?.abort()
     abortRef.current = null
+    opIdRef.current = null
     setState(initialState)
   }, [])
 
@@ -44,11 +50,13 @@ export function useGenerate() {
       setState({ status: 'running', progress: 0, message: 'Starting…', stage: 'init' })
 
       let opId: string | undefined
+      opIdRef.current = null
       const result: GenerationResult = { screenshot_files: [] }
 
       const handle = (ev: SseEvent) => {
         if (ev.type === 'started') {
           opId = ev.operation_id
+          opIdRef.current = ev.operation_id ?? null
           setState((s) => ({
             ...s,
             operationId: ev.operation_id,
@@ -125,11 +133,13 @@ export function useGenerate() {
       setState({ status: 'running', progress: 0, message: 'Starting…', stage: 'init' })
 
       let opId: string | undefined
+      opIdRef.current = null
       const result: GenerationResult = { screenshot_files: [] }
 
       const handle = (ev: SseEvent) => {
         if (ev.type === 'started') {
           opId = ev.operation_id
+          opIdRef.current = ev.operation_id ?? null
           setState((s) => ({ ...s, operationId: ev.operation_id, progress: ev.progress ?? s.progress }))
         } else if (ev.type === 'progress') {
           setState((s) => ({ ...s, stage: ev.stage, message: ev.message, progress: ev.progress }))
@@ -231,16 +241,16 @@ export function useGenerate() {
 
   const cancel = useCallback(async () => {
     const op = abortRef.current
-    const opId = state.operationId
+    const opId = opIdRef.current
     if (opId) {
       try {
         await api.cancel(opId)
       } catch {
-        /* ignore */
+        /* ignore — backend may already have finished */
       }
     }
     op?.abort()
-  }, [state.operationId])
+  }, [])
 
   return { state, generate, generateFromHtml, generateFromImage, cancel, reset }
 }

@@ -80,13 +80,18 @@ class ETATracker:
     def record_completion(self, model_choice, input_chars, ai_seconds, screenshot_count, screenshot_seconds, use_cache=False):
         """
         Record a successful run to improve future predictions.
-        (Skips AI timing if cache was hit)
+
+        AI timing is only recorded when a real AI call happened — filtered by
+        ``ai_seconds`` rather than the user's ``use_cache`` preference, so cache
+        misses (where the AI actually ran) still feed the ETA model even when
+        caching is enabled globally.
         """
+        del use_cache  # Preserved for API compatibility; filter by duration below.
         updated = False
         ALPHA = 0.3  # Moving average weight (30% new data, 70% historical)
-        
-        # 1. Update AI Speed (if not cached and time > 0)
-        if not use_cache and ai_seconds > 0 and input_chars > 0:
+
+        # 1. Update AI Speed — filter cache hits by duration (<0.5s is a hit).
+        if ai_seconds > 0.5 and input_chars > 0:
             if "models" not in self.data:
                 self.data["models"] = {}
                 

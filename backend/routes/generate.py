@@ -69,6 +69,7 @@ def generate():
         ai_content = get_ai_response(input_text, use_cache=use_cache, model_choice=model_choice)
 
         if not ai_content:
+            metrics_tracker.end(ai_operation_id, success=False)
             metrics_tracker.end(operation_id, success=False)
             return jsonify({'error': 'Failed to get AI response. Check terminal for details.'}), 500
 
@@ -175,6 +176,15 @@ def generate():
         import traceback
         print(f"Error: {e}")
         traceback.print_exc()
+        # End any sub-trackers that might still be running. The local
+        # references only exist once we reach those branches, so fall
+        # back to the derived id string and let metrics_tracker.end()
+        # silently no-op if the id was never started.
+        for sub_id in (f"{operation_id}_ai", f"{operation_id}_screenshot"):
+            try:
+                metrics_tracker.end(sub_id, success=False)
+            except Exception:
+                pass
         metrics_tracker.end(operation_id, success=False, metadata={'error': str(e)})
         return jsonify({'error': f'Error: {str(e)}'}), 500
 
@@ -199,6 +209,44 @@ def generate_sse():
     max_screenshots = data.get('max_screenshots', 50)
     use_cache = data.get('use_cache', True)
     beautify_html = data.get('beautify_html', False)
+
+    # Pass-through fields: accepted into the request + history so the UI
+    # keeps parity with the old HF-Space form, but only the PowerPoint /
+    # MP4 export path (Windows) actually uses them today.
+    output_name = (data.get('output_name') or '').strip()
+    system_prompt = data.get('system_prompt', '')
+    project_info = {
+        'class_name': (data.get('class_name') or '').strip(),
+        'subject': (data.get('subject') or '').strip(),
+        'title': (data.get('title') or '').strip(),
+        'output_format': data.get('output_format', 'images'),
+    }
+    video_export_settings = {
+        'resolution': data.get('resolution', '1080p'),
+        'video_quality': data.get('video_quality', 85),
+        'fps': data.get('fps', 30),
+        'slide_duration_sec': data.get('slide_duration_sec', 5),
+        'close_powerpoint_before_start': data.get('close_powerpoint_before_start', True),
+        'auto_timing_screenshot_slides': data.get('auto_timing_screenshot_slides', True),
+        'fixed_seconds_per_screenshot_slide': data.get('fixed_seconds_per_screenshot_slide', 5),
+        # Intro thumbnail (inserted on slide 2 of the default PPT template).
+        # Falls back to the legacy single-thumbnail keys so older requests
+        # still resolve to the intro slot.
+        'intro_thumbnail_enabled': data.get(
+            'intro_thumbnail_enabled',
+            data.get('thumbnail_enabled', data.get('thumbnail_on_slide_2', False)),
+        ),
+        'intro_thumbnail_filename': data.get(
+            'intro_thumbnail_filename', data.get('thumbnail_filename', '')
+        ),
+        'intro_thumbnail_duration_sec': data.get(
+            'intro_thumbnail_duration_sec', data.get('thumbnail_duration_sec', 5)
+        ),
+        # Outro thumbnail (inserted on the 2nd-to-last slide).
+        'outro_thumbnail_enabled': data.get('outro_thumbnail_enabled', False),
+        'outro_thumbnail_filename': data.get('outro_thumbnail_filename', ''),
+        'outro_thumbnail_duration_sec': data.get('outro_thumbnail_duration_sec', 5),
+    }
 
     cancel_event = register_operation(operation_id)
     metrics_tracker.start(operation_id)
@@ -227,7 +275,13 @@ def generate_sse():
             
             ai_operation_id = f"{operation_id}_ai"
             metrics_tracker.start(ai_operation_id)
-            ai_content = get_ai_response(input_text, use_cache=use_cache, cancel_event=cancel_event, model_choice=model_choice)
+            ai_content = get_ai_response(
+                input_text,
+                use_cache=use_cache,
+                cancel_event=cancel_event,
+                model_choice=model_choice,
+                system_prompt=system_prompt or None,
+            )
             metrics_tracker.end(ai_operation_id, success=bool(ai_content))
 
             if cancel_event.is_set():
@@ -280,6 +334,8 @@ def generate_sse():
             html_filename, _ = save_html(html_content, folder=html_folder)
 
             yield f"data: {json.dumps({'type': 'progress', 'stage': 'html_saved', 'message': 'HTML saved, starting screenshots...', 'progress': 35})}\n\n"
+            # Let the UI preview the generated HTML before screenshots finish.
+            yield f"data: {json.dumps({'type': 'html_generated', 'html_filename': html_filename, 'html_content': html_content})}\n\n"
 
             # Step 3: Screenshots (DRY #12)
             screenshot_name = get_next_batch_id()
@@ -294,14 +350,32 @@ def generate_sse():
                 cancel_event=cancel_event
             )
 
+            # The screenshot engine breaks out of its loop on cancel and
+            # returns whatever it captured so far — without this explicit
+            # check the SSE stream would emit `complete` with the partial
+            # batch and the UI would treat a cancelled run as successful.
+            if cancel_event.is_set():
+                metrics_tracker.end(screenshot_operation_id, success=False)
+                metrics_tracker.end(operation_id, success=False)
+                yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
+                return
+
             # Log history (#8)
             log_generation({
-                'tool': 'text-to-image',
+                'tool': 'text-to-video',
                 'input_preview': input_text[:200],
+                'output_name': output_name or None,
+                'project': project_info,
                 'html_file': html_filename,
                 'screenshot_folder': screenshot_folder,
                 'screenshot_count': len(screenshot_files),
-                'settings': {'zoom': zoom, 'overlap': overlap, 'width': viewport_width, 'height': viewport_height},
+                'settings': {
+                    'zoom': zoom, 'overlap': overlap,
+                    'width': viewport_width, 'height': viewport_height,
+                    'model_choice': model_choice,
+                    'system_prompt_used': bool(system_prompt),
+                    **video_export_settings,
+                },
             })
 
             metrics_tracker.end(screenshot_operation_id, success=True)
@@ -321,7 +395,7 @@ def generate_sse():
                 use_cache=use_cache
             )
 
-            yield f"data: {json.dumps({'type': 'complete', 'data': {'success': True, 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': screenshot_names, 'screenshot_count': len(screenshot_files), 'screenshot_folder': screenshot_folder}})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'success': True, 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': screenshot_names, 'screenshot_count': len(screenshot_files), 'screenshot_folder': screenshot_folder, 'operation_id': operation_id})}\n\n"
 
         except CancelledError:
             yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"

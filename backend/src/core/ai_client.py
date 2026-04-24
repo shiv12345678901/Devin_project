@@ -187,29 +187,37 @@ def get_ai_revision(input_text, previous_html, feedback, cancel_event=None, mode
     return get_ai_response(input_text, use_cache=False, cancel_event=cancel_event, system_prompt=revision_sys_prompt, model_choice=model_choice)
 
 
+def _cache_key(input_text, model_choice, system_prompt):
+    """Cache key varies on (model_choice, system_prompt, input_text) — switching
+    model or adding a custom system prompt must produce a different key so the
+    cache doesn't return the response from a previous configuration."""
+    return f"{model_choice}|{system_prompt or ''}|{input_text}"
+
+
 def get_ai_response(input_text, use_cache=True, cancel_event=None, system_prompt=None, model_choice='default'):
     """Send text to AI model and get response with proper system/user message roles."""
     print("=" * 60, flush=True)
     print("🤖 Sending request to AI using OpenAI library...", flush=True)
-    
-    # Check cache first
+
+    # Check cache first — key includes model + system prompt, not just the input.
+    resolved_system_prompt = system_prompt if system_prompt is not None else load_system_prompt()
+    cache_key = _cache_key(input_text, model_choice, resolved_system_prompt)
     if use_cache:
-        cached_response = cache.get(input_text)
+        cached_response = cache.get(cache_key)
         if cached_response:
             print("=" * 60, flush=True)
             return cached_response
-    
+
     try:
         model_config = MODELS_CONFIG.get(model_choice, MODELS_CONFIG['default'])
-        
+
         # Initialize OpenAI client with NVIDIA endpoint
         client = OpenAI(
             base_url=API_URL,
             api_key=model_config['api_key']
         )
-        
-        if system_prompt is None:
-            system_prompt = load_system_prompt()
+
+        system_prompt = resolved_system_prompt
         
         print(f"📝 Input length: {len(input_text)} characters", flush=True)
         print(f"📝 System prompt length: {len(system_prompt)} characters", flush=True)
@@ -234,9 +242,10 @@ def get_ai_response(input_text, use_cache=True, cancel_event=None, system_prompt
         
         print(f"📄 First 100 chars: {full_response[:100]}...", flush=True)
         
-        # Cache the response
+        # Cache the response using the composite key so later requests with a
+        # different model / system_prompt don't silently get this response back.
         if use_cache:
-            cache.set(input_text, full_response)
+            cache.set(cache_key, full_response)
         
         return full_response
         

@@ -1,16 +1,35 @@
 import { Download, Eye, Package } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { useToast } from '../store/toast'
 
 interface Props {
+  /**
+   * Display-only; not used to construct URLs (files already contain any
+   * batch-folder prefix). Kept in the props so callers don't need to be
+   * edited.
+   */
   screenshotFolder?: string
   files: string[]
   title?: string
 }
 
-export default function ScreenshotGallery({ screenshotFolder, files, title = 'Screenshots' }: Props) {
+export default function ScreenshotGallery(props: Props) {
+  const { files, title = 'Screenshots' } = props
+  // props.screenshotFolder is intentionally unused — see Props docs.
   const [preview, setPreview] = useState<string | null>(null)
   const [zipping, setZipping] = useState(false)
+  const toast = useToast()
+
+  // Esc closes the lightbox preview.
+  useEffect(() => {
+    if (!preview) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreview(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [preview])
 
   if (files.length === 0) {
     return (
@@ -23,7 +42,11 @@ export default function ScreenshotGallery({ screenshotFolder, files, title = 'Sc
   const downloadZip = async () => {
     setZipping(true)
     try {
-      const paths = files.map((f) => (screenshotFolder ? `${screenshotFolder}/${f}` : f))
+      // `files` are already paths relative to OUTPUT_FOLDER (e.g. "batch 3/5(1).png"
+      // or "5(1).png"). The backend /download-zip handler resolves them under
+      // OUTPUT_FOLDER itself, so we MUST NOT prepend screenshotFolder again —
+      // doing so produced "batch 3/batch 3/5(1).png" and empty ZIPs.
+      const paths = files
       const blob = await api.downloadZip(paths, 'screenshots')
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -34,7 +57,11 @@ export default function ScreenshotGallery({ screenshotFolder, files, title = 'Sc
       a.remove()
       URL.revokeObjectURL(url)
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err))
+      toast.push({
+        variant: 'error',
+        title: 'Download failed',
+        message: err instanceof Error ? err.message : String(err),
+      })
     } finally {
       setZipping(false)
     }
@@ -57,9 +84,9 @@ export default function ScreenshotGallery({ screenshotFolder, files, title = 'Sc
           return (
             <div
               key={filename}
-              className="group overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
+              className="glass group overflow-hidden !p-0"
             >
-              <div className="relative aspect-video overflow-hidden bg-slate-100 dark:bg-slate-800">
+              <div className="relative aspect-video overflow-hidden bg-slate-50 dark:bg-white/[0.04]">
                 <img
                   src={url}
                   alt={filename}
@@ -68,7 +95,7 @@ export default function ScreenshotGallery({ screenshotFolder, files, title = 'Sc
                   onClick={() => setPreview(url)}
                 />
               </div>
-              <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-3 py-2 dark:border-slate-800">
+              <div className="flex items-center justify-between gap-2 border-t border-slate-200 px-3 py-2 dark:border-white/10">
                 <span
                   className="truncate text-xs text-slate-600 dark:text-slate-300"
                   title={filename}

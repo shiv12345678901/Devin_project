@@ -1,4 +1,27 @@
+export type OutputFormat = 'html' | 'images' | 'pptx' | 'video'
+
+export interface PreflightCheck {
+  ok: boolean
+  detail: string
+}
+
+export interface PreflightResponse {
+  ok: boolean
+  checks: {
+    platform: PreflightCheck
+    backend: PreflightCheck
+    ai_config: PreflightCheck
+    powerpoint: PreflightCheck
+  }
+}
+
 export interface GenerateSettings {
+  // Project metadata (Step 1 — drives gating + history search)
+  class_name?: string
+  subject?: string
+  title?: string
+  output_format?: OutputFormat
+  // Screenshot rendering
   zoom?: number
   overlap?: number
   viewport_width?: number
@@ -8,8 +31,27 @@ export interface GenerateSettings {
   beautify_html?: boolean
   enable_verification?: boolean
   model_choice?: string
+  system_prompt?: string
+  // Output paths / names
+  output_name?: string
   screenshot_folder?: string
   html_folder?: string
+  // Images → MP4 / PowerPoint export (Windows-only; pass-through otherwise)
+  resolution?: '720p' | '1080p' | '1440p' | '4k'
+  video_quality?: number
+  fps?: number
+  slide_duration_sec?: number
+  close_powerpoint_before_start?: boolean
+  auto_timing_screenshot_slides?: boolean
+  fixed_seconds_per_screenshot_slide?: number
+  // Intro thumbnail — inserted on slide 2 of the deck.
+  intro_thumbnail_enabled?: boolean
+  intro_thumbnail_filename?: string
+  intro_thumbnail_duration_sec?: number
+  // Outro thumbnail — inserted on the 2nd-to-last slide.
+  outro_thumbnail_enabled?: boolean
+  outro_thumbnail_filename?: string
+  outro_thumbnail_duration_sec?: number
 }
 
 export interface GenerateResponse {
@@ -71,7 +113,10 @@ export type SseEvent =
 
 export interface HistoryEntry {
   id?: string | number
-  timestamp?: string
+  /** Unix timestamp as a float (from `time.time()`). Prefer `datetime`. */
+  timestamp?: number | string
+  /** Human-readable local time, e.g. "2024-03-04 10:30:00". */
+  datetime?: string
   tool?: string
   input_preview?: string
   html_file?: string

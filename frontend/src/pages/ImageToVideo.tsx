@@ -3,7 +3,7 @@ import { useState } from 'react'
 import ProgressBar from '../components/ProgressBar'
 import ScreenshotGallery from '../components/ScreenshotGallery'
 import SettingsPanel from '../components/SettingsPanel'
-import { useGenerate } from '../hooks/useGenerate'
+import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import type { GenerateSettings } from '../api/types'
 
 const defaultSettings: GenerateSettings = {
@@ -19,7 +19,7 @@ export default function ImageToVideo() {
   const [instructions, setInstructions] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
   const [settings, setSettings] = useState<GenerateSettings>(defaultSettings)
-  const { state, generateFromImage, cancel } = useGenerate()
+  const { state, generateFromImage, cancel } = useTrackedGenerate('image-to-video')
   const running = state.status === 'running'
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -34,16 +34,16 @@ export default function ImageToVideo() {
     fd.append('viewport_width', String(settings.viewport_width ?? 1920))
     fd.append('viewport_height', String(settings.viewport_height ?? 1080))
     fd.append('max_screenshots', String(settings.max_screenshots ?? 50))
-    await generateFromImage(fd)
+    await generateFromImage(fd, { files: [file], settings })
   }
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-50">
+        <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">
           Image / PDF to Video
         </h1>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
           Upload a screenshot, photo, or PDF. Vision AI extracts text, formats it as HTML, and
           captures screenshots.
         </p>
@@ -52,7 +52,7 @@ export default function ImageToVideo() {
       <form onSubmit={onSubmit} className="space-y-4">
         <div className="card">
           <label className="label">Source file</label>
-          <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 p-8 text-center hover:border-brand-400 hover:bg-brand-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-brand-500 dark:hover:bg-brand-900/20">
+          <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 p-10 text-center transition-colors hover:border-brand-400 hover:bg-brand-50 dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-brand-500/60 dark:hover:bg-brand-900/20">
             <Upload size={28} className="text-slate-400" />
             <div className="mt-2 text-sm text-slate-600 dark:text-slate-300">
               {file ? (
@@ -80,7 +80,7 @@ export default function ImageToVideo() {
             </label>
             <textarea
               id="instructions"
-              className="input h-20 resize-y"
+              className="textarea h-20 resize-y"
               placeholder="e.g., Extract only the code blocks, preserve order…"
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
@@ -93,7 +93,7 @@ export default function ImageToVideo() {
             </label>
             <textarea
               id="system-prompt"
-              className="input h-20 resize-y"
+              className="textarea h-20 resize-y"
               placeholder="Override the default HTML formatting prompt…"
               value={systemPrompt}
               onChange={(e) => setSystemPrompt(e.target.value)}
