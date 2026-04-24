@@ -244,6 +244,11 @@ def image_to_screenshots_sse():
 
                 yield f"data: {json.dumps({'type': 'complete', 'stage': 'complete', 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'progress': 100, 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': [f'batch {batch_id}/{name}' for name in screenshot_names], 'screenshot_count': len(screenshot_files), 'screenshot_folder': f'batch {batch_id}', 'operation_id': operation_id, 'raw_text': raw_text})}\n\n"
 
+            except CancelledError:
+                # Must be caught before the generic Exception handler, otherwise
+                # a user-initiated cancel surfaces as an error toast instead of
+                # the clean 'cancelled' state.
+                yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Operation cancelled'})}\n\n"
             except Exception as e:
                 import traceback
                 traceback.print_exc()

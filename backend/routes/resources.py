@@ -161,7 +161,7 @@ def list_files():
 
 # ─── Delete ────────────────────────────────────────────────────────────────
 
-@resources_bp.route('/delete/<file_type>/<filename>', methods=['DELETE'])
+@resources_bp.route('/delete/<file_type>/<path:filename>', methods=['DELETE'])
 def delete_file_route(file_type, filename):
     """Delete a screenshot or HTML file."""
     try:
