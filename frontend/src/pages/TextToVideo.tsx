@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -10,29 +10,21 @@ import {
   Presentation,
   StopCircle,
   Video,
+  AlertCircle,
 } from 'lucide-react'
-import PreflightModal from '../components/PreflightModal'
+
 import ProgressBar from '../components/ProgressBar'
 import ScreenshotGallery from '../components/ScreenshotGallery'
+import PreflightModal from '../components/PreflightModal'
 import Toggle from '../components/Toggle'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import type { GenerateSettings, OutputFormat } from '../api/types'
 
-/**
- * Text-to-Video wizard. Six ordered steps that gather every parameter the
- * backend and the optional PowerPoint export path can consume, with a
- * pre-flight modal before kickoff. Tabs are keyboard-navigable (Back/Next
- * buttons + clickable headers) and the Start Process button is only
- * rendered on the final tab once all required fields are set.
- */
+// ─── Defaults ──────────────────────────────────────────────────────────────
 
 const DEFAULT_SETTINGS: GenerateSettings = {
-  class_name: '',
-  subject: '',
-  title: '',
   output_format: 'images',
   model_choice: 'default',
-  system_prompt: '',
   zoom: 2.1,
   overlap: 15,
   viewport_width: 1920,
@@ -41,15 +33,14 @@ const DEFAULT_SETTINGS: GenerateSettings = {
   use_cache: true,
   enable_verification: true,
   beautify_html: false,
+  close_powerpoint_before_start: true,
+  auto_timing_screenshot_slides: true,
+  fixed_seconds_per_screenshot_slide: 5,
   resolution: '1080p',
   video_quality: 85,
   fps: 30,
-  slide_duration_sec: 3,
-  close_powerpoint_before_start: true,
-  auto_timing_screenshot_slides: true,
-  fixed_seconds_per_screenshot_slide: 15,
+  slide_duration_sec: 5,
   thumbnail_on_slide_2: false,
-  thumbnail_filename: '',
 }
 
 type StepId = 'project' | 'content' | 'screenshot' | 'video' | 'thumbnail' | 'advanced'
@@ -58,15 +49,14 @@ interface StepDef {
   id: StepId
   label: string
   shortLabel: string
-  hiddenFor?: OutputFormat[]
 }
 
 const STEP_DEFS: StepDef[] = [
   { id: 'project', label: 'Project info', shortLabel: 'Project' },
   { id: 'content', label: 'AI & text', shortLabel: 'Content' },
   { id: 'screenshot', label: 'Screenshot settings', shortLabel: 'Screenshots' },
-  { id: 'video', label: 'Video settings', shortLabel: 'Video', hiddenFor: ['html', 'images'] },
-  { id: 'thumbnail', label: 'Thumbnail', shortLabel: 'Thumbnail', hiddenFor: ['html', 'images'] },
+  { id: 'video', label: 'Video settings', shortLabel: 'Video' },
+  { id: 'thumbnail', label: 'Thumbnail', shortLabel: 'Thumbnail' },
   { id: 'advanced', label: 'Advanced & start', shortLabel: 'Advanced' },
 ]
 
@@ -77,6 +67,94 @@ const OUTPUT_OPTIONS: { value: OutputFormat; label: string; desc: string; icon: 
   { value: 'video', label: 'MP4 video', desc: 'PowerPoint exported to MP4 (Windows only)', icon: Video },
 ]
 
+// ─── Validation ────────────────────────────────────────────────────────────
+
+type FieldErrors = Record<string, string>
+
+/** Returns a map of { fieldId -> errorMessage } for a given step. Empty = valid. */
+function validateStep(id: StepId, settings: GenerateSettings, text: string): FieldErrors {
+  const errs: FieldErrors = {}
+  const num = (v: unknown): number | null => {
+    if (v === undefined || v === null || v === '') return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  switch (id) {
+    case 'project': {
+      if (!(settings.class_name ?? '').trim()) errs.class_name = 'Required'
+      if (!(settings.subject ?? '').trim()) errs.subject = 'Required'
+      if (!(settings.title ?? '').trim()) errs.title = 'Required'
+      if (!settings.output_format) errs.output_format = 'Pick an output format'
+      return errs
+    }
+    case 'content': {
+      if (!text.trim()) errs.text = 'Paste your source text here'
+      return errs
+    }
+    case 'screenshot': {
+      const zoom = num(settings.zoom)
+      if (zoom === null || zoom <= 0 || zoom > 10) errs.zoom = 'Zoom must be between 0.1 and 10'
+      const overlap = num(settings.overlap)
+      if (overlap === null || overlap < 0) errs.overlap = 'Overlap must be 0 or more'
+      const vw = num(settings.viewport_width)
+      if (vw === null || vw < 320) errs.viewport_width = 'Width must be at least 320px'
+      const vh = num(settings.viewport_height)
+      if (vh === null || vh < 240) errs.viewport_height = 'Height must be at least 240px'
+      if (overlap !== null && vh !== null && overlap >= vh) {
+        errs.overlap = 'Overlap must be less than viewport height'
+      }
+      const mx = num(settings.max_screenshots)
+      if (mx === null || mx < 1) errs.max_screenshots = 'At least 1'
+      return errs
+    }
+    case 'video': {
+      if (!settings.resolution) errs.resolution = 'Pick a resolution'
+      const q = num(settings.video_quality)
+      if (q === null || q < 1 || q > 100) errs.video_quality = 'Between 1 and 100'
+      const fps = num(settings.fps)
+      if (fps === null || fps < 1 || fps > 120) errs.fps = 'Between 1 and 120'
+      const sd = num(settings.slide_duration_sec)
+      if (sd === null || sd <= 0) errs.slide_duration_sec = 'Must be greater than 0'
+      return errs
+    }
+    case 'thumbnail': {
+      if (settings.thumbnail_on_slide_2 && !(settings.thumbnail_filename ?? '').trim()) {
+        errs.thumbnail_filename = 'Filename required when thumbnail is enabled'
+      }
+      return errs
+    }
+    case 'advanced': {
+      if (!settings.auto_timing_screenshot_slides) {
+        const f = num(settings.fixed_seconds_per_screenshot_slide)
+        if (f === null || f <= 0) {
+          errs.fixed_seconds_per_screenshot_slide = 'Seconds must be greater than 0'
+        }
+      }
+      return errs
+    }
+  }
+}
+
+/** Scroll the first error field on a step into view and focus it. */
+function focusFirstError(stepId: StepId, errs: FieldErrors) {
+  const first = Object.keys(errs)[0]
+  if (!first) return
+  // Defer so the inline error nodes have rendered.
+  setTimeout(() => {
+    const el = document.getElementById(fieldId(stepId, first))
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+        el.focus({ preventScroll: true })
+      }
+    }
+  }, 0)
+}
+
+const fieldId = (step: StepId, name: string) => `field-${step}-${name}`
+
+// ─── Page ──────────────────────────────────────────────────────────────────
+
 export default function TextToVideo() {
   const nav = useNavigate()
   const { state, generate, cancel } = useTrackedGenerate('text-to-video')
@@ -85,45 +163,71 @@ export default function TextToVideo() {
   const [settings, setSettings] = useState<GenerateSettings>(DEFAULT_SETTINGS)
   const [stepId, setStepId] = useState<StepId>('project')
   const [showPreflight, setShowPreflight] = useState(false)
+  /** Step ids whose inline errors should be visible (only populated after the
+   * user clicks Next on an invalid step). Silent until then. */
+  const [erroredSteps, setErroredSteps] = useState<Set<StepId>>(new Set())
 
-  const set = <K extends keyof GenerateSettings>(key: K, v: GenerateSettings[K]) =>
+  const set = <K extends keyof GenerateSettings>(key: K, v: GenerateSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: v }))
+    // Re-validate this step silently so errors clear as the user types.
+    // We don't need to; perStepErrors is derived below.
+  }
 
-  const visibleSteps = useMemo(
-    () => STEP_DEFS.filter((s) => !s.hiddenFor?.includes(settings.output_format ?? 'images')),
-    [settings.output_format],
-  )
-  // If the user toggled output_format and the current step got hidden, fall
-  // back to the project step. Compute the fallback here (not in an effect)
-  // so React doesn't need to re-render twice.
-  const activeStepId: StepId = visibleSteps.some((s) => s.id === stepId) ? stepId : 'project'
-  const stepIndex = Math.max(0, visibleSteps.findIndex((s) => s.id === activeStepId))
+  const perStepErrors: Record<StepId, FieldErrors> = useMemo(() => ({
+    project: validateStep('project', settings, text),
+    content: validateStep('content', settings, text),
+    screenshot: validateStep('screenshot', settings, text),
+    video: validateStep('video', settings, text),
+    thumbnail: validateStep('thumbnail', settings, text),
+    advanced: validateStep('advanced', settings, text),
+  }), [settings, text])
 
-  const projectOk = Boolean(
-    (settings.class_name ?? '').trim() &&
-      (settings.subject ?? '').trim() &&
-      (settings.title ?? '').trim(),
-  )
-  const contentOk = text.trim().length > 0
-  const canFinish = projectOk && contentOk
+  const stepValid = (id: StepId) => Object.keys(perStepErrors[id]).length === 0
+
+  const stepIndex = STEP_DEFS.findIndex((s) => s.id === stepId)
+  const currentErrors = perStepErrors[stepId]
+  // Errors are shown after the user first attempted to leave an invalid step.
+  // Once shown, they stay live — the Field border flips red/green as the user
+  // types — which is the normal "touched-then-validate-on-change" pattern.
+  const showCurrentErrors =
+    erroredSteps.has(stepId) && Object.keys(currentErrors).length > 0
+
+  /** A step is reachable if every earlier step is valid. */
+  const canNavigateTo = (target: StepId): boolean => {
+    const targetIdx = STEP_DEFS.findIndex((s) => s.id === target)
+    const curIdx = STEP_DEFS.findIndex((s) => s.id === stepId)
+    if (targetIdx <= curIdx) return true
+    for (let i = 0; i < targetIdx; i++) {
+      if (!stepValid(STEP_DEFS[i].id)) return false
+    }
+    return true
+  }
 
   // Redirect to Processes as soon as the backend accepts the request and we
-  // have an operation_id. The existing state machine keeps streaming there.
+  // have an operation_id.
   useEffect(() => {
     if (state.status === 'running' && state.operationId) {
       nav(`/processes?op=${encodeURIComponent(state.operationId)}`, { replace: true })
     }
   }, [state.status, state.operationId, nav])
 
+  const allValid = STEP_DEFS.every((s) => stepValid(s.id))
+
   const onStart = () => {
-    if (!canFinish) return
+    // Surface every outstanding error at once and jump to the first broken step.
+    if (!allValid) {
+      const broken = STEP_DEFS.find((s) => !stepValid(s.id))!
+      setErroredSteps(new Set(STEP_DEFS.filter((s) => !stepValid(s.id)).map((s) => s.id)))
+      setStepId(broken.id)
+      focusFirstError(broken.id, perStepErrors[broken.id])
+      return
+    }
     setShowPreflight(true)
   }
 
   const onPreflightProceed = async () => {
     setShowPreflight(false)
     const payload: GenerateSettings = { ...settings }
-    // Trim whitespace in metadata so the history log is clean.
     payload.class_name = (payload.class_name ?? '').trim() || undefined
     payload.subject = (payload.subject ?? '').trim() || undefined
     payload.title = (payload.title ?? '').trim() || undefined
@@ -131,18 +235,40 @@ export default function TextToVideo() {
   }
 
   const goNext = () => {
-    const i = visibleSteps.findIndex((s) => s.id === activeStepId)
-    if (i >= 0 && i < visibleSteps.length - 1) setStepId(visibleSteps[i + 1].id)
+    if (!stepValid(stepId)) {
+      setErroredSteps((prev) => new Set(prev).add(stepId))
+      focusFirstError(stepId, currentErrors)
+      return
+    }
+    if (stepIndex >= 0 && stepIndex < STEP_DEFS.length - 1) {
+      setStepId(STEP_DEFS[stepIndex + 1].id)
+    }
   }
   const goPrev = () => {
-    const i = visibleSteps.findIndex((s) => s.id === activeStepId)
-    if (i > 0) setStepId(visibleSteps[i - 1].id)
+    if (stepIndex > 0) setStepId(STEP_DEFS[stepIndex - 1].id)
   }
 
-  const canGoNext =
-    (activeStepId === 'project' && projectOk) ||
-    (activeStepId === 'content' && contentOk) ||
-    (activeStepId !== 'project' && activeStepId !== 'content')
+  const onPickTab = (target: StepId) => {
+    const targetIdx = STEP_DEFS.findIndex((s) => s.id === target)
+    const curIdx = stepIndex
+    if (targetIdx <= curIdx) {
+      // Going backward — always allowed.
+      setStepId(target)
+      return
+    }
+    // Going forward — every step up to (and including) the current step
+    // must be valid. Surface the first broken step's errors.
+    for (let i = 0; i < targetIdx; i++) {
+      const s = STEP_DEFS[i]
+      if (!stepValid(s.id)) {
+        setErroredSteps((prev) => new Set(prev).add(s.id))
+        setStepId(s.id)
+        focusFirstError(s.id, perStepErrors[s.id])
+        return
+      }
+    }
+    setStepId(target)
+  }
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
@@ -154,44 +280,85 @@ export default function TextToVideo() {
         </p>
       </div>
 
-      <Tabs steps={visibleSteps} currentIndex={stepIndex} onPick={(id) => setStepId(id)} />
+      <Tabs
+        steps={STEP_DEFS}
+        currentId={stepId}
+        onPick={onPickTab}
+        canNavigateTo={canNavigateTo}
+        stepValid={stepValid}
+      />
 
       <div className="card space-y-6">
-        {activeStepId === 'project' && (
-          <ProjectStep settings={settings} onChange={set} running={running} />
+        {stepId === 'project' && (
+          <ProjectStep
+            settings={settings}
+            onChange={set}
+            running={running}
+            errors={showCurrentErrors ? currentErrors : {}}
+          />
         )}
 
-        {activeStepId === 'content' && (
+        {stepId === 'content' && (
           <ContentStep
             text={text}
             onText={setText}
             settings={settings}
             onChange={set}
             running={running}
+            errors={showCurrentErrors ? currentErrors : {}}
           />
         )}
 
-        {activeStepId === 'screenshot' && <ScreenshotStep settings={settings} onChange={set} />}
+        {stepId === 'screenshot' && (
+          <ScreenshotStep
+            settings={settings}
+            onChange={set}
+            errors={showCurrentErrors ? currentErrors : {}}
+          />
+        )}
 
-        {activeStepId === 'video' && <VideoStep settings={settings} onChange={set} />}
+        {stepId === 'video' && (
+          <VideoStep
+            settings={settings}
+            onChange={set}
+            errors={showCurrentErrors ? currentErrors : {}}
+          />
+        )}
 
-        {activeStepId === 'thumbnail' && <ThumbnailStep settings={settings} onChange={set} />}
+        {stepId === 'thumbnail' && (
+          <ThumbnailStep
+            settings={settings}
+            onChange={set}
+            errors={showCurrentErrors ? currentErrors : {}}
+          />
+        )}
 
-        {activeStepId === 'advanced' && (
+        {stepId === 'advanced' && (
           <AdvancedStep
             settings={settings}
             onChange={set}
-            canFinish={canFinish}
+            canFinish={allValid}
             onStart={onStart}
             running={running}
             state={state}
             cancel={cancel}
+            errors={showCurrentErrors ? currentErrors : {}}
           />
+        )}
+
+        {showCurrentErrors && Object.keys(currentErrors).length > 0 && (
+          <div className="flex items-start gap-2 rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-200">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <div>
+              Fix {Object.keys(currentErrors).length} issue
+              {Object.keys(currentErrors).length === 1 ? '' : 's'} on this step before continuing.
+            </div>
+          </div>
         )}
       </div>
 
       {/* Back / Next */}
-      {activeStepId !== 'advanced' && (
+      {stepId !== 'advanced' && (
         <div className="flex items-center justify-between">
           <button
             type="button"
@@ -205,13 +372,13 @@ export default function TextToVideo() {
             type="button"
             className="btn-primary"
             onClick={goNext}
-            disabled={!canGoNext || running}
+            disabled={running}
           >
             Next <ArrowRight size={14} />
           </button>
         </div>
       )}
-      {activeStepId === 'advanced' && (
+      {stepId === 'advanced' && (
         <div>
           <button
             type="button"
@@ -255,30 +422,39 @@ export default function TextToVideo() {
 
 function Tabs({
   steps,
-  currentIndex,
+  currentId,
   onPick,
+  canNavigateTo,
+  stepValid,
 }: {
   steps: StepDef[]
-  currentIndex: number
+  currentId: StepId
   onPick: (id: StepId) => void
+  canNavigateTo: (id: StepId) => boolean
+  stepValid: (id: StepId) => boolean
 }) {
+  const currentIndex = steps.findIndex((s) => s.id === currentId)
   return (
     <ol className="flex w-full flex-wrap items-center gap-1">
       {steps.map((s, i) => {
-        const active = i === currentIndex
-        const done = i < currentIndex
+        const active = s.id === currentId
+        const isDone = i < currentIndex && stepValid(s.id)
+        const reachable = canNavigateTo(s.id)
         return (
           <li key={s.id} className="flex min-w-0 flex-1 items-center gap-1">
             <button
               type="button"
               onClick={() => onPick(s.id)}
+              title={!reachable ? 'Fill earlier steps first' : s.label}
               className={
                 'flex min-w-0 flex-1 items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors ' +
                 (active
                   ? 'border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-500/10 dark:text-brand-200'
-                  : done
+                  : isDone
                   ? 'border-brand-200 bg-brand-50/60 text-brand-600 hover:bg-brand-50 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-200'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300 dark:hover:text-slate-100')
+                  : reachable
+                  ? 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300 dark:hover:text-slate-100'
+                  : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400 dark:border-white/5 dark:bg-white/[0.02] dark:text-slate-500')
               }
             >
               <span
@@ -286,12 +462,14 @@ function Tabs({
                   'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] ' +
                   (active
                     ? 'bg-brand-500 text-white'
-                    : done
+                    : isDone
                     ? 'bg-brand-500/80 text-white'
-                    : 'bg-slate-200 text-slate-600 dark:bg-white/10 dark:text-slate-300')
+                    : reachable
+                    ? 'bg-slate-200 text-slate-600 dark:bg-white/10 dark:text-slate-300'
+                    : 'bg-slate-100 text-slate-400 dark:bg-white/5 dark:text-slate-500')
                 }
               >
-                {done ? <Check size={12} /> : i + 1}
+                {isDone ? <Check size={12} /> : i + 1}
               </span>
               <span className="truncate">{s.shortLabel}</span>
             </button>
@@ -323,10 +501,12 @@ function ProjectStep({
   settings,
   onChange,
   running,
+  errors,
 }: {
   settings: GenerateSettings
   onChange: Setter
   running: boolean
+  errors: FieldErrors
 }) {
   return (
     <>
@@ -336,27 +516,30 @@ function ProjectStep({
       />
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Class name" required>
+        <Field label="Class name" required error={errors.class_name}>
           <input
-            className="input"
+            id={fieldId('project', 'class_name')}
+            className={inputCls(errors.class_name)}
             placeholder="Class 8"
             value={settings.class_name ?? ''}
             onChange={(e) => onChange('class_name', e.target.value)}
             disabled={running}
           />
         </Field>
-        <Field label="Subject" required>
+        <Field label="Subject" required error={errors.subject}>
           <input
-            className="input"
+            id={fieldId('project', 'subject')}
+            className={inputCls(errors.subject)}
             placeholder="Nepali"
             value={settings.subject ?? ''}
             onChange={(e) => onChange('subject', e.target.value)}
             disabled={running}
           />
         </Field>
-        <Field label="Title" required className="sm:col-span-2">
+        <Field label="Title" required className="sm:col-span-2" error={errors.title}>
           <input
-            className="input"
+            id={fieldId('project', 'title')}
+            className={inputCls(errors.title)}
             placeholder="Chapter 1 — Introduction"
             value={settings.title ?? ''}
             onChange={(e) => onChange('title', e.target.value)}
@@ -365,7 +548,7 @@ function ProjectStep({
         </Field>
       </div>
 
-      <div>
+      <div id={fieldId('project', 'output_format')}>
         <div className="label">Output format</div>
         <div className="grid gap-2 sm:grid-cols-2">
           {OUTPUT_OPTIONS.map((o) => {
@@ -400,6 +583,7 @@ function ProjectStep({
             )
           })}
         </div>
+        {errors.output_format && <FieldError message={errors.output_format} />}
         {(settings.output_format === 'pptx' || settings.output_format === 'video') && (
           <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
             Heads up: PowerPoint / MP4 export needs a Windows host with PowerPoint installed — the
@@ -417,12 +601,14 @@ function ContentStep({
   settings,
   onChange,
   running,
+  errors,
 }: {
   text: string
   onText: (s: string) => void
   settings: GenerateSettings
   onChange: Setter
   running: boolean
+  errors: FieldErrors
 }) {
   return (
     <>
@@ -433,6 +619,7 @@ function ContentStep({
 
       <Field label="AI Model">
         <select
+          id={fieldId('content', 'model_choice')}
           className="input"
           value={settings.model_choice ?? 'default'}
           onChange={(e) => onChange('model_choice', e.target.value)}
@@ -444,9 +631,10 @@ function ContentStep({
         </select>
       </Field>
 
-      <Field label="Text input" required>
+      <Field label="Text input" required error={errors.text}>
         <textarea
-          className="textarea h-60 resize-y font-mono"
+          id={fieldId('content', 'text')}
+          className={inputCls(errors.text) + ' textarea h-60 resize-y font-mono'}
           placeholder="Paste your lesson notes here…"
           value={text}
           onChange={(e) => onText(e.target.value)}
@@ -473,9 +661,11 @@ function ContentStep({
 function ScreenshotStep({
   settings,
   onChange,
+  errors,
 }: {
   settings: GenerateSettings
   onChange: Setter
+  errors: FieldErrors
 }) {
   return (
     <>
@@ -484,22 +674,46 @@ function ScreenshotStep({
         subtitle="How Playwright captures the rendered HTML."
       />
       <div className="grid gap-4 sm:grid-cols-3">
-        <NumField label="Zoom" step={0.1} value={settings.zoom} onChange={(v) => onChange('zoom', v)} />
-        <NumField label="Overlap (px)" value={settings.overlap} onChange={(v) => onChange('overlap', v)} />
         <NumField
+          step="screenshot"
+          name="zoom"
+          label="Zoom"
+          numStep={0.1}
+          value={settings.zoom}
+          onChange={(v) => onChange('zoom', v)}
+          error={errors.zoom}
+        />
+        <NumField
+          step="screenshot"
+          name="overlap"
+          label="Overlap (px)"
+          value={settings.overlap}
+          onChange={(v) => onChange('overlap', v)}
+          error={errors.overlap}
+        />
+        <NumField
+          step="screenshot"
+          name="max_screenshots"
           label="Max screenshots"
           value={settings.max_screenshots}
           onChange={(v) => onChange('max_screenshots', v)}
+          error={errors.max_screenshots}
         />
         <NumField
+          step="screenshot"
+          name="viewport_width"
           label="Viewport width"
           value={settings.viewport_width}
           onChange={(v) => onChange('viewport_width', v)}
+          error={errors.viewport_width}
         />
         <NumField
+          step="screenshot"
+          name="viewport_height"
           label="Viewport height"
           value={settings.viewport_height}
           onChange={(v) => onChange('viewport_height', v)}
+          error={errors.viewport_height}
         />
       </div>
     </>
@@ -509,20 +723,23 @@ function ScreenshotStep({
 function VideoStep({
   settings,
   onChange,
+  errors,
 }: {
   settings: GenerateSettings
   onChange: Setter
+  errors: FieldErrors
 }) {
   return (
     <>
       <StepHeader
         title="Video settings"
-        subtitle="Rendering parameters for PowerPoint / MP4 export. Applied only if the backend has PowerPoint COM."
+        subtitle="Rendering parameters for PowerPoint / MP4 export. Only applied when output is PowerPoint or MP4."
       />
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Resolution">
+        <Field label="Resolution" error={errors.resolution}>
           <select
-            className="input"
+            id={fieldId('video', 'resolution')}
+            className={inputCls(errors.resolution)}
             value={settings.resolution ?? '1080p'}
             onChange={(e) =>
               onChange('resolution', e.target.value as GenerateSettings['resolution'])
@@ -535,15 +752,28 @@ function VideoStep({
           </select>
         </Field>
         <NumField
+          step="video"
+          name="video_quality"
           label="Video quality (1-100)"
           value={settings.video_quality}
           onChange={(v) => onChange('video_quality', v)}
+          error={errors.video_quality}
         />
-        <NumField label="FPS" value={settings.fps} onChange={(v) => onChange('fps', v)} />
         <NumField
+          step="video"
+          name="fps"
+          label="FPS"
+          value={settings.fps}
+          onChange={(v) => onChange('fps', v)}
+          error={errors.fps}
+        />
+        <NumField
+          step="video"
+          name="slide_duration_sec"
           label="Default slide duration (sec)"
           value={settings.slide_duration_sec}
           onChange={(v) => onChange('slide_duration_sec', v)}
+          error={errors.slide_duration_sec}
         />
       </div>
     </>
@@ -553,9 +783,11 @@ function VideoStep({
 function ThumbnailStep({
   settings,
   onChange,
+  errors,
 }: {
   settings: GenerateSettings
   onChange: Setter
+  errors: FieldErrors
 }) {
   return (
     <>
@@ -570,9 +802,10 @@ function ThumbnailStep({
         onChange={(v) => onChange('thumbnail_on_slide_2', v)}
       />
       {settings.thumbnail_on_slide_2 && (
-        <Field label="Thumbnail filename">
+        <Field label="Thumbnail filename" required error={errors.thumbnail_filename}>
           <input
-            className="input"
+            id={fieldId('thumbnail', 'thumbnail_filename')}
+            className={inputCls(errors.thumbnail_filename)}
             placeholder="thumbnail.png (in backend's local path)"
             value={settings.thumbnail_filename ?? ''}
             onChange={(e) => onChange('thumbnail_filename', e.target.value)}
@@ -591,6 +824,7 @@ function AdvancedStep({
   running,
   state,
   cancel,
+  errors,
 }: {
   settings: GenerateSettings
   onChange: Setter
@@ -599,7 +833,9 @@ function AdvancedStep({
   running: boolean
   state: ReturnType<typeof useTrackedGenerate>['state']
   cancel: () => void
+  errors: FieldErrors
 }) {
+  const autoTiming = settings.auto_timing_screenshot_slides ?? true
   return (
     <>
       <StepHeader
@@ -634,14 +870,27 @@ function AdvancedStep({
         <Toggle
           label="Auto timing for screenshot slides"
           description="Distribute total seconds across inserted screenshot slides."
-          checked={settings.auto_timing_screenshot_slides ?? true}
+          checked={autoTiming}
           onChange={(v) => onChange('auto_timing_screenshot_slides', v)}
         />
+        {!autoTiming && (
+          <div className="pl-4">
+            <NumField
+              step="advanced"
+              name="fixed_seconds_per_screenshot_slide"
+              label="Fixed seconds per screenshot slide"
+              numStep={0.5}
+              value={settings.fixed_seconds_per_screenshot_slide}
+              onChange={(v) => onChange('fixed_seconds_per_screenshot_slide', v)}
+              error={errors.fixed_seconds_per_screenshot_slide}
+            />
+          </div>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4 dark:border-white/10">
         {!running ? (
-          <button type="button" className="btn-primary" disabled={!canFinish} onClick={onStart}>
+          <button type="button" className="btn-primary" onClick={onStart}>
             <Play size={16} /> Start Process
           </button>
         ) : (
@@ -651,7 +900,7 @@ function AdvancedStep({
         )}
         {!canFinish && !running && (
           <span className="text-xs text-amber-600 dark:text-amber-400">
-            Fill project info (Step 1) and text (Step 2) before starting.
+            Fix the outstanding step errors — click Start Process to jump to the first one.
           </span>
         )}
         {state.status === 'error' && (
@@ -672,11 +921,13 @@ function Field({
   children,
   required,
   className,
+  error,
 }: {
   label: string
   children: React.ReactNode
   required?: boolean
   className?: string
+  error?: string
 }) {
   return (
     <div className={className}>
@@ -685,27 +936,44 @@ function Field({
         {required && <span className="ml-1 text-rose-500">*</span>}
       </label>
       {children}
+      {error && <FieldError message={error} />}
+    </div>
+  )
+}
+
+function FieldError({ message }: { message: string }) {
+  return (
+    <div className="mt-1 flex items-center gap-1 text-xs text-rose-600 dark:text-rose-400">
+      <AlertCircle size={12} />
+      {message}
     </div>
   )
 }
 
 function NumField({
+  step,
+  name,
   label,
   value,
   onChange,
-  step,
+  numStep,
+  error,
 }: {
+  step: StepId
+  name: string
   label: string
   value: number | undefined
   onChange: (v: number) => void
-  step?: number
+  numStep?: number
+  error?: string
 }) {
   return (
-    <Field label={label}>
+    <Field label={label} error={error}>
       <input
+        id={fieldId(step, name)}
         type="number"
-        step={step}
-        className="input"
+        step={numStep}
+        className={inputCls(error)}
         value={value ?? ''}
         onChange={(e) => {
           const v = Number(e.target.value)
@@ -714,4 +982,10 @@ function NumField({
       />
     </Field>
   )
+}
+
+function inputCls(error?: string) {
+  return error
+    ? 'input border-rose-400 focus:border-rose-500 focus:ring-rose-500 dark:border-rose-500/60'
+    : 'input'
 }
