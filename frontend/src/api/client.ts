@@ -79,7 +79,14 @@ export const api = {
   list: () => getJson<ListResponse>('/list'),
   history: () => getJson<HistoryEntry[]>('/history'),
   deleteFile: async (type: 'screenshot' | 'html', filename: string) => {
-    const res = await fetch(buildUrl(`/delete/${type}/${encodeURIComponent(filename)}`), {
+    // Encode each path segment separately. encodeURIComponent would escape
+    // `/` as `%2F`, which Werkzeug's dev server does NOT decode back to `/`
+    // in PATH_INFO — so the <path:filename> converter would get a literal
+    // `%2F` and fail to match any file on disk. Screenshots inside batch
+    // subfolders (e.g. `batch 3/5(1).png`) rely on the split-and-join
+    // treatment.
+    const encoded = filename.split('/').map(encodeURIComponent).join('/')
+    const res = await fetch(buildUrl(`/delete/${type}/${encoded}`), {
       method: 'DELETE',
     })
     return parseJson<{ success?: boolean; error?: string }>(res)
