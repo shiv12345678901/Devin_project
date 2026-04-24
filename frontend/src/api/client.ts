@@ -82,6 +82,21 @@ export const api = {
   screenshotUrl: (filename: string) =>
     buildUrl(`/screenshots/${filename.split('/').map(encodeURIComponent).join('/')}`),
   htmlUrl: (filename: string) => buildUrl(`/html/${encodeURIComponent(filename)}`),
+  thumbnailUrl: (filename: string) =>
+    buildUrl(`/thumbnails/${encodeURIComponent(filename)}`),
+
+  uploadThumbnail: async (
+    file: File,
+  ): Promise<{ success: boolean; filename: string; url: string; size_bytes: number }> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const r = await fetch(buildUrl('/upload-thumbnail'), { method: 'POST', body: fd })
+    if (!r.ok) {
+      const msg = await r.text()
+      throw new Error(`Upload failed (${r.status}): ${msg}`)
+    }
+    return r.json()
+  },
 
   downloadZip: async (files: string[], name = 'screenshots'): Promise<Blob> => {
     const res = await fetch(buildUrl('/download-zip'), {

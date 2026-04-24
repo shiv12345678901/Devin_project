@@ -221,6 +221,7 @@ def generate_sse():
         'fixed_seconds_per_screenshot_slide': data.get('fixed_seconds_per_screenshot_slide', 15),
         'thumbnail_on_slide_2': data.get('thumbnail_on_slide_2', False),
         'thumbnail_filename': data.get('thumbnail_filename', ''),
+        'thumbnail_duration_sec': data.get('thumbnail_duration_sec', 5),
     }
 
     cancel_event = register_operation(operation_id)

@@ -1,10 +1,15 @@
 """Resources Blueprint — file listing, serving, deletion, ZIP download (#7), history (#8), regeneration."""
 import os
 import io
+import re
+import uuid
 import zipfile
 import time
 
 from flask import Blueprint, request, jsonify, send_file
+
+THUMBNAILS_FOLDER = 'output/thumbnails'
+os.makedirs(THUMBNAILS_FOLDER, exist_ok=True)
 
 from core.ai_client import cache
 from utils.performance_metrics import metrics_tracker
@@ -62,6 +67,47 @@ def get_html(filename):
     if os.path.exists(safe):
         return send_file(safe, mimetype='text/html')
     return jsonify({'error': 'File not found'}), 404
+
+
+@resources_bp.route('/thumbnails/<path:filename>')
+def get_thumbnail(filename):
+    """Serve a previously-uploaded thumbnail image."""
+    safe = _safe_child(THUMBNAILS_FOLDER, filename)
+    if safe is None:
+        return jsonify({'error': 'Invalid file path'}), 403
+    if os.path.exists(safe):
+        return send_file(safe)
+    return jsonify({'error': 'File not found'}), 404
+
+
+@resources_bp.route('/upload-thumbnail', methods=['POST'])
+def upload_thumbnail():
+    """Accept a thumbnail image upload and return its stable path.
+
+    Saves into THUMBNAILS_FOLDER with a sanitized `<uuid>_<original>` name
+    so subsequent /generate-sse requests can reference it by filename.
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file in request (expected form field "file")'}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({'error': 'Empty filename'}), 400
+
+    # Limit to common image types
+    ext = os.path.splitext(f.filename)[1].lower()
+    if ext not in ('.png', '.jpg', '.jpeg', '.webp', '.bmp'):
+        return jsonify({'error': f'Unsupported image type: {ext}'}), 400
+
+    safe_base = re.sub(r'[^A-Za-z0-9._-]+', '_', os.path.splitext(f.filename)[0])[:60]
+    stored_name = f'{uuid.uuid4().hex[:8]}_{safe_base}{ext}'
+    full_path = os.path.join(THUMBNAILS_FOLDER, stored_name)
+    f.save(full_path)
+    return jsonify({
+        'success': True,
+        'filename': stored_name,
+        'url': f'/thumbnails/{stored_name}',
+        'size_bytes': os.path.getsize(full_path),
+    })
 
 
 @resources_bp.route('/download/<path:filepath>')

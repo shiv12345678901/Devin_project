@@ -11,6 +11,7 @@ import {
   StopCircle,
   Video,
   AlertCircle,
+  Upload,
 } from 'lucide-react'
 
 import ProgressBar from '../components/ProgressBar'
@@ -18,6 +19,7 @@ import ScreenshotGallery from '../components/ScreenshotGallery'
 import PreflightModal from '../components/PreflightModal'
 import Toggle from '../components/Toggle'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
+import { api } from '../api/client'
 import type { GenerateSettings, OutputFormat } from '../api/types'
 
 // ─── Defaults ──────────────────────────────────────────────────────────────
@@ -41,6 +43,7 @@ const DEFAULT_SETTINGS: GenerateSettings = {
   fps: 30,
   slide_duration_sec: 5,
   thumbnail_on_slide_2: false,
+  thumbnail_duration_sec: 5,
 }
 
 type StepId = 'project' | 'content' | 'screenshot' | 'video' | 'thumbnail' | 'advanced'
@@ -49,14 +52,18 @@ interface StepDef {
   id: StepId
   label: string
   shortLabel: string
+  /** Output formats for which this step is irrelevant and should be hidden. */
+  hiddenFor?: OutputFormat[]
 }
 
 const STEP_DEFS: StepDef[] = [
   { id: 'project', label: 'Project info', shortLabel: 'Project' },
   { id: 'content', label: 'AI & text', shortLabel: 'Content' },
-  { id: 'screenshot', label: 'Screenshot settings', shortLabel: 'Screenshots' },
-  { id: 'video', label: 'Video settings', shortLabel: 'Video' },
-  { id: 'thumbnail', label: 'Thumbnail', shortLabel: 'Thumbnail' },
+  // Screenshots only matter once HTML has to be rendered to images.
+  { id: 'screenshot', label: 'Screenshot settings', shortLabel: 'Screenshots', hiddenFor: ['html'] },
+  // Video + thumbnail only matter for PowerPoint/MP4 export.
+  { id: 'video', label: 'Video settings', shortLabel: 'Video', hiddenFor: ['html', 'images'] },
+  { id: 'thumbnail', label: 'Thumbnail', shortLabel: 'Thumbnail', hiddenFor: ['html', 'images'] },
   { id: 'advanced', label: 'Advanced & start', shortLabel: 'Advanced' },
 ]
 
@@ -118,8 +125,14 @@ function validateStep(id: StepId, settings: GenerateSettings, text: string): Fie
       return errs
     }
     case 'thumbnail': {
-      if (settings.thumbnail_on_slide_2 && !(settings.thumbnail_filename ?? '').trim()) {
-        errs.thumbnail_filename = 'Filename required when thumbnail is enabled'
+      if (settings.thumbnail_on_slide_2) {
+        if (!(settings.thumbnail_filename ?? '').trim()) {
+          errs.thumbnail_filename = 'Upload an image first'
+        }
+        const d = num(settings.thumbnail_duration_sec)
+        if (d === null || d <= 0) {
+          errs.thumbnail_duration_sec = 'Duration must be greater than 0'
+        }
       }
       return errs
     }
@@ -184,21 +197,31 @@ export default function TextToVideo() {
 
   const stepValid = (id: StepId) => Object.keys(perStepErrors[id]).length === 0
 
-  const stepIndex = STEP_DEFS.findIndex((s) => s.id === stepId)
-  const currentErrors = perStepErrors[stepId]
+  // Visible steps depend on the chosen output format — irrelevant steps
+  // (e.g. Video / Thumbnail for html / images output) are hidden so the user
+  // doesn't fill fields that will never be used.
+  const outputFormat: OutputFormat = settings.output_format ?? 'images'
+  const visibleSteps = useMemo(
+    () => STEP_DEFS.filter((s) => !s.hiddenFor?.includes(outputFormat)),
+    [outputFormat],
+  )
+  // If the user toggled output_format and hid the currently-selected step,
+  // fall back to the project step *derived* (no effect, no cascading render).
+  const activeStepId: StepId = visibleSteps.some((s) => s.id === stepId) ? stepId : 'project'
+  const stepIndex = visibleSteps.findIndex((s) => s.id === activeStepId)
+  const currentErrors = perStepErrors[activeStepId]
   // Errors are shown after the user first attempted to leave an invalid step.
   // Once shown, they stay live — the Field border flips red/green as the user
   // types — which is the normal "touched-then-validate-on-change" pattern.
   const showCurrentErrors =
-    erroredSteps.has(stepId) && Object.keys(currentErrors).length > 0
+    erroredSteps.has(activeStepId) && Object.keys(currentErrors).length > 0
 
-  /** A step is reachable if every earlier step is valid. */
+  /** A step (in the visible list) is reachable if every earlier visible step is valid. */
   const canNavigateTo = (target: StepId): boolean => {
-    const targetIdx = STEP_DEFS.findIndex((s) => s.id === target)
-    const curIdx = STEP_DEFS.findIndex((s) => s.id === stepId)
-    if (targetIdx <= curIdx) return true
+    const targetIdx = visibleSteps.findIndex((s) => s.id === target)
+    if (targetIdx <= stepIndex) return true
     for (let i = 0; i < targetIdx; i++) {
-      if (!stepValid(STEP_DEFS[i].id)) return false
+      if (!stepValid(visibleSteps[i].id)) return false
     }
     return true
   }
@@ -211,13 +234,14 @@ export default function TextToVideo() {
     }
   }, [state.status, state.operationId, nav])
 
-  const allValid = STEP_DEFS.every((s) => stepValid(s.id))
+  // Only the *visible* steps participate in the final validation.
+  const allValid = visibleSteps.every((s) => stepValid(s.id))
 
   const onStart = () => {
     // Surface every outstanding error at once and jump to the first broken step.
     if (!allValid) {
-      const broken = STEP_DEFS.find((s) => !stepValid(s.id))!
-      setErroredSteps(new Set(STEP_DEFS.filter((s) => !stepValid(s.id)).map((s) => s.id)))
+      const broken = visibleSteps.find((s) => !stepValid(s.id))!
+      setErroredSteps(new Set(visibleSteps.filter((s) => !stepValid(s.id)).map((s) => s.id)))
       setStepId(broken.id)
       focusFirstError(broken.id, perStepErrors[broken.id])
       return
@@ -235,31 +259,30 @@ export default function TextToVideo() {
   }
 
   const goNext = () => {
-    if (!stepValid(stepId)) {
-      setErroredSteps((prev) => new Set(prev).add(stepId))
-      focusFirstError(stepId, currentErrors)
+    if (!stepValid(activeStepId)) {
+      setErroredSteps((prev) => new Set(prev).add(activeStepId))
+      focusFirstError(activeStepId, currentErrors)
       return
     }
-    if (stepIndex >= 0 && stepIndex < STEP_DEFS.length - 1) {
-      setStepId(STEP_DEFS[stepIndex + 1].id)
+    if (stepIndex >= 0 && stepIndex < visibleSteps.length - 1) {
+      setStepId(visibleSteps[stepIndex + 1].id)
     }
   }
   const goPrev = () => {
-    if (stepIndex > 0) setStepId(STEP_DEFS[stepIndex - 1].id)
+    if (stepIndex > 0) setStepId(visibleSteps[stepIndex - 1].id)
   }
 
   const onPickTab = (target: StepId) => {
-    const targetIdx = STEP_DEFS.findIndex((s) => s.id === target)
-    const curIdx = stepIndex
-    if (targetIdx <= curIdx) {
+    const targetIdx = visibleSteps.findIndex((s) => s.id === target)
+    if (targetIdx <= stepIndex) {
       // Going backward — always allowed.
       setStepId(target)
       return
     }
-    // Going forward — every step up to (and including) the current step
-    // must be valid. Surface the first broken step's errors.
+    // Going forward — every visible step up to (and including) the current
+    // step must be valid. Surface the first broken step's errors.
     for (let i = 0; i < targetIdx; i++) {
-      const s = STEP_DEFS[i]
+      const s = visibleSteps[i]
       if (!stepValid(s.id)) {
         setErroredSteps((prev) => new Set(prev).add(s.id))
         setStepId(s.id)
@@ -281,15 +304,15 @@ export default function TextToVideo() {
       </div>
 
       <Tabs
-        steps={STEP_DEFS}
-        currentId={stepId}
+        steps={visibleSteps}
+        currentId={activeStepId}
         onPick={onPickTab}
         canNavigateTo={canNavigateTo}
         stepValid={stepValid}
       />
 
       <div className="card space-y-6">
-        {stepId === 'project' && (
+        {activeStepId === 'project' && (
           <ProjectStep
             settings={settings}
             onChange={set}
@@ -298,7 +321,7 @@ export default function TextToVideo() {
           />
         )}
 
-        {stepId === 'content' && (
+        {activeStepId === 'content' && (
           <ContentStep
             text={text}
             onText={setText}
@@ -309,7 +332,7 @@ export default function TextToVideo() {
           />
         )}
 
-        {stepId === 'screenshot' && (
+        {activeStepId === 'screenshot' && (
           <ScreenshotStep
             settings={settings}
             onChange={set}
@@ -317,7 +340,7 @@ export default function TextToVideo() {
           />
         )}
 
-        {stepId === 'video' && (
+        {activeStepId === 'video' && (
           <VideoStep
             settings={settings}
             onChange={set}
@@ -325,7 +348,7 @@ export default function TextToVideo() {
           />
         )}
 
-        {stepId === 'thumbnail' && (
+        {activeStepId === 'thumbnail' && (
           <ThumbnailStep
             settings={settings}
             onChange={set}
@@ -333,7 +356,7 @@ export default function TextToVideo() {
           />
         )}
 
-        {stepId === 'advanced' && (
+        {activeStepId === 'advanced' && (
           <AdvancedStep
             settings={settings}
             onChange={set}
@@ -358,7 +381,7 @@ export default function TextToVideo() {
       </div>
 
       {/* Back / Next */}
-      {stepId !== 'advanced' && (
+      {activeStepId !== 'advanced' && (
         <div className="flex items-center justify-between">
           <button
             type="button"
@@ -378,7 +401,7 @@ export default function TextToVideo() {
           </button>
         </div>
       )}
-      {stepId === 'advanced' && (
+      {activeStepId === 'advanced' && (
         <div>
           <button
             type="button"
@@ -789,28 +812,102 @@ function ThumbnailStep({
   onChange: Setter
   errors: FieldErrors
 }) {
+  const [uploading, setUploading] = useState(false)
+  const [uploadErr, setUploadErr] = useState<string | null>(null)
+  const enabled = settings.thumbnail_on_slide_2 ?? false
+  const filename = (settings.thumbnail_filename ?? '').trim()
+
+  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    setUploadErr(null)
+    try {
+      const { filename: stored } = await api.uploadThumbnail(file)
+      onChange('thumbnail_filename', stored)
+    } catch (err) {
+      setUploadErr(err instanceof Error ? err.message : String(err))
+    } finally {
+      setUploading(false)
+      // Allow re-selecting the same file later.
+      e.target.value = ''
+    }
+  }
+
   return (
     <>
       <StepHeader
         title="Thumbnail"
-        subtitle="Optional thumbnail that gets inserted on slide 2 of the final deck."
+        subtitle="Optional cover image for the deck. Only used when output is PowerPoint or MP4."
       />
       <Toggle
         label="Thumbnail on slide 2"
-        description="If enabled, inserts the chosen image on slide 2 of the output presentation."
-        checked={settings.thumbnail_on_slide_2 ?? false}
+        description="Insert the uploaded image as a dedicated slide 2 in the generated deck."
+        checked={enabled}
         onChange={(v) => onChange('thumbnail_on_slide_2', v)}
       />
-      {settings.thumbnail_on_slide_2 && (
-        <Field label="Thumbnail filename" required error={errors.thumbnail_filename}>
-          <input
-            id={fieldId('thumbnail', 'thumbnail_filename')}
-            className={inputCls(errors.thumbnail_filename)}
-            placeholder="thumbnail.png (in backend's local path)"
-            value={settings.thumbnail_filename ?? ''}
-            onChange={(e) => onChange('thumbnail_filename', e.target.value)}
+
+      {enabled && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Thumbnail image" required error={errors.thumbnail_filename}>
+            <div className="flex flex-col gap-3">
+              <label
+                className={
+                  'flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed px-3 py-6 text-sm transition-colors ' +
+                  (errors.thumbnail_filename
+                    ? 'border-rose-400 bg-rose-50 text-rose-700 hover:bg-rose-100 dark:border-rose-500/60 dark:bg-rose-500/10 dark:text-rose-200'
+                    : 'border-slate-300 bg-slate-50 text-slate-600 hover:bg-slate-100 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300')
+                }
+              >
+                <Upload size={16} />
+                {uploading ? 'Uploading…' : filename ? 'Replace image' : 'Upload image'}
+                <input
+                  id={fieldId('thumbnail', 'thumbnail_filename')}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/bmp"
+                  className="hidden"
+                  onChange={onPickFile}
+                  disabled={uploading}
+                />
+              </label>
+              {filename && (
+                <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-2 dark:border-white/10 dark:bg-white/[0.03]">
+                  <img
+                    src={api.thumbnailUrl(filename)}
+                    alt="Thumbnail preview"
+                    className="h-16 w-24 shrink-0 rounded object-cover"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs font-medium text-slate-800 dark:text-slate-200">
+                      {filename}
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Stored on backend · served via /thumbnails/
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-ghost text-xs"
+                    onClick={() => onChange('thumbnail_filename', '')}
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+              {uploadErr && <FieldError message={uploadErr} />}
+            </div>
+          </Field>
+
+          <NumField
+            step="thumbnail"
+            name="thumbnail_duration_sec"
+            label="Duration (seconds)"
+            numStep={0.5}
+            value={settings.thumbnail_duration_sec}
+            onChange={(v) => onChange('thumbnail_duration_sec', v)}
+            error={errors.thumbnail_duration_sec}
           />
-        </Field>
+        </div>
       )}
     </>
   )
