@@ -46,7 +46,8 @@ export default function TextToVideo() {
       <div>
         <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">Text to Video</h1>
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-          Single chain: text → HTML → screenshots → MP4.
+          Paste text → AI generates HTML → Playwright captures screenshots. MP4 export is not
+          wired in this build; browse the screenshots in Processes.
         </p>
       </div>
 
@@ -82,7 +83,7 @@ export default function TextToVideo() {
           />
         </div>
 
-        <SettingsPanel value={settings} onChange={setSettings} showImagesToVideo />
+        <SettingsPanel value={settings} onChange={setSettings} />
 
         <div className="flex flex-wrap items-center gap-3">
           {!running ? (
