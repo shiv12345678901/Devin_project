@@ -37,6 +37,13 @@ interface PreflightModalProps {
   onProceed: () => void
 }
 
+const OUTPUT_LABELS: Record<OutputFormat, string> = {
+  html: 'HTML file',
+  images: 'screenshots',
+  pptx: 'PowerPoint deck',
+  video: 'MP4 video',
+}
+
 export default function PreflightModal({ outputFormat, onCancel, onProceed }: PreflightModalProps) {
   const [data, setData] = useState<PreflightResponse | null>(null)
   const [loadingKey, setLoadingKey] = useState<keyof PreflightResponse['checks'] | null>('platform')
@@ -68,6 +75,15 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
     }
   }, [])
 
+  // Escape key closes the modal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onCancel])
+
   const needsPpt = outputFormat === 'pptx' || outputFormat === 'video'
   const pptOk = data?.checks.powerpoint.ok ?? false
   const aiOk = data?.checks.ai_config.ok ?? false
@@ -91,13 +107,27 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-lg dark:border-white/10 dark:bg-slate-900">
-        <h2 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-slate-950/40 backdrop-blur-sm"
+        onClick={onCancel}
+        aria-hidden
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="preflight-title"
+        className="relative w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-lg dark:border-white/10 dark:bg-slate-900"
+      >
+        <h2
+          id="preflight-title"
+          className="font-display text-lg font-semibold text-slate-900 dark:text-slate-50"
+        >
           Pre-flight checks
         </h2>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-          Verifying the runtime can actually produce <span className="font-medium">{outputFormat}</span>.
+          Verifying the runtime can actually produce{' '}
+          <span className="font-medium">{OUTPUT_LABELS[outputFormat]}</span>.
         </p>
 
         <ul className="mt-5 space-y-3">
@@ -116,7 +146,7 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
                     </span>
                     {row.key === 'powerpoint' && !needsPpt && (
                       <span className="text-[10px] uppercase tracking-wider text-slate-400">
-                        optional for {outputFormat}
+                        optional for {OUTPUT_LABELS[outputFormat]}
                       </span>
                     )}
                   </div>
@@ -140,8 +170,9 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
             {!aiOk && <p>AI config is missing — edit <code>backend/config/config.py</code> and restart the backend.</p>}
             {needsPpt && !pptOk && (
               <p className="mt-1">
-                Output is <strong>{outputFormat}</strong> but PowerPoint isn't available. Go back to
-                step 1 and pick <em>html</em> or <em>images</em>, or install PowerPoint on a Windows host.
+                Output is <strong>{OUTPUT_LABELS[outputFormat]}</strong> but PowerPoint isn't
+                available. Go back to step 1 and pick <em>HTML file</em> or{' '}
+                <em>screenshots</em>, or install PowerPoint on a Windows host.
               </p>
             )}
           </div>

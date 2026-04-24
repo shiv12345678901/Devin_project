@@ -123,9 +123,10 @@ def download_file(filepath):
             if os.path.exists(check) and os.path.isfile(check):
                 return send_file(check, as_attachment=True)
 
-    if safe_path.startswith('output') and os.path.exists(safe_path):
-        return send_file(safe_path, as_attachment=True)
-
+    # Strict-boundary check: only serve files that live directly under the
+    # whitelisted output subfolders already tried above. The earlier fallback
+    # `safe_path.startswith('output')` was too loose — matched `outputevil/…`
+    # and also handed out internal files like `output/cache/ai_responses.json`.
     return jsonify({'error': 'File not found'}), 404
 
 
@@ -279,8 +280,11 @@ def download_zip():
                         full_path = candidate
                         break
 
-                # Also try direct path if under output/
-                if not full_path and safe.startswith('output') and os.path.exists(safe):
+                # Also try direct path if strictly under `output/` (not
+                # `outputevil/…` and not arbitrary other siblings).
+                if not full_path and (
+                    safe == 'output' or safe.startswith('output' + os.sep)
+                ) and os.path.isfile(safe):
                     full_path = safe
 
                 if full_path:

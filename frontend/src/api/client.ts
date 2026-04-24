@@ -8,7 +8,18 @@ import type {
   SseEvent,
 } from './types'
 
-const API_BASE: string = (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? ''
+// Base URL for the Flask backend. Starts from the build-time env var, but can
+// be overridden at runtime from the Settings page via `setBackendBaseUrl()` —
+// that way users can point the UI at a different host without a rebuild.
+let API_BASE: string = (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? ''
+
+export function setBackendBaseUrl(url: string): void {
+  API_BASE = (url ?? '').trim()
+}
+
+export function getBackendBaseUrl(): string {
+  return API_BASE
+}
 
 function buildUrl(path: string): string {
   if (!API_BASE) return path

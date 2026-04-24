@@ -27,7 +27,13 @@ from flask import Flask, jsonify, request, send_from_directory  # noqa: E402
 
 # Locate the built React frontend, if any.
 FRONTEND_DIST = os.path.abspath(os.path.join(BACKEND_DIR, '..', 'frontend', 'dist'))
-HAS_FRONTEND_BUILD = os.path.isfile(os.path.join(FRONTEND_DIST, 'index.html'))
+
+
+def has_frontend_build() -> bool:
+    """Check on every request — cheap stat call, avoids stale state when the
+    user builds / rebuilds / removes ``frontend/dist`` while the backend is
+    running (Flask's reloader only watches .py files)."""
+    return os.path.isfile(os.path.join(FRONTEND_DIST, 'index.html'))
 
 # Optional: enable CORS so the React dev server on :5173 can call the API
 # without relying on the Vite proxy. `flask-cors` is optional — if not
@@ -96,7 +102,9 @@ def preflight():
     # AI config: does config/config.py have a non-placeholder API_KEY and at
     # least one real api_key in MODELS_CONFIG?
     try:
-        sys.path.insert(0, os.path.join(BACKEND_DIR, 'config'))
+        config_dir = os.path.join(BACKEND_DIR, 'config')
+        if config_dir not in sys.path:
+            sys.path.insert(0, config_dir)
         from config import API_KEY, MODELS_CONFIG  # type: ignore
         placeholder = {'', 'your-api-key-here', 'REPLACE_ME'}
         top_ok = isinstance(API_KEY, str) and API_KEY.strip() not in placeholder
@@ -165,21 +173,21 @@ frontend was found at <code>frontend/dist</code>.</p>
 
 @app.route('/')
 def index():
-    if HAS_FRONTEND_BUILD:
+    if has_frontend_build():
         return send_from_directory(FRONTEND_DIST, 'index.html')
     return INDEX_FALLBACK_HTML
 
 
 @app.route('/assets/<path:filename>')
 def frontend_assets(filename: str):
-    if not HAS_FRONTEND_BUILD:
+    if not has_frontend_build():
         return jsonify({'error': 'Frontend not built'}), 404
     return send_from_directory(os.path.join(FRONTEND_DIST, 'assets'), filename)
 
 
 @app.route('/favicon.svg')
 def frontend_favicon():
-    if HAS_FRONTEND_BUILD:
+    if has_frontend_build():
         fav = os.path.join(FRONTEND_DIST, 'favicon.svg')
         if os.path.isfile(fav):
             return send_from_directory(FRONTEND_DIST, 'favicon.svg')
@@ -228,7 +236,7 @@ def spa_fallback(_err):
     path = request.path
     if _is_api_path(path):
         return jsonify({'error': 'Not found'}), 404
-    if HAS_FRONTEND_BUILD:
+    if has_frontend_build():
         return send_from_directory(FRONTEND_DIST, 'index.html')
     return INDEX_FALLBACK_HTML, 404
 
@@ -239,7 +247,7 @@ if __name__ == '__main__':
     print("=" * 60)
     print("🚀 TextBro (Screenshot Studio) - Starting Server")
     print("=" * 60)
-    if HAS_FRONTEND_BUILD:
+    if has_frontend_build():
         print(f"\n🎨 Serving React build from: {FRONTEND_DIST}")
         print("\n📱 Open your browser: http://localhost:5000")
     else:

@@ -184,9 +184,9 @@ export default function Settings() {
             </button>
           </div>
           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-            This field is informational only — the running app uses{' '}
-            <code>VITE_BACKEND_URL</code> at build time. Set it in{' '}
-            <code>frontend/.env</code> to point at a non-default backend.
+            Leave blank to use the Vite dev proxy / same-origin Flask build. If
+            set, every API call from this browser is redirected to this URL —
+            useful when the frontend and backend are on different hosts.
           </p>
           {pingState === 'ok' && (
             <div className="mt-3 flex items-center gap-2 rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-800 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-200">

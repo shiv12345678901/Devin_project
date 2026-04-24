@@ -233,10 +233,13 @@ export default function Home() {
               const Icon = meta?.icon ?? Activity
               const subtitle =
                 r.settings?.title || r.settings?.output_name || r.inputPreview
+              // Prefer backend's operationId so the Processes page can
+              // highlight/scroll to the row; fall back to the local id.
+              const opQuery = r.operationId ?? r.id
               return (
                 <Link
                   key={r.id}
-                  to={`/processes?op=${encodeURIComponent(r.id)}`}
+                  to={`/processes?op=${encodeURIComponent(opQuery)}`}
                   className="flex items-center gap-3 py-3 transition-colors hover:text-brand-700 dark:hover:text-brand-300"
                 >
                   <div

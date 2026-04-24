@@ -7,6 +7,7 @@ import {
   SettingsContext,
   type AppSettings,
 } from './settings'
+import { setBackendBaseUrl } from '../api/client'
 
 function loadInitial(): AppSettings {
   try {
@@ -19,11 +20,16 @@ function loadInitial(): AppSettings {
   }
 }
 
+// Apply any persisted backend URL *before* React renders so the first API
+// call from any component picks up the override.
+setBackendBaseUrl(loadInitial().backendUrl)
+
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AppSettings>(loadInitial)
 
   useEffect(() => {
     applyTheme(settings)
+    setBackendBaseUrl(settings.backendUrl)
     try {
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings))
     } catch {

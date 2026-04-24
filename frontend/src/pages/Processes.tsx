@@ -483,7 +483,10 @@ export default function Processes() {
               key={r.id}
               run={r}
               onRemove={remove}
-              highlight={!!highlightOp && r.operationId === highlightOp}
+              highlight={
+                !!highlightOp &&
+                (r.operationId === highlightOp || r.id === highlightOp)
+              }
             />
           ))}
           {historyRows.length > 0 && (
