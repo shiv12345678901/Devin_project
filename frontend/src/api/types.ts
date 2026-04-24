@@ -44,7 +44,7 @@ export interface GenerateSettings {
   close_powerpoint_before_start?: boolean
   auto_timing_screenshot_slides?: boolean
   fixed_seconds_per_screenshot_slide?: number
-  thumbnail_on_slide_2?: boolean
+  thumbnail_enabled?: boolean
   thumbnail_filename?: string
   thumbnail_duration_sec?: number
 }

@@ -203,12 +203,12 @@ export default function SettingsPanel({
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr,auto] sm:items-center">
                 <Toggle
-                  label="Thumbnail on Slide 2"
-                  description="If enabled, insert the chosen image on slide 2"
-                  checked={value.thumbnail_on_slide_2 ?? false}
-                  onChange={(v) => set('thumbnail_on_slide_2', v)}
+                  label="Include thumbnail slide"
+                  description="Insert a dedicated thumbnail slide in the generated deck"
+                  checked={value.thumbnail_enabled ?? false}
+                  onChange={(v) => set('thumbnail_enabled', v)}
                 />
-                {value.thumbnail_on_slide_2 && (
+                {value.thumbnail_enabled && (
                   <input
                     type="file"
                     accept="image/*"

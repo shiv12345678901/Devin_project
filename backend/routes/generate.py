@@ -219,7 +219,7 @@ def generate_sse():
         'close_powerpoint_before_start': data.get('close_powerpoint_before_start', True),
         'auto_timing_screenshot_slides': data.get('auto_timing_screenshot_slides', True),
         'fixed_seconds_per_screenshot_slide': data.get('fixed_seconds_per_screenshot_slide', 15),
-        'thumbnail_on_slide_2': data.get('thumbnail_on_slide_2', False),
+        'thumbnail_enabled': data.get('thumbnail_enabled', data.get('thumbnail_on_slide_2', False)),
         'thumbnail_filename': data.get('thumbnail_filename', ''),
         'thumbnail_duration_sec': data.get('thumbnail_duration_sec', 5),
     }

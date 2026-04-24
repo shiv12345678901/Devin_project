@@ -42,7 +42,7 @@ const DEFAULT_SETTINGS: GenerateSettings = {
   video_quality: 85,
   fps: 30,
   slide_duration_sec: 5,
-  thumbnail_on_slide_2: false,
+  thumbnail_enabled: false,
   thumbnail_duration_sec: 5,
 }
 
@@ -125,7 +125,7 @@ function validateStep(id: StepId, settings: GenerateSettings, text: string): Fie
       return errs
     }
     case 'thumbnail': {
-      if (settings.thumbnail_on_slide_2) {
+      if (settings.thumbnail_enabled) {
         if (!(settings.thumbnail_filename ?? '').trim()) {
           errs.thumbnail_filename = 'Upload an image first'
         }
@@ -814,7 +814,7 @@ function ThumbnailStep({
 }) {
   const [uploading, setUploading] = useState(false)
   const [uploadErr, setUploadErr] = useState<string | null>(null)
-  const enabled = settings.thumbnail_on_slide_2 ?? false
+  const enabled = settings.thumbnail_enabled ?? false
   const filename = (settings.thumbnail_filename ?? '').trim()
 
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -841,10 +841,10 @@ function ThumbnailStep({
         subtitle="Optional cover image for the deck. Only used when output is PowerPoint or MP4."
       />
       <Toggle
-        label="Thumbnail on slide 2"
-        description="Insert the uploaded image as a dedicated slide 2 in the generated deck."
+        label="Include thumbnail slide"
+        description="Insert a dedicated thumbnail slide in the generated deck."
         checked={enabled}
-        onChange={(v) => onChange('thumbnail_on_slide_2', v)}
+        onChange={(v) => onChange('thumbnail_enabled', v)}
       />
 
       {enabled && (
