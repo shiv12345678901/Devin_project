@@ -244,7 +244,13 @@ def generate_sse():
             
             ai_operation_id = f"{operation_id}_ai"
             metrics_tracker.start(ai_operation_id)
-            ai_content = get_ai_response(input_text, use_cache=use_cache, cancel_event=cancel_event, model_choice=model_choice)
+            ai_content = get_ai_response(
+                input_text,
+                use_cache=use_cache,
+                cancel_event=cancel_event,
+                model_choice=model_choice,
+                system_prompt=system_prompt or None,
+            )
             metrics_tracker.end(ai_operation_id, success=bool(ai_content))
 
             if cancel_event.is_set():
