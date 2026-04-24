@@ -85,10 +85,10 @@ function RunRow({ run, onRemove }: { run: Run; onRemove?: (id: string) => void }
     <div className="glass overflow-hidden !p-0">
       <button
         type="button"
-        className="flex w-full items-center gap-4 px-5 py-4 text-left transition hover:bg-white/30 dark:hover:bg-white/5"
+        className="flex w-full items-center gap-4 px-5 py-4 text-left transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.03]"
         onClick={() => setOpen((o) => !o)}
       >
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/60 bg-white/70 text-brand-600 backdrop-blur-md dark:border-white/10 dark:bg-white/10 dark:text-brand-300">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300">
           <Icon size={18} />
         </div>
 
@@ -118,10 +118,10 @@ function RunRow({ run, onRemove }: { run: Run; onRemove?: (id: string) => void }
       </button>
 
       {open && (
-        <div className="space-y-4 border-t border-white/40 px-5 py-4 dark:border-white/10">
+        <div className="space-y-4 border-t border-slate-200 px-5 py-4 dark:border-white/10">
           <div className="grid gap-4 md:grid-cols-3">
             <Section title="Input">
-              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-white/40 bg-white/50 p-3 font-mono text-[11px] text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-200">
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-200">
                 {run.inputPreview || '(empty)'}
               </pre>
               {run.inputFiles && run.inputFiles.length > 0 && (
@@ -193,7 +193,7 @@ function RunRow({ run, onRemove }: { run: Run; onRemove?: (id: string) => void }
                       href={url}
                       target="_blank"
                       rel="noreferrer"
-                      className="block aspect-video overflow-hidden rounded-lg border border-white/40 bg-white/30 dark:border-white/10 dark:bg-white/5"
+                      className="block aspect-video overflow-hidden rounded-md border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/[0.03]"
                     >
                       <img src={url} alt={f} loading="lazy" className="h-full w-full object-cover" />
                     </a>
@@ -221,7 +221,7 @@ function HistoryRow({ entry }: { entry: HistoryEntry }) {
   const Icon = meta.icon
   return (
     <div className="glass flex items-center gap-4 !py-4">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/60 bg-white/70 text-slate-500 backdrop-blur-md dark:border-white/10 dark:bg-white/10 dark:text-slate-300">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500 dark:bg-white/[0.05] dark:text-slate-300">
         <Icon size={18} />
       </div>
       <div className="min-w-0 flex-1">
@@ -394,8 +394,8 @@ export default function Processes() {
               onClick={() => setFilter(f.key)}
               className={
                 filter === f.key
-                  ? 'rounded-full border border-brand-500/40 bg-brand-500/15 px-3 py-1 text-xs font-medium text-brand-700 dark:text-brand-200'
-                  : 'rounded-full border border-white/50 bg-white/40 px-3 py-1 text-xs font-medium text-slate-600 backdrop-blur-md hover:bg-white/60 dark:border-white/10 dark:bg-white/5 dark:text-slate-300'
+                  ? 'rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-200'
+                  : 'rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300'
               }
             >
               {f.label}

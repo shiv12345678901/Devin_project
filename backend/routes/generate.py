@@ -321,7 +321,7 @@ def generate_sse():
                 use_cache=use_cache
             )
 
-            yield f"data: {json.dumps({'type': 'complete', 'data': {'success': True, 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': screenshot_names, 'screenshot_count': len(screenshot_files), 'screenshot_folder': screenshot_folder}})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'success': True, 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': screenshot_names, 'screenshot_count': len(screenshot_files), 'screenshot_folder': screenshot_folder, 'operation_id': operation_id})}\n\n"
 
         except CancelledError:
             yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"

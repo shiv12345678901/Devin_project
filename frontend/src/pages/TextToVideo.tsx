@@ -93,7 +93,7 @@ export default function TextToVideo() {
           <div className="flex items-center gap-2 text-sm">
             <Code2 size={16} />
             <span className="text-slate-700 dark:text-slate-300">Generated HTML:</span>
-            <code className="rounded-md border border-white/60 bg-white/60 px-2 py-0.5 font-mono text-xs backdrop-blur-md dark:border-white/10 dark:bg-white/5">
+            <code className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono text-xs dark:border-white/10 dark:bg-white/[0.04]">
               {state.result.html_filename}
             </code>
           </div>

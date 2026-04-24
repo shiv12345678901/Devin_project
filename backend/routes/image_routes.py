@@ -240,13 +240,7 @@ def image_to_screenshots_sse():
 
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshots_complete', 'message': 'Screenshots captured successfully', 'progress': 90})}\n\n"
 
-                result_data = {
-                    'raw_text': raw_text,
-                    'html_filename': html_filename,
-                    'screenshot_files': [f"batch {batch_id}/{name}" for name in screenshot_names],
-                    'screenshot_folder': f"batch {batch_id}"
-                }
-                yield f"data: {json.dumps({'type': 'complete', 'stage': 'complete', 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'progress': 100, 'result': result_data})}\n\n"
+                yield f"data: {json.dumps({'type': 'complete', 'stage': 'complete', 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'progress': 100, 'html_filename': html_filename, 'screenshot_files': [f'batch {batch_id}/{name}' for name in screenshot_names], 'screenshot_count': len(screenshot_files), 'screenshot_folder': f'batch {batch_id}', 'operation_id': operation_id, 'raw_text': raw_text})}\n\n"
 
             except Exception as e:
                 import traceback

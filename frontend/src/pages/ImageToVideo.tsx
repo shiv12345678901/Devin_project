@@ -52,7 +52,7 @@ export default function ImageToVideo() {
       <form onSubmit={onSubmit} className="space-y-4">
         <div className="card">
           <label className="label">Source file</label>
-          <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-white/60 bg-white/40 p-10 text-center backdrop-blur-md transition hover:border-brand-400/60 hover:bg-brand-50/60 dark:border-white/10 dark:bg-white/5 dark:hover:border-brand-500/60 dark:hover:bg-brand-900/20">
+          <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 p-10 text-center transition-colors hover:border-brand-400 hover:bg-brand-50 dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-brand-500/60 dark:hover:bg-brand-900/20">
             <Upload size={28} className="text-slate-400" />
             <div className="mt-2 text-sm text-slate-600 dark:text-slate-300">
               {file ? (

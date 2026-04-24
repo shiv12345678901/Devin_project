@@ -16,22 +16,16 @@
     text-rendering: optimizeLegibility;
   }
 
+  /* Minimal: a single near-white canvas with the faintest warm tint.
+     No radial or linear gradients — the UI does the work, not the bg. */
   body {
     @apply font-sans text-slate-800 antialiased;
-    background: radial-gradient(circle at 0% 0%, rgba(124, 58, 237, 0.18), transparent 40%),
-      radial-gradient(circle at 100% 0%, rgba(59, 130, 246, 0.14), transparent 42%),
-      radial-gradient(circle at 50% 100%, rgba(244, 114, 182, 0.14), transparent 45%),
-      linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
-    background-attachment: fixed;
+    background-color: #fafbf8;
   }
 
   .dark body {
     @apply text-slate-100;
-    background: radial-gradient(circle at 0% 0%, rgba(124, 58, 237, 0.28), transparent 40%),
-      radial-gradient(circle at 100% 0%, rgba(59, 130, 246, 0.22), transparent 42%),
-      radial-gradient(circle at 50% 100%, rgba(236, 72, 153, 0.18), transparent 45%),
-      linear-gradient(180deg, #020617 0%, #0b1229 100%);
-    background-attachment: fixed;
+    background-color: #0b1210;
   }
 
   /* Display / title typography defaults to Gotham-family. */
@@ -41,16 +35,19 @@
 }
 
 @layer components {
-  /* ─── Glass surfaces ─────────────────────────────────────────────────── */
+  /* ─── Surfaces ──────────────────────────────────────────────────────────
+     Very minimal: white cards, single hairline border, barely-there shadow.
+     Kept the .glass name so every page that already uses it just inherits
+     the new, quieter look. */
 
   .glass {
-    @apply rounded-2xl border border-white/40 bg-white/55 shadow-glass backdrop-blur-xl
-           dark:border-white/10 dark:bg-white/5;
+    @apply rounded-xl border border-slate-200/80 bg-white shadow-glass
+           dark:border-white/10 dark:bg-white/[0.03];
   }
 
   .glass-strong {
-    @apply rounded-2xl border border-white/60 bg-white/75 shadow-glass backdrop-blur-2xl
-           dark:border-white/10 dark:bg-white/[0.08];
+    @apply rounded-xl border border-slate-200 bg-white shadow-glass
+           dark:border-white/10 dark:bg-white/[0.04];
   }
 
   .card {
@@ -61,36 +58,37 @@
     @apply glass p-4;
   }
 
-  /* ─── Buttons ────────────────────────────────────────────────────────── */
+  /* ─── Buttons ─────────────────────────────────────────────────────────── */
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium
-           transition-all duration-150 ease-out
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium
+           transition-colors duration-150 ease-out
            disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .btn-primary {
-    @apply btn border border-brand-500/30 bg-brand-600/95 text-white
-           shadow-[0_8px_24px_-8px_rgba(124,58,237,0.6)]
-           hover:bg-brand-600 hover:-translate-y-px
-           focus:outline-none focus:ring-2 focus:ring-brand-400/60;
+    @apply btn border border-brand-600 bg-brand-500 text-white
+           hover:bg-brand-600
+           focus:outline-none focus:ring-2 focus:ring-brand-300 focus:ring-offset-1 focus:ring-offset-white
+           dark:focus:ring-offset-slate-900;
   }
 
   .btn-secondary {
-    @apply btn border border-white/50 bg-white/60 text-slate-800 backdrop-blur-md
-           hover:bg-white/80
-           dark:border-white/10 dark:bg-white/10 dark:text-slate-100 dark:hover:bg-white/15;
+    @apply btn border border-slate-200 bg-white text-slate-800
+           hover:bg-slate-50
+           dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-100 dark:hover:bg-white/[0.08];
   }
 
   .btn-ghost {
-    @apply btn border border-transparent bg-transparent text-slate-600 hover:bg-white/40
-           dark:text-slate-300 dark:hover:bg-white/10;
+    @apply btn border border-transparent bg-transparent text-slate-600
+           hover:bg-slate-100
+           dark:text-slate-300 dark:hover:bg-white/[0.05];
   }
 
   .btn-danger {
-    @apply btn border border-red-500/30 bg-red-500/90 text-white
-           shadow-[0_8px_24px_-8px_rgba(239,68,68,0.5)]
-           hover:bg-red-500;
+    @apply btn border border-red-500 bg-red-500 text-white
+           hover:bg-red-600
+           focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-1 focus:ring-offset-white;
   }
 
   /* ─── Form controls ─────────────────────────────────────────────────── */
@@ -98,29 +96,28 @@
   .input,
   .textarea,
   .select {
-    @apply w-full rounded-xl border border-white/60 bg-white/70 px-3.5 py-2.5 text-sm
-           text-slate-900 shadow-sm backdrop-blur-md
+    @apply w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm
+           text-slate-900
            placeholder:text-slate-400
-           focus:border-brand-500/60 focus:bg-white focus:outline-none
-           focus:ring-2 focus:ring-brand-400/40
-           dark:border-white/10 dark:bg-white/5 dark:text-slate-100
-           dark:placeholder:text-slate-500 dark:focus:bg-white/10;
+           focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200
+           dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-100
+           dark:placeholder:text-slate-500 dark:focus:border-brand-400;
   }
 
   .label {
-    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-600 dark:text-slate-400;
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400;
   }
 
   /* ─── Badges / pills ─────────────────────────────────────────────────── */
 
   .badge {
-    @apply inline-flex items-center gap-1 rounded-full border border-white/50 bg-white/60
-           px-2.5 py-0.5 text-xs font-medium text-slate-700 backdrop-blur-md
-           dark:border-white/10 dark:bg-white/10 dark:text-slate-200;
+    @apply inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50
+           px-2.5 py-0.5 text-xs font-medium text-slate-600
+           dark:border-white/10 dark:bg-white/[0.05] dark:text-slate-200;
   }
 
-  .badge-success { @apply badge border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300; }
-  .badge-running { @apply badge border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300; }
-  .badge-error   { @apply badge border-red-500/30 bg-red-500/15 text-red-700 dark:text-red-300; }
+  .badge-success { @apply badge border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-200; }
+  .badge-running { @apply badge border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200; }
+  .badge-error   { @apply badge border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200; }
   .badge-neutral { @apply badge; }
 }

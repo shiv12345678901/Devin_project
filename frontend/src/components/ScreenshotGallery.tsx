@@ -57,9 +57,9 @@ export default function ScreenshotGallery({ screenshotFolder, files, title = 'Sc
           return (
             <div
               key={filename}
-              className="glass group overflow-hidden !p-0 !rounded-xl"
+              className="glass group overflow-hidden !p-0"
             >
-              <div className="relative aspect-video overflow-hidden bg-white/30 dark:bg-white/5">
+              <div className="relative aspect-video overflow-hidden bg-slate-50 dark:bg-white/[0.04]">
                 <img
                   src={url}
                   alt={filename}
@@ -68,7 +68,7 @@ export default function ScreenshotGallery({ screenshotFolder, files, title = 'Sc
                   onClick={() => setPreview(url)}
                 />
               </div>
-              <div className="flex items-center justify-between gap-2 border-t border-white/40 px-3 py-2 dark:border-white/10">
+              <div className="flex items-center justify-between gap-2 border-t border-slate-200 px-3 py-2 dark:border-white/10">
                 <span
                   className="truncate text-xs text-slate-600 dark:text-slate-300"
                   title={filename}
