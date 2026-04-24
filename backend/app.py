@@ -11,6 +11,7 @@ this app also serves that SPA at `/`. Otherwise `/` returns a short message
 telling the user to run the dev server or build the frontend.
 """
 import io
+import logging
 import os
 import sys
 
@@ -22,6 +23,31 @@ if sys.version_info >= (3, 7):
 # Add src to path so blueprints can import `core.*`, `utils.*` unprefixed.
 BACKEND_DIR = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(BACKEND_DIR, 'src'))
+
+# Optional .env loader. We only fail soft — having python-dotenv missing
+# means the user has to set env vars another way (export, systemd unit, etc.).
+try:
+    from dotenv import load_dotenv  # type: ignore
+
+    # Project root .env takes precedence over backend-local .env so a single
+    # repo-level file can drive both frontend (Vite) and backend.
+    for _candidate in (
+        os.path.join(BACKEND_DIR, '..', '.env'),
+        os.path.join(BACKEND_DIR, '.env'),
+    ):
+        if os.path.isfile(_candidate):
+            load_dotenv(_candidate, override=False)
+except ImportError:  # pragma: no cover
+    pass
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Parse a truthy env var (1/true/yes/on are truthy; anything else falsy)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
+
 
 from flask import Flask, jsonify, request, send_from_directory  # noqa: E402
 
@@ -35,25 +61,70 @@ def has_frontend_build() -> bool:
     running (Flask's reloader only watches .py files)."""
     return os.path.isfile(os.path.join(FRONTEND_DIST, 'index.html'))
 
-# Optional: enable CORS so the React dev server on :5173 can call the API
-# without relying on the Vite proxy. `flask-cors` is optional — if not
-# installed, we just skip it.
 app = Flask(__name__)
+
+# Cap incoming request bodies to a reasonable size so a malicious or buggy
+# client can't OOM the process by streaming a multi-GB upload. 64 MB is
+# generous for thumbnails (max 4096×4096 PNG ~ a few MB) but tight enough
+# to bounce abuse. Override via env var for unusual workloads.
+app.config['MAX_CONTENT_LENGTH'] = int(
+    os.environ.get('MAX_CONTENT_LENGTH_BYTES', 64 * 1024 * 1024)
+)
+
+# CORS — pinned by default to local dev origins. To allow access from a
+# remote machine, set ``CORS_ORIGINS`` to a comma-separated allowlist (or
+# the literal string ``*`` to disable the allowlist for prototyping).
+# Wide-open ``*`` is also allowed but logged as a warning.
+_DEFAULT_CORS = 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:5000,http://127.0.0.1:5000'
+_cors_raw = os.environ.get('CORS_ORIGINS', _DEFAULT_CORS).strip()
+if _cors_raw == '*':
+    CORS_ORIGINS: list = ['*']
+else:
+    CORS_ORIGINS = [o.strip() for o in _cors_raw.split(',') if o.strip()]
 try:
     from flask_cors import CORS  # type: ignore
 
     CORS(
         app,
-        resources={r"/*": {"origins": "*"}},
+        resources={r"/*": {"origins": CORS_ORIGINS}},
         supports_credentials=False,
     )
-    print("🛡️  CORS enabled via flask-cors", flush=True)
+    if CORS_ORIGINS == ['*']:
+        print(
+            "⚠️  CORS_ORIGINS=* — wide open, suitable for prototyping only.",
+            flush=True,
+        )
+    else:
+        print(f"🛡️  CORS enabled for: {', '.join(CORS_ORIGINS)}", flush=True)
 except ImportError:
     print(
         "ℹ️  flask-cors not installed — install it if you run the React dev "
         "server on a different origin (pip install flask-cors).",
         flush=True,
     )
+
+# Optional rate-limiting. Off by default (this is a single-user local app)
+# but available for anyone who exposes the backend further. Enable with
+# RATE_LIMIT=on or by setting RATE_LIMIT_DEFAULT.
+_rate_default = os.environ.get('RATE_LIMIT_DEFAULT', '60/minute;10/second')
+if _env_bool('RATE_LIMIT', False):
+    try:
+        from flask_limiter import Limiter  # type: ignore
+        from flask_limiter.util import get_remote_address  # type: ignore
+
+        Limiter(
+            get_remote_address,
+            app=app,
+            default_limits=[lim.strip() for lim in _rate_default.split(';') if lim.strip()],
+            storage_uri=os.environ.get('RATE_LIMIT_STORAGE', 'memory://'),
+        )
+        print(f"🚦 Rate limiting enabled: {_rate_default}", flush=True)
+    except ImportError:
+        print(
+            "⚠️  RATE_LIMIT=on but flask-limiter not installed. "
+            "`pip install flask-limiter` to enable.",
+            flush=True,
+        )
 
 
 # Log every request to terminal
@@ -75,7 +146,22 @@ app.register_blueprint(image_bp)
 app.register_blueprint(resources_bp)
 
 
-# ─── Preflight ────────────────────────────────────────────────────────────
+# ─── Health & Preflight ───────────────────────────────────────────────────
+
+@app.route('/healthz')
+def healthz():
+    """Liveness probe — cheap, always 200 if Flask can route a request."""
+    return jsonify({'ok': True, 'service': 'textbro-backend'})
+
+
+# Memoize the (relatively expensive) preflight result for a short window so a
+# wizard-initiated triple-call (component mount + retry + parent re-render)
+# doesn't spawn three POWERPNT.EXE processes on Windows.
+import threading as _preflight_threading
+_PREFLIGHT_TTL = float(os.environ.get('PREFLIGHT_CACHE_SECS', '15'))
+_preflight_cache: dict = {'value': None, 'fetched_at': 0.0}
+_preflight_lock = _preflight_threading.Lock()
+
 
 @app.route('/preflight')
 def preflight():
@@ -86,8 +172,18 @@ def preflight():
       - backend:     always ok when this handler responds.
       - ai_config:   ok when config/config.py exists and defines a non-empty API_KEY.
       - powerpoint:  ok only on Windows with pywin32 and PowerPoint.Application COM.
+
+    Bypass the cache with ``?fresh=1``.
     """
+    import time as _time
     import platform as _platform
+
+    if request.args.get('fresh') != '1':
+        with _preflight_lock:
+            cached = _preflight_cache['value']
+            age = _time.time() - _preflight_cache['fetched_at']
+        if cached is not None and age < _PREFLIGHT_TTL:
+            return jsonify(cached)
 
     checks: dict = {
         'platform': {
@@ -145,10 +241,42 @@ def preflight():
             f'PowerPoint COM is Windows-only; this host is {_platform.system()}'
         )
 
-    return jsonify({
+    payload = {
         'ok': all(c['ok'] for k, c in checks.items() if k != 'powerpoint'),
         'checks': checks,
-    })
+    }
+    with _preflight_lock:
+        _preflight_cache['value'] = payload
+        _preflight_cache['fetched_at'] = _time.time()
+    return jsonify(payload)
+
+
+# ─── Error handlers ──────────────────────────────────────────────────────
+
+@app.errorhandler(413)
+def _too_large(_err):
+    """Return JSON when a request exceeds MAX_CONTENT_LENGTH (defaults to 64 MB)."""
+    limit = app.config.get('MAX_CONTENT_LENGTH', 0)
+    return (
+        jsonify({
+            'success': False,
+            'error': 'Request body too large',
+            'limit_bytes': limit,
+            'limit_mb': round(limit / (1024 * 1024), 1) if limit else None,
+        }),
+        413,
+    )
+
+
+@app.errorhandler(500)
+def _internal(err):
+    """Generic JSON 500 handler so frontend never has to parse stack-trace HTML."""
+    logging.exception('Unhandled 500 in Flask handler: %s', err)
+    return jsonify({
+        'success': False,
+        'error': 'Internal server error',
+        'detail': str(err),
+    }), 500
 
 
 # ─── Frontend (React SPA) ─────────────────────────────────────────────────
@@ -204,14 +332,17 @@ _API_EXACT = {
     '/generate',
     '/generate-sse',
     '/generate-html',
+    '/generate-html-sse',
     '/beautify',
     '/minify',
     '/extract-from-image',
+    '/extract-from-image-sse',
     '/image-to-screenshots-sse',
     '/regenerate',
     '/download-zip',
     '/list',
     '/history',
+    '/healthz',
     '/preflight',
     '/upload-thumbnail',
 }
@@ -249,10 +380,28 @@ if __name__ == '__main__':
     print("=" * 60)
     if has_frontend_build():
         print(f"\n🎨 Serving React build from: {FRONTEND_DIST}")
-        print("\n📱 Open your browser: http://localhost:5000")
     else:
         print("\n⚠️  No React build found. To use the UI:")
         print("     cd frontend && npm install && npm run dev")
-        print("   or build it: npm run build  (then reload http://localhost:5000)")
-    print("\n💡 Press Ctrl+C to stop\n")
-    app.run(debug=True, port=5000, host='0.0.0.0')
+        print("   or build it: npm run build  (then reload the backend URL)")
+
+    # Single-tenant local app by default. Bind to loopback so it isn't
+    # accidentally exposed on the LAN; override with HOST=0.0.0.0 only if
+    # you've added auth / a reverse proxy in front. Same idea for DEBUG —
+    # debug=True enables the Werkzeug debugger, which is RCE-as-a-feature.
+    host = os.environ.get('HOST', '127.0.0.1')
+    port = int(os.environ.get('PORT', '5000'))
+    debug = _env_bool('DEBUG', False)
+    if host == '0.0.0.0' and not _env_bool('ALLOW_PUBLIC_BIND', False):
+        print(
+            "⚠️  HOST=0.0.0.0 binds the API on every interface. "
+            "Set ALLOW_PUBLIC_BIND=1 to acknowledge this and re-launch, "
+            "or run behind a reverse proxy (nginx, Caddy) with auth.",
+            flush=True,
+        )
+        sys.exit(2)
+    print(f"\n🌐 Listening on http://{host}:{port}  (debug={debug})")
+    print("💡 Press Ctrl+C to stop\n")
+    # use_reloader is forced off when debug=False to avoid double-launch
+    # of Playwright in production-style runs.
+    app.run(debug=debug, port=port, host=host, use_reloader=debug)

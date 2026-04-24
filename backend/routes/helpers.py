@@ -56,27 +56,55 @@ for _folder in [OUTPUT_FOLDER, HTML_FOLDER]:
 
 # ─── Batch ID ─────────────────────────────────────────────────────────────
 
+# Serializes both the disk scan AND the os.makedirs that reserves the next
+# numeric folder. Without this, two concurrent runs would scan, both compute
+# N+1, and both try to write to the same "batch N+1" directory.
+_BATCH_ID_LOCK = threading.Lock()
+
+
 def get_next_batch_id():
-    """Scan OUTPUT_FOLDER to find the highest batch N and return N+1 as string."""
-    try:
-        if not os.path.exists(OUTPUT_FOLDER):
-            return "1"
-        max_id = 0
-        for item in os.listdir(OUTPUT_FOLDER):
-            if item.startswith("batch ") and os.path.isdir(os.path.join(OUTPUT_FOLDER, item)):
+    """Pick the next free batch ID and atomically reserve its folder.
+
+    Walks ``OUTPUT_FOLDER`` once for both ``batch N/`` directories and any
+    top-level ``N(M).png`` files (so legacy non-batched runs still bump the
+    counter), then ``mkdir`` s ``batch <N+1>/`` while the lock is held. The
+    mkdir doubles as the reservation: if a second concurrent caller picks
+    the same N (shouldn't happen under the lock, but belt-and-braces) it
+    would race on ``EEXIST`` and we'd retry.
+    """
+    with _BATCH_ID_LOCK:
+        try:
+            if not os.path.exists(OUTPUT_FOLDER):
+                os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+            for _attempt in range(10):
+                max_id = 0
+                for item in os.listdir(OUTPUT_FOLDER):
+                    if item.startswith("batch ") and os.path.isdir(
+                        os.path.join(OUTPUT_FOLDER, item)
+                    ):
+                        try:
+                            num = int(item.split(" ")[1])
+                            max_id = max(max_id, num)
+                        except ValueError:
+                            pass
+                    # Also account for legacy top-level files like 5(1).png
+                    match = re.match(r'^(\d+)\(\d+\)\.png$', item)
+                    if match:
+                        max_id = max(max_id, int(match.group(1)))
+                next_id = max_id + 1
+                target = os.path.join(OUTPUT_FOLDER, f"batch {next_id}")
                 try:
-                    num = int(item.split(" ")[1])
-                    max_id = max(max_id, num)
-                except ValueError:
-                    pass
-            # Also check top-level files like 5(1).png
-            match = re.match(r'^(\d+)\(\d+\)\.png$', item)
-            if match:
-                max_id = max(max_id, int(match.group(1)))
-        return str(max_id + 1)
-    except Exception as e:
-        print(f"Error finding next batch ID: {e}")
-        return str(int(time.time()))
+                    os.makedirs(target, exist_ok=False)
+                    return str(next_id)
+                except FileExistsError:
+                    # Lost a race (or stale dir from a previous run with no
+                    # children). Try the next ID.
+                    continue
+            # Fall back to a timestamp if we somehow couldn't reserve a slot.
+            return str(int(time.time()))
+        except Exception as e:
+            print(f"Error finding next batch ID: {e}")
+            return str(int(time.time()))
 
 
 # ─── Sanitization ─────────────────────────────────────────────────────────
