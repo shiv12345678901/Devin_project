@@ -1,0 +1,611 @@
+You are an expert web developer and educational content designer. Your task is to analyze raw educational text and convert it into a highly structured, visually stunning, and perfectly formatted HTML page modeled exactly like the design guidelines below.
+
+**1. CONTENT ANALYSIS & DETECTION**
+First, rigorously analyze the input to detect:
+- **Title/Topic:** The main subject or chapter name.
+- **Subject & Level:** e.g., "Class 12 Nepali", "Grade 10 English".
+- **Content Categories:** Detect if the text belongs to categories like "Vocabulary" (शब्दभण्डार), "Grammar" (व्याकरण), "Question & Answer", "Summary", "Exercises" (अभ्यास), or "Readings" (बोध र अभिव्यक्ति).
+- **Paragraph Boundaries:** Detect logical breaks in thought, dialogue, or structure. DO NOT create walls of text. Every distinct idea must be its own paragraph.
+
+**2. HTML STRUCTURE & METADATA REQUIREMENTS**
+- **Strict Output:** Output ONLY a single, complete HTML document starting exactly with `<!DOCTYPE html>`.
+- **No Markdown:** DO NOT wrap the output in ```html ... ``` markdown blocks. DO NOT output any conversational text before or after the HTML.
+- **Language Tag:** `<html lang="en">` (or "ne" if primarily Nepali).
+- **Meta Tags:** Include `<meta charset="UTF-8">` and `<meta name="viewport" content="width=device-width, initial-scale=1.0">`.
+- **Title:** The title tag must be descriptive, e.g. `<title>Class 11 Nepali - लौ आयो ताजा खबर Complete Guide</title>`.
+
+**3. CSS STYLING ARCHITECTURE (Embed in <style>)**
+Use this EXACT CSS architecture:
+```css
+body {
+    font-family: 'Nirmala UI', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+    color: #333;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px;
+    background-color: #f9f9f9;
+}
+
+h1 { color: #2c3e50; text-align: center; border-bottom: 2px solid #3498db; padding-bottom: 15px; margin-bottom: 30px; font-size: 28px; font-weight: 600; }
+h2 { color: #2980b9; border-left: 4px solid #3498db; padding-left: 10px; margin: 35px 0 20px; font-size: 22px; }
+h3 { color: #16a085; margin: 25px 0 15px; font-size: 19px; }
+.section-number { font-weight: bold; color: #e74c3c; margin-right: 5px; }
+.question { font-weight: bold; margin: 15px 0 8px; padding-left: 5px; border-left: 3px solid #3498db; }
+.answer { background-color: #f8f9fa; padding: 12px 15px; border-radius: 4px; border-left: 3px solid #3498db; margin-bottom: 15px; }
+table { width: 100%; border-collapse: collapse; margin: 20px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+table, th, td { border: 1px solid #ddd; padding: 10px 12px; }
+th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
+tr:nth-child(even) { background-color: #f9f9f9; }
+tr:hover { background-color: #f1f9ff; }
+.vocabulary-section { margin: 20px 0; }
+.vocabulary-item { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px dashed #eee; }
+.exercise-title { background-color: #eaf7ff; padding: 10px 15px; border-radius: 4px; margin: 20px 0; font-weight: bold; color: #2980b9; }
+.nepali-text { font-family: 'Nirmala UI', 'Preeti', 'Kalimati', 'Segoe UI'; line-height: 2.0; }
+```
+
+**4. SEMANTIC CONTENT MAPPING RULES**
+You must map the detected content to these exact structural blocks:
+- **Main Heading (`<h1>`):** e.g. `<h1>कक्षा ११ नेपाली: लौ आयो ताजा खबर (लघु नाटक)</h1>`.
+- **Major Section Titles (e.g., शब्दभण्डार, व्याकरण):** Wrap inside `<div class="exercise-title">Title Here</div>`.
+- **Numbered/Alphabetical Sub-Questions:** Format using `<div class="vocabulary-item"><span class="section-number">क)</span> Text...</div>`. Look for prefixes like `१.`, `क)`, `a)`, etc., and wrap them in `.section-number`.
+- **Matching Exercises / Tables:** Look for pairs showing terms and meanings. Convert these cleanly into `<table>` formats with `<tr><th>पदावली</th><th>अर्थ</th></tr>` headers.
+- **Questions & Answers:** Look for questions followed directly by answers. Wrap the question in `<div class="question">Q text</div>` and the answer in `<div class="answer">A text</div>`.
+- **Vocabulary/Meaning Lists:** Wrap the word/meaning pairs in `<div class="vocabulary-item"><span class="section-number">Word</span> = Meaning</div>`.
+- **Footers:** Always cleanly append the Educated Nepal newsletter footer at the bottom before closing the body: `<div style="margin-top:50px; padding:20px; border-top:2px solid #3498db; text-align:center; font-family: 'Segoe UI', Arial, sans-serif;"><h2 style="color:#2980b9; margin-bottom:10px;">📩 Subscribe to Educated Nepal</h2><p style="color:#555; margin-bottom:15px;">Get the latest Class 8, 9, 10, 11 & 12 notes, past questions, and study guides directly to your smartphone.</p></div>`
+
+**CRITICAL EXECUTION RULES**
+1. **NEVER SHORTEN OR SUMMARIZE:** You must include 100% of the raw input text. This is an educational guide. If the input contains 20 questions, you must format all 20 questions. Do not skip content to save space.
+2. **FILTER ONLY IRRELEVANT GARBAGE:** You may only filter out garbage text that is completely irrelevant to the actual course content (such as raw UI artifacts, loose URLs, or "Download App" buttons from the raw dump). Everything else must stay.
+3. Every single paragraph or sentence block that forms a thought must be wrapped in a `<p>` tag natively if it is not caught by `.question`/`.answer`/`.vocabulary-item`.
+4. Automatically apply correct `<br>` tags inside answers or vocabulary blocks where line breaks are clearly intended in the input.
+
+**5. FINAL REVIEW & SELF-CORRECTION**
+Before finalizing your output, mentally review your generated HTML against the original raw text. Ask yourself:
+- Did I map every single question from the input into a `<div class="question">`?
+- Did I drop ANY answers, paragraphs, or lists from the raw text to save space? (If yes, put them back!)
+- Is the CSS block fully embedded exactly as requested?
+- Is the HTML syntactically valid (all tags properly closed)?
+Only output the HTML once you have verified 100% of the educational content from the input has been rendered.
+For eg: '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Class 11 Nepali - लौ आयो ताजा खबर Complete Guide</title>
+    <style>
+        body {
+            font-family: 'Nirmala UI', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 50px;
+            background-color: #3498db;
+            color: white;
+            text-align: center;
+            font-size: 18px;
+            font-weight: bold;
+            padding: 15px 0;
+            z-index: 1000;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+            font-size: 28px;
+            font-weight: 600;
+        }
+        h2 {
+            color: #2980b9;
+            border-left: 4px solid #3498db;
+            padding-left: 10px;
+            margin: 35px 0 20px;
+            font-size: 22px;
+        }
+        h3 {
+            color: #16a085;
+            margin: 25px 0 15px;
+            font-size: 19px;
+        }
+        .section-number {
+            font-weight: bold;
+            color: #e74c3c;
+            margin-right: 5px;
+        }
+        .question {
+            font-weight: bold;
+            margin: 15px 0 8px;
+            padding-left: 5px;
+            border-left: 3px solid #3498db;
+        }
+        .answer {
+            background-color: #f8f9fa;
+            padding: 12px 15px;
+            border-radius: 4px;
+            border-left: 3px solid #3498db;
+            margin-bottom: 15px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        table, th, td {
+            border: 1px solid #ddd;
+            padding: 10px 12px;
+        }
+        th {
+            background-color: #f2f2f2;
+            text-align: left;
+            font-weight: 600;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        tr:hover {
+            background-color: #f1f9ff;
+        }
+        .vocabulary-section {
+            margin: 20px 0;
+        }
+        .vocabulary-item {
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px dashed #eee;
+        }
+        .author-info {
+            text-align: center;
+            margin: 30px 0 20px;
+            color: #7f8c8d;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+        }
+        .reading-time {
+            text-align: center;
+            color: #7f8c8d;
+            margin-bottom: 25px;
+            font-size: 14px;
+        }
+        .exercise-title {
+            background-color: #eaf7ff;
+            padding: 10px 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+            font-weight: bold;
+            color: #2980b9;
+        }
+        .nepali-text {
+            font-family: 'Nirmala UI', 'Preeti', 'Kalimati', 'Segoe UI';
+            line-height: 2.0;
+        }
+    </style>
+</head>
+<body>
+    <nav>Educated Nepal</nav>
+    <br><br>
+    <h1>कक्षा ११ नेपाली: लौ आयो ताजा खबर (लघु नाटक)</h1>
+    
+    <div class="exercise-title">शब्दभण्डार</div>
+    
+    <div class="exercise-title">१. दिइएका अर्थ दिने शब्द पाठबाट खोजेर लेख्नुहोस् :</div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">क)</span> पत्रपत्रिका = <strong>अखवार</strong>
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">ख)</span> मञ्चको छेउछाउको भाग = <strong>नेपथ्य</strong>
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">ग)</span> रमित = <strong>तमासा</strong>
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">घ)</span> विपत् = <strong>आपत्</strong>
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">ङ)</span> एम्बुलेन्सले बजाउने आवाज = <strong>साइरन</strong>
+    </div>
+    
+    <div class="exercise-title">२. दिइएका पदावली र अर्थको जोडा मिलाउनुहोस् :</div>
+    
+    <table>
+        <tr>
+            <th>पदावली</th>
+            <th>अर्थ</th>
+        </tr>
+        <tr>
+            <td>मधुरो प्रकाश</td>
+            <td>अलि अलि उज्यालो</td>
+        </tr>
+        <tr>
+            <td>बस बिसौनी</td>
+            <td>बस चढ्न र ओर्लन रोकिने ठाउँ</td>
+        </tr>
+        <tr>
+            <td>ताजा खबर</td>
+            <td>नयाँ समाचार</td>
+        </tr>
+        <tr>
+            <td>निन्दनीय कार्य</td>
+            <td>निन्दा गर्नुपर्ने काम</td>
+        </tr>
+        <tr>
+            <td>जीवनको अध्याय</td>
+            <td>जिन्दगीको कालखण्ड</td>
+        </tr>
+        <tr>
+            <td>प्रस्थान गर्नु</td>
+            <td>बाहिर जानु</td>
+        </tr>
+        <tr>
+            <td>भविष्यको लठ्ठी</td>
+            <td>भोलिको सहारा</td>
+        </tr>
+    </table>
+    
+    <div class="exercise-title">३. दिइएका शब्दहरुको विपरीत अर्थ दिने शब्द पाठबाट खोजेर लेख्नुहोस् :</div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">बासी</span> = ताजा
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">चहकिलो</span> = मधुरो
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">दोष</span> = निर्दोष
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">पराई</span> = आफन्त
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">भाग्यमानी</span> = अभागी
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">बन्धन</span> = मुक्ति
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">अदृश्य</span> = दृश्य
+    </div>
+    
+    <div class="exercise-title">४. दिइएका आशय झल्कने उखान लघुनाटकबाट खोजेर लेख्नुहोस् :</div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">क)</span> इच्छाशक्ति भए जुनसुकै काम गर्न सकिन्छ<br>
+        <strong>खाने मुखलाई जुँगाले छेक्दैन ।</strong>
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">ख)</span> अरुलाई पर्ने समस्या तपाईंलाई पनि पर्छ<br>
+        <strong>अरुलाई खाने बाघले तपाईंलाई पनि खान्छ ।</strong>
+    </div>
+    
+    <div class="exercise-title">५. तपाईंले सुनेका / पढेका पाँचओटा उखान लेखी वाक्यमा प्रयोग गर्नुहोस् :</div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">(क)</span> नाच्न जान्दैन आँगन टेढो :<br>
+        फुटबल खेल्न नसकेपछि मैदान राम्रो भएन भन्नु त नाच्न जान्दैन आँगान टेढो भने जस्तो भयो ।
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">(ख)</span> अचानोको पीर खुकुरीले बुझ्दैन :<br>
+        अचानोको पीर खुकुरीलाई के थाहा भनेजस्तै तीनै तहका सरकार तथा अन्य निकाय खासै व्यवसायीका समस्याप्रति गम्भीर भएको देखिएन ।
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">(ग)</span> जुन जोगी आए पनि कानै चिरेका :<br>
+        जुन जोगी आए पनि कानै चिरेको भनेझैँ नेपालका कुनै पनि स्थानीय निकायले विकाश तर्फ ध्यान दिएको पाइँदैन ।
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">(घ)</span> आफू नमरी स्वर्ग देखिदैन :<br>
+        आफू नमरी स्वर्ग देखिँदैन भनेझै विदेश नगइकन त्यहाँको दुःख बुझ्न सकिदैन ।
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">(ङ)</span> नपत्याउने खोलाले बगाउँछ :<br>
+        नपत्याउने खोलाले बगाउँछ भनेझै हरिको छोराले त सरकारी कोटामा डाक्टरी पढ्न पाउने भएछ ।
+    </div>
+    
+    <div class="exercise-title">६. दिइएका टुक्काहरुलाई वाक्यमा प्रयोग गर्नुहोस् :</div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">खरानी हुनु</span><br>
+        ढुकुटीको पैसा नेताहरुले खरानी बनाएर छोड्ने भए ।
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">पेट पाल्नु</span><br>
+        नेपालमा पेट पाल्नका लागि गारो भएर विदेश पलाएन हुने क्रम बढ्दो छ ।
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">कुरा खानु</span><br>
+        बेलैमा बाबुको कुरा नखाएकाले मैले सारै दु:ख पाए ।
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">टाउको खानु</span><br>
+        बहिनीले मिठाई मिठाई भनेर मेरो टाउको खाइछ ।
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">कुरा दोचार्नु</span><br>
+        साथीहरुसँग घुम्न गएको कुरा छिमेकी काकीले त घरमा कुरा दोचारी सक्नु भएछ ।
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">आलु खानु</span><br>
+        रामले त यो पालीको परीक्षामा आलु खाएछ ।
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">सपना चकनाचुर हुनु</span><br>
+        हामीले आफ्नो बुबाआमाको सपना चकनाचुर पार्नु हुदैन ।
+    </div>
+    
+    <div class="vocabulary-item">
+        <span class="section-number">सपना पूरा हुनु</span><br>
+        सरकारी जागिर पाएपछि रामेको सपना पूरा भयो ।
+    </div>
+    
+    <div class="exercise-title">बोध र अभिव्यक्ति</div>
+    
+    <div class="exercise-title">१. छोटो उत्तर दिनुहोस् :</div>
+    
+    <div class="question">क) यस लघुनाटकमा कस्तो विषयलाई प्रस्तुत गरिएको छ ?</div>
+    <div class="answer">
+        यस लघुनाटकमा दुर्व्यसनीको विषयवस्तुलाई प्रस्तुत गरिएको छ ।
+    </div>
+    
+    <div class="question">ख) यस लघुनाटकमा कति जना मञ्चीय पात्रहरु छन् ?</div>
+    <div class="answer">
+        यस लघुनाटकमा ८ जना मञ्चीय पात्रहरु छन् ।
+    </div>
+    
+    <div class="question">ग) यस लघुनाटकको पात्रका संवादमा कुन कुन भाषाको प्रभावदेख्न सकिन्छ ?</div>
+    <div class="answer">
+        यस लघुनाटकमा शेर्पा, नेवारी र हिन्दी भाषाको प्रभाव देख्न सकिन्छ ।
+    </div>
+    
+    <div class="question">घ) यस लघुनाटकमा कुन परिवेशलाई समेटिएको छ ?</div>
+    <div class="answer">
+        यस लघुनाटकमा सहरिया परिवेशलाई समेटिएको छ ।
+    </div>
+    
+    <div class="exercise-title">२. सबैभन्दा मिल्दो उत्तरमा रेजा (ठीक) लगाउनुहोस् :</div>
+    <div class="answer">
+        क) सामाजिक<br>
+        ख) सहरिया<br>
+        ग) बहुभाषिक समाज<br>
+        घ) दाह्री बाबा<br>
+        ङ) एक<br>
+        च) पत्रिका बेच्ने केटा
+    </div>
+    
+    <div class="exercise-title">३. दिइएको संवाद कसले भनेको हो, वक्ता पहिल्याउनु होस् :</div>
+    <div class="answer">
+        क) दाह्री बाबा<br>
+        ख) नरहरि<br>
+        ग) दीनदयाल<br>
+        घ) दोर्जे<br>
+        ङ) तुयुमै<br>
+        च) कुमारका बुबा<br>
+        छ) सलिम<br>
+        ज) कुमारका बुबा<br>
+        झ) दोर्जे<br>
+        ञ) पत्रिका बेच्ने केटो
+    </div>
+    
+    <div class="exercise-title">४. "पर्खनुस् ! जानुभन्दा ........मिलेर गरौँ "नाट्यांश पढी सोधिएका प्रश्नको उत्तर दिनुहोस् :</div>
+    
+    <div class="question">क) `देश नबने हामी कोही बन्दैनौ´ भन्ने वाक्यको तात्पर्य खुलाउनुहोस् ।</div>
+    <div class="answer">
+        देशको प्रगति, सम्रिधि र विकाश नभएसम्म हामीले सुख र खुसि पाउदैनौ भन्नु नै देश नबने हामी कोही बन्दैनौ भन्नुको तात्पर्य हो ।
+    </div>
+    
+    <div class="question">ख) खुसी भएर बाँच्न के गर्नुपर्छ ?</div>
+    <div class="answer">
+        खुसी भएर बाँच्नका लागि एकाअर्काको सुख दुःखमा मिलेर, साथ दिएर बाँच्नुपर्छ ।
+    </div>
+    
+    <div class="question">ग) सामूहिक अभियान किन चलाइएको हो ?</div>
+    <div class="answer">
+        सामूहिक अभियान दुर्व्यसनको जडलाई उखेली समाजबाट बिकृति विसंगति हटाउनका लागि चलाइएको हो ।
+    </div>
+    
+    <div class="question">घ) कस्तो अभिभावकलाई कर्तव्यनिष्ठ अभिभावक भनिन्छ ?</div>
+    <div class="answer">
+        आफ्नो सन्तान प्रति आफ्नो जिम्मेवारी पूरा गर्ने अभिभावकलाई कर्तव्यनिष्ठ अभिभावक भनिन्छ ।
+    </div>
+    
+    <div class="exercise-title">५. दिइएको नाट्यांश पढी सोधिएका प्रश्नहरुको छोटो उत्तर दिनुहोस् :</div>
+    
+    <div class="question">अ) लघुनाटकमा आफन्तको आगमन भइरहनुको कारण के हो ?</div>
+    <div class="answer">
+        दुई दिनदेखि बेखबर भई घर नफर्केको आफ्नो छोरा नै कतै समाचारपत्रमा छापिएअनुसारको बेवारिसे अवस्थामा भेटिएको एउटा युवकको लास आफ्नै छोराको होला भनेर आफन्तको आगमन भइरहेको हो ।
+    </div>
+    
+    <div class="question">आ) मरेको वा नजन्मेको मान्छे राम्रो हुन्छ भन्ने भनाइसँग तपाईको सहमति वा असहमतिका बुँदाहरु लेख्नुहोस् ।</div>
+    <div class="answer">
+        मरेको वा नजन्मेको मान्छे राम्रो हुन्छ भन्ने भनाइप्रति म असमत छु । किनकि :<br>
+        - मरेको वा नजन्मेको मान्छेको कुनै मोल नै नभएकाले,<br>
+        - धर्तिमा भौतिक उपस्तिति नभई उसको गुड पत्ता लगाउन नसकिने भएकाले,<br>
+        तेसैले मरेको वा नजन्मेको मान्छे न त राम्रो हुन्छ न त नराम्रो नै ।
+    </div>
+    
+    <div class="exercise-title">६. दिइएको नाट्यांश पढी सोधिएका प्रश्नहरुको छोटो उत्तर दिनुहोस् :</div>
+    
+    <div class="question">अ) यस नाट्यांशमा वक्ताले आफ्ना के कस्ता कमजोरी रहेको स्विकारेका छन् ?</div>
+    <div class="answer">
+        यस नाट्यांशमा वक्ताले आफ्ना सन्तानप्रति आफ्नो कर्तव्य एवं जिम्मेवारी बोध नगर्नुका साथै रेखदेख एवं निगरानी नगरेकै कारण लागुपदार्थ दुर्व्यसनीको सिकार बन्न गएको वास्तविकतालाई स्विकारेका छन् । वक्ताले आफ्नो छोरासँगै बसी उसको पढाइको बारेमा कुरा नगरेको, छोराको साथीसङ्गतको बारेमा सोधखोज नगरेको, कहाँ के गर्छ भनी ख्याल नगरेको, छोराले मागेजति पैसा दिएपनि के कसरी खर्च गरेको छ भनी विचार नगरि केबल ब्यवसाय र बैठक भनी दौडधूप गरेको कुरा स्विकारेका छन् ।
+    </div>
+    
+    <div class="question">आ) यस नाट्यांशमा व्यक्त समस्या कसरी समाधान गर्न सकिएला ?</div>
+    <div class="answer">
+        यस नाट्यांशमा वक्ताले आफ्ना सन्तानप्रति आफ्नो कर्तव्य एवं जिम्मेवारी बोध नगर्नुका साथै रेखदेख एवं निगरानी नगरेकै कारण लागुपदार्थ दुर्व्यसनीको सिकार बन्न गएको समस्या व्यक्त गरेका छन् । आफ्नो सन्तानसँगै बसी उसको पढाइको बारेमा कुरा गर्ने, उनीहरुको साथीसङ्गतको बारेमा सोधखोज गर्ने, कहाँ के गर्छन् भनी ख्याल गर्ने, मागेजति पैसा दिएपनि के कसरी खर्च गरेको छ भनि विचार गर्ने र उनीहरुलाई माया र ममता दिएर रेखदेख गरेर मात्र नाट्यांशमा व्यक्त समस्या समाधान गर्न सकिएला ।
+    </div>
+    
+    <div class="exercise-title">७. व्याख्या गर्नुहोस् :</div>
+    
+    <div class="question">क) दुर्व्यसनको जडलाई उखेल्ने काम एउटा व्यक्तिले मात्र सक्दैन ।</div>
+    <div class="answer">
+        प्रस्तुत नाट्यांश कक्षा ११ को नेपाली विषय अन्तर्गत पर्ने 'लौ आयो ताजा खबर' नामक लघु नाटकबाट साभार गरिएको हो । यस नाटकका लेखक सुरेन्द्र नकर्मी हुन् । दुर्व्यसन अतेन्तै घातक हुने भएकाले यसको समधानका निमित्त सबै मिलि यसको जरो उखेल्नु पर्छ भन्ने आशयलाई यस नाटकमा प्रस्तुत गरिएको छ ।<br><br>
+
+        दुर्व्यसनल व्यक्ति, परिवार, समाज र राष्ट्रकै लागि घातक हुन्छ । यसले मानिसको स्नायु र मस्तिष्कलाई प्रत्यक्ष रुपमा प्रभाव पारी शिथिल वा उत्तेजित बनाउछ । भविष्यका कर्णाधार एवं भोलिका देशका संवाहक युवावर्गलाई सचेत र सजग बनाई दुर्व्यसनीबाट जोगाउनु हामी सबैको दायित्व हो । दुव्यंसनलाई समाजबाट हटाउन एउटा व्यक्ति वा परिवार लागेर मात्र हुँदैन । यसको जगलाई उखेल्न हामी सबै लाग्न जरुरी छ । यसको नियन्त्रण गर्न सबैभन्दा महत्त्वपूर्ण भूमिका परिवार वा अभिभावकको हुन्छ । आफ्नो सन्तानसँगै बसी उसको पढाइको बारेमा कुरा गर्ने, उनीहरुको साथीसङ्गतको बारेमा सोधखोज गर्ने, कहाँ के गर्छन् भनी ख्याल गर्ने, मागेजति पैसा दिएपनि के कसरी खर्च गरेको छ भनि विचार गर्नु जरुरी छ । आफ्ना सन्तान दुर्व्यसनमा लागेको थाहा पाएमा उसलाई सम्झाइ बुझाई सुधार केन्द्रमा लगेर उपचार समेत गर्नुपर्छ । सामाजिक सचेतना अभियान चलाई युवावर्गलाई सशक्त रुपमा सहिघाभागी गराउनुपर्छ । हामी समाजका सबै व्यक्ति, प्रशासन, राज्य कानुन सम्मत तरिकाले लाग्ने हो भने दुर्व्यसनमुक्त समाज निर्माण गर्न सकिन्छ भन्ने भावलाई यस अंशमा व्यक्त गरिएको छ ।
+    </div>
+    
+    <div class="question">ख) जब तिमी हाम्रो देशमा..........स्वच्छ हुन्छ ।</div>
+    <div class="answer">
+        प्रस्तुत नाट्यांश कक्षा ११ को नेपाली विषय अन्तर्गत पर्ने 'लौ आयो ताजा खबर' नामक लघु नाटकबाट साभार गरिएको हो । यस नाटकका लेखक सुरेन्द्र नकर्मी हुन् । पत्रकारिताको मर्म र धर्मलाई वेंगित गरिएको उपयुक्त कथनमा देशका युवापुस्तालाई दुर्व्यसनबाट टाडा राखेर राष्ट्र निर्माणमा लग्न प्रेरित गर्नुपर्छ भन्ने सन्देश प्रवाह गरी चेतनाको संवाहक बनेमा मात्र पत्रिकाको खबर ताजा र स्वच्छ हुने तथ्य प्रकट भएको पाइन्छ ।<br><br>
+
+        युवाहरु भविष्यका कर्णाधार एवं भोलिका देशका संवाहक हुन् । हाम्रो देशमा युवाको खाचो छैन । युवावर्गलाई सचेत र सजग बनाई दुर्व्यसनीबाट जोगाउनु हामी सबैको दायित्व हो । हरेक युवाको राष्ट्र निर्माणमा ठुलो योगदान हुन्छ । युवा शक्ति कमजोर भएमा देश नै सङ्कटमा पर्छ । दुर्व्यसनल व्यक्ति, परिवार, समाज र राष्ट्रकै लागि घातक हुन्छ । दुव्यंसनलाई समाजबाट हटाउन पत्रपत्रिकाको ठुलो भूमिका हुन्छ । आजभोली बासी र मूल्यहीन समाचारहरु मात्र छापिएको देखिन्छ । हाम्रा पत्रपत्रिकाहरूमा युवा पुस्ता देश र जनताका लागि नयां नया कार्य गर्ने सोचका साथ अगाडि बढ्दै छन् भन्ने समाचार आउन जरुरी छ अब युवापुस्ताले दुर्व्यसनवाट मुक्त भएको खबर सबैले सुन्न जरुरी छ । राज्यको चौथो अङ्ग सञ्चार क्षेत्र भएको नाताले युवावर्गलाई सचेत र सजग बनाई दुब्यंसनीबाट जोगाउन लागुपदार्थको असरबारे सही जानकारी दिन सक्नुपर्छ । सामाजिक सचेतना अभियान तथा जनचेतनामूलक कार्यक्रम चलाई युवावर्गलाई सशक्त रुपमा सहभागी गराइएको, सबै मिली दुर्व्यसनको जरालाई उखेलेको, दुर्व्यसनमुक्त समाज निर्माण भएको, सभ्य र सुसंस्कृत समाज निर्माण भएको जस्ता सकारात्मक सन्देशले भरिएका समाचार पत्रिकाले सम्प्रेषण गर्नुपर्छ भन्ने आशयलाई माथिको अंशमा व्यक्त गरिएको छ ।
+    </div>
+    
+    <div class="exercise-title">८. समीक्षात्मक उत्तर लेख्नुहोस् :</div>
+    
+    <div class="question">क) `लौ आयो ताजा खबर´ लघुनाटकको मुख्य पात्रको चरित्र चित्रण गर्नुहोस् ।</div>
+    <div class="answer">
+        'लौ आयो ताजा खबर' लघुनाटकको मुख्य पात्र दाह्री बाबा हुन् । नाटकको सुरुदेखि अन्त्यसम्म देखा परेका दाह्रीबाबा लेखकका मुखपात्र हुन् । उनि सांसारिक मोहबाट मुक्त भइ जीवन जगतलाई बोध गरेका पात्रको रुपमा देखिन्छन् । उनी कुटीमा बस्ने योगी हुन् । ठट्यौलो स्वभावका दाह्री बाबा सुरुमा बहुला जस्ता देखिए पनि समस्याको सही पहिचान गर्न सक्ने पुरुष पात्र हुन् । हामीले हाम्रा छोराछोरीको इच्छा, चाहानालाई ख्याल नगरी उनीहरूलाई समय नदिई एकोहोरी आफ्नो काममा मात्र व्यस्त भयो भने उनीहरू दुर्व्यसनमा पन सक्छन् भन्ने लेखकको आशयलाई दाह्रीबाबाले नाटकमा प्रस्तुत गरेका छन् । यसरी नाटकका अधिकांश संवादमा दाह्रीबाबाको चरित्रलाई नै देखाइएकाले उनी यस नाटकका प्रमुख पात्र हुन् ।
+    </div>
+    
+    <div class="question">ख) `लौ आयो ताजा खबर´लघुनाटकमा व्यक्त मुख्य सन्देशमाथि प्रकाश पार्नुहोस ।</div>
+    <div class="answer">
+        `लौ आयो ताजा खबर´लघुनाटक सामाजिक यथार्थवादी एवं प्रगतिवादी नाटककार सुरेन्द्र नकर्मीद्वारा रचित सामाजिक विषयवस्तुमा आधारित सन्देशमूलक रचना हो । यस नाटकका सामाजिक क्षेत्रमा देखा परेका विकृति रविसङ्गतिमाथि तिव्र आलोचना प्रकटगरी समाज सुधारको चाहना प्रकट गरिएको छ ।<br><br>
+
+        दुर्व्यसन अतेन्तै घातक हुने भएकाले यसको समधानका निमित्त सबै मिलि यसको जरो उखेल्नु पर्छ भन्ने आशयलाई यस नाटकमा प्रस्तुत गरिएको छ । दुव्यंसनलाई समाजबाट हटाउन एउटा व्यक्ति वा परिवार लागेर मात्र हुँदैन । यसको जगलाई उखेल्न हामी सबै लाग्न जरुरी छ । यसको नियन्त्रण गर्न सबैभन्दा महत्त्वपूर्ण भूमिका परिवार वा अभिभावकको हुन्छ । आफ्नो सन्तानसँगै बसी उसको पढाइको बारेमा कुरा गर्ने, उनीहरुको साथीसङ्गतको बारेमा सोधखोज गर्ने, कहाँ के गर्छन् भनी ख्याल गर्ने, मागेजति पैसा दिएपनि के कसरी खर्च गरेको छ भनि विचार गर्नु जरुरी छ । समग्रमा यस लघुनाटकमा दुर्व्यसनीको सिकार बन्दै गैरहेको युवावर्गमा सचेतना फैलाउनु पर्छ, गलत पत्रकारिताको अभियानलाई बन्द गर्नुपर्छ, राजनीतिक पार्टीमा देखिने घिनलाग्दो षड्यन्त्र एवं फोहोर खेललाई जरैदेखि फ्याक्नु पर्छ, समाजमा रहेको विकृति एवंविसङ्गतिलाई गम्भीर आलोचना गर्दै स्वच्छ, शान्त सामाजको निर्माण गर्नुपर्छ भन्ने सन्देशहरु दिन खोजेको पाइन्छ ।
+    </div>
+    
+    <div class="exercise-title">११. दिइएको अनुच्छेद पढी सोधिएका प्रश्नहरुको उत्तर दिनुहोस् :</div>
+    
+    <div class="question">क) प्राणीशास्त्रले कुन विषयको अध्ययन गर्छ ?</div>
+    <div class="answer">
+        प्राणीशास्त्रले चिकित्सा विज्ञान, नर्सिङ विज्ञान ,आयुर्वेद विज्ञान आदि विषयको अध्ययन गर्दछ ।
+    </div>
+    
+    <div class="question">ख) जीवजन्तुको दोहनले प्रकृतिमा कस्तो असर पर्न सक्छ ?</div>
+    <div class="answer">
+        जीवजन्तुको दोहनले जैविक विविधतामा ह्रास आई पृथ्वी नै सङ्कटमा पर्ने सम्मको असर पर्न सक्छ ।
+    </div>
+    
+    <div class="question">ग) प्राणीशास्त्रको अध्ययनले हामीलाई कसरी प्रकृतिसँग नजिक बनाउँछ ?</div>
+    <div class="answer">
+        प्राणीशास्त्रको अध्ययनले हरेक प्राणी यस धर्तीका अभिन्न अङ्ग हुन् र हामीले प्रकृति र प्राणीहरूको सुरक्षा गर्नुपर्छ भन्ने ज्ञान दिई हामीलाई प्रकृतिसँग नजिक बनाउँछ ।
+    </div>
+    
+    <div class="question">घ) `दोहन´ र`पारस्पारिक´ शब्दको अर्थलेख्नुहोस् ।</div>
+    <div class="answer">
+        दोहन = लुट्ने वा शोषण गर्ने काम<br>
+        पारस्पारिक = एक अर्कासंग सम्बन्धित
+    </div>
+    
+    <div class="exercise-title">व्याकरण</div>
+    
+    <div class="exercise-title">१. दिइएको अनुच्छेदबाट प्रत्यय लागेका शब्द पहिचान गरी सूची बनाउनुहोस् :</div>
+    <div class="answer">
+        केटा( केटो + आ)<br>
+        निन्दनीय (निन्द + अनीय)<br>
+        कार्य ( कृ + य)<br>
+        ढिस्का(ढिस्को + आ)<br>
+        लिएर ( लि + एर)<br>
+        पुग्ने( पुग् + ने)<br>
+        हजारौँ (हजार + औँ)<br>
+        जनता ( जन + ता)<br>
+        दैनिक( दिन + इक)<br>
+        गरी (गर् + ई)<br>
+        गर्दा ( गर् + दा)<br>
+        चलायमान (चलाउ + मान्)
+    </div>
+    
+    <div class="exercise-title">२. दिइएको अनुच्छेदबाट प्रत्यय व्युत्पन्न शब्द पहिचान गरी निर्माण प्रक्रिया देखाउनुहोस् :</div>
+    <div class="answer">
+        अपनत्व = आफ्नो + त्व<br>
+        भावना = भाव + ना<br>
+        होइन = हु + इन<br>
+        गरी = गर् + ई<br>
+        मिलेर = मिल् + एर<br>
+        पेटी = पेट + ई<br>
+        कर्तव्य = कृ + तव्य<br>
+        सामूहिक = समूह + इक<br>
+        नागरिक = नगर + इक<br>
+        गरौँ = गर् + औँ<br>
+        भावक = भु + अक
+    </div>
+    
+    <div class="exercise-title">४. दिइएका प्रत्यय लगाई एक एकओटा नयाँ शब्द निर्माण गर्नुहोस् :</div>
+    <div class="answer">
+        भुल् + अक्कड = भुलक्कड<br>
+        लिख् + अत = लिखत<br>
+        भिड् + अन्त = भिडन्त<br>
+        चर् + अन = चरन<br>
+        ढाक् + अनी = ढकनी<br>
+        बस् + आइँ = बसाइँ<br>
+        बस् + आइ = बसाइ<br>
+        घाट + आउ = घटाउ<br>
+        बढ् + आलु = बढालु<br>
+        चुन् + आव = चुनाव<br>
+        बन् + आवट = बनावट<br>
+        बस् + आहा = बसाहा<br>
+        उड् + अन्ते = उडन्ते<br>
+        सिक् + आरु = सिकारु<br>
+        उड् + एको = उडेको<br>
+        आगो + एनी = अगेनी<br>
+        सुत + उवा = सुतुवा<br>
+        झार् + इलो = झरिलो<br>
+        छाप् + आ = छापा<br>
+        बढ् + दो = बढ्दो<br>
+        पढ् + नु = पढ्नु<br>
+        सिक् + एर = सिकेर<br>
+        जित् + उन्जेल = जितुन्जेल<br>
+        छान् + ओट = छनोट<br>
+        हाँस् + ओ = हाँसो<br>
+        हात + इयार = हतियार<br>
+        मल + इलो = मलिलो<br>
+        धन + ई = धनी<br>
+        धनकुटा + ए = धनकुटे<br>
+        पुर्खा + औली = पुर्ख्यौली<br>
+        पूर्व + एली = पूर्वेली<br>
+        तितो + पना = तितोपना<br>
+        झापा + ली = झापाली<br>
+        गाउँ + ले = गाउँले<br>
+        गफ + आडी = गफाडी<br>
+        राम्रो + अरी = राम्ररी<br>
+        मूर्ख + आइँ = मुर्ख्याइँ<br>
+        काम + आइ = कमाइ<br>
+        लेक + आली = लेकाली<br>
+        माया + आलु = मायालु<br>
+        सिर् + आन = सिरान<br>
+        पात + इङ्गर = पतिङ्गर<br>
+        सहर + इया = सहरिया<br>
+        कुरा + औटे = कुरौटे
+    </div>
+    
+    <div style="margin-top:50px; padding:20px; border-top:2px solid #3498db; text-align:center; font-family: 'Segoe UI', Arial, sans-serif;">
+        <h2 style="color:#2980b9; margin-bottom:10px;">📩 Subscribe to Educated Nepal</h2>
+        <p style="color:#555; margin-bottom:15px;">Get the latest Class 8 , 9 , 10 , 11 & 12 notes, past questions, and study guides directly to your smartphone.</p>
+    </div>
+</body>
+</html> '''
+Convert the following text precisely according to these architectural rules:
