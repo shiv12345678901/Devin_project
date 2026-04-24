@@ -209,6 +209,8 @@ def image_to_screenshots_sse():
                 html_filename, _ = save_html(html_content, prefix="html_from_image")
 
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai_complete', 'message': 'HTML generated successfully', 'progress': 60})}\n\n"
+                # Let the UI preview the generated HTML before screenshots finish.
+                yield f"data: {json.dumps({'type': 'html_generated', 'html_filename': html_filename, 'html_content': html_content})}\n\n"
 
                 # STAGE 3: Screenshots (DRY #12)
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshots', 'message': 'Generating screenshots from HTML...', 'progress': 65})}\n\n"
@@ -240,7 +242,7 @@ def image_to_screenshots_sse():
 
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshots_complete', 'message': 'Screenshots captured successfully', 'progress': 90})}\n\n"
 
-                yield f"data: {json.dumps({'type': 'complete', 'stage': 'complete', 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'progress': 100, 'html_filename': html_filename, 'screenshot_files': [f'batch {batch_id}/{name}' for name in screenshot_names], 'screenshot_count': len(screenshot_files), 'screenshot_folder': f'batch {batch_id}', 'operation_id': operation_id, 'raw_text': raw_text})}\n\n"
+                yield f"data: {json.dumps({'type': 'complete', 'stage': 'complete', 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'progress': 100, 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': [f'batch {batch_id}/{name}' for name in screenshot_names], 'screenshot_count': len(screenshot_files), 'screenshot_folder': f'batch {batch_id}', 'operation_id': operation_id, 'raw_text': raw_text})}\n\n"
 
             except Exception as e:
                 import traceback

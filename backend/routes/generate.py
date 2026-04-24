@@ -215,10 +215,10 @@ def generate_sse():
         'resolution': data.get('resolution', '1080p'),
         'video_quality': data.get('video_quality', 85),
         'fps': data.get('fps', 30),
-        'slide_duration_sec': data.get('slide_duration_sec', 3),
+        'slide_duration_sec': data.get('slide_duration_sec', 5),
         'close_powerpoint_before_start': data.get('close_powerpoint_before_start', True),
         'auto_timing_screenshot_slides': data.get('auto_timing_screenshot_slides', True),
-        'fixed_seconds_per_screenshot_slide': data.get('fixed_seconds_per_screenshot_slide', 15),
+        'fixed_seconds_per_screenshot_slide': data.get('fixed_seconds_per_screenshot_slide', 5),
         # Intro thumbnail (inserted on slide 2 of the default PPT template).
         # Falls back to the legacy single-thumbnail keys so older requests
         # still resolve to the intro slot.
@@ -324,6 +324,8 @@ def generate_sse():
             html_filename, _ = save_html(html_content, folder=html_folder)
 
             yield f"data: {json.dumps({'type': 'progress', 'stage': 'html_saved', 'message': 'HTML saved, starting screenshots...', 'progress': 35})}\n\n"
+            # Let the UI preview the generated HTML before screenshots finish.
+            yield f"data: {json.dumps({'type': 'html_generated', 'html_filename': html_filename, 'html_content': html_content})}\n\n"
 
             # Step 3: Screenshots (DRY #12)
             screenshot_name = get_next_batch_id()
