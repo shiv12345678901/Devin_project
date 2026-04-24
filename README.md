@@ -1,9 +1,16 @@
 # TextBro — Text to Video Studio
 
-A React + Vite + TypeScript + Tailwind frontend for
-[`shiv12345678901/yt-project`](https://github.com/shiv12345678901/yt-project)
-(a.k.a. Screenshot Studio) — a Flask backend that turns text, HTML, or images
-into screenshots and video presentations using AI.
+A React + Vite + TypeScript + Tailwind frontend, plus the Flask backend
+(formerly [`shiv12345678901/yt-project`](https://github.com/shiv12345678901/yt-project))
+that turns text, HTML, or images into screenshots and video presentations
+using AI. The two services live side-by-side in this repo:
+
+```
+.
+├── src/                  # React frontend (Vite)
+├── backend/              # Flask backend (see backend/README.md)
+└── ...
+```
 
 ## Features
 
@@ -19,21 +26,32 @@ into screenshots and video presentations using AI.
 ## Requirements
 
 - Node.js 20.19+ (or 22.13+)
-- The Flask backend from `shiv12345678901/yt-project` running locally on
-  `http://localhost:5000`.
+- Python 3.10+ for the backend (see [backend/README.md](backend/README.md)
+  for full instructions).
 
 ## Quick start
 
 ```bash
-# 1. Install dependencies
+# 1. Install frontend dependencies
 npm install
 
-# 2. Start the Flask backend (in a separate terminal, from yt-project/)
-python start.py    # listens on http://localhost:5000
+# 2. Start the Flask backend (in a separate terminal)
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+playwright install chromium
+cp config/config.example.py config/config.py   # add API_KEY/API_URL/MODEL
+cp .env.example .env                           # security knobs (optional)
+python start.py    # binds to 127.0.0.1:5000 by default
 
-# 3. Start the React dev server
+# 3. Start the React dev server (back at repo root)
 npm run dev        # opens http://localhost:5173
 ```
+
+The backend now binds to **127.0.0.1** by default and exposes a `/healthz`
+liveness probe. See [`backend/README.md`](backend/README.md) for the full
+security configuration (CORS allowlist, optional `X-API-Key` shared secret,
+per-IP rate limits, debug-mode gating).
 
 The Vite dev server proxies all Flask API paths (`/generate-sse`,
 `/generate-html`, `/screenshots/*`, etc.) to `http://localhost:5000`, so
@@ -70,21 +88,28 @@ or add a new Flask route that serves `dist/index.html`.
 
 ### Option B — Separate deployment with CORS enabled
 
-Install [`flask-cors`](https://pypi.org/project/Flask-Cors/) in the backend:
+`flask-cors` is already wired in (`backend/app.py`) — set the allowlist via
+the `ALLOWED_ORIGINS` env var instead of editing code:
 
 ```bash
-pip install flask-cors
+# backend/.env
+ALLOWED_ORIGINS=https://your-frontend-domain
+API_KEY=<generate a long random string>
+FLASK_HOST=127.0.0.1   # keep loopback; put nginx/caddy/cloudflared in front
 ```
 
-```python
-# yt-project/app.py
-from flask_cors import CORS
-CORS(app, resources={r"/*": {"origins": ["https://your-frontend-domain"]}})
+Run with a real WSGI server:
+
+```bash
+gunicorn -w 4 -b 127.0.0.1:5000 wsgi:app   # Linux/Mac
+waitress-serve --listen=127.0.0.1:5000 wsgi:app   # Windows
 ```
 
 Then build the frontend with `VITE_BACKEND_URL=https://your-backend-domain
 npm run build` and deploy `dist/` to any static host (Netlify, Vercel,
-Cloudflare Pages, S3 + CloudFront, etc.).
+Cloudflare Pages, S3 + CloudFront, etc.). Make sure the frontend forwards
+`X-API-Key` on every request — the API key is required on every non-public
+route once it's set.
 
 ## Scripts
 
