@@ -110,6 +110,19 @@ def take_screenshot_playwright(
         logical_width = int(viewport_width / zoom)
         logical_height = int(viewport_height / zoom)
 
+        # Clamp overlap below the logical viewport so (viewport_h - overlap)
+        # in the num_est division is always positive. Without this, a user
+        # sending overlap >= viewport_h causes ZeroDivisionError or negative
+        # step-size crashes in the capture loop.
+        max_overlap = max(0, logical_height - 1)
+        if overlap > max_overlap:
+            print(
+                f"⚠️ overlap={overlap} exceeds logical viewport height "
+                f"{logical_height}; clamping to {max_overlap}",
+                flush=True,
+            )
+            overlap = max_overlap
+
         # Use pooled browser
         page = _browser_pool.get_page(logical_width, logical_height, zoom)
 
@@ -132,6 +145,10 @@ def take_screenshot_playwright(
         print(f"🔍 Zoom: {zoom}x → logical {logical_width}×{logical_height} → "
               f"output {viewport_width}×{viewport_height}", flush=True)
 
+        # Re-clamp against the real clientHeight (may differ from logical_height
+        # when scrollbars take space) so the divisor below is always >= 1.
+        if overlap >= viewport_h:
+            overlap = max(0, viewport_h - 1)
         num_est = max(1, -(-total_height // (viewport_h - overlap)))
         print(f"📸 Estimated {num_est} screenshot(s) (overlap={overlap}px)", flush=True)
 

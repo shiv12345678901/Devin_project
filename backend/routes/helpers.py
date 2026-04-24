@@ -81,7 +81,7 @@ def take_screenshots(html_content, screenshot_name, screenshot_folder=None,
     folder = screenshot_folder or OUTPUT_FOLDER
     os.makedirs(folder, exist_ok=True)
 
-    screenshot_filename = f"{screenshot_name}(1).png"
+    screenshot_filename = f"{screenshot_name}.png"
     screenshot_path = os.path.join(folder, screenshot_filename)
 
     # Delete old screenshots to prevent leftovers
