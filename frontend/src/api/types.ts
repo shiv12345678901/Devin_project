@@ -44,9 +44,14 @@ export interface GenerateSettings {
   close_powerpoint_before_start?: boolean
   auto_timing_screenshot_slides?: boolean
   fixed_seconds_per_screenshot_slide?: number
-  thumbnail_enabled?: boolean
-  thumbnail_filename?: string
-  thumbnail_duration_sec?: number
+  // Intro thumbnail — inserted on slide 2 of the deck.
+  intro_thumbnail_enabled?: boolean
+  intro_thumbnail_filename?: string
+  intro_thumbnail_duration_sec?: number
+  // Outro thumbnail — inserted on the 2nd-to-last slide.
+  outro_thumbnail_enabled?: boolean
+  outro_thumbnail_filename?: string
+  outro_thumbnail_duration_sec?: number
 }
 
 export interface GenerateResponse {

@@ -42,8 +42,10 @@ const DEFAULT_SETTINGS: GenerateSettings = {
   video_quality: 85,
   fps: 30,
   slide_duration_sec: 5,
-  thumbnail_enabled: false,
-  thumbnail_duration_sec: 5,
+  intro_thumbnail_enabled: false,
+  intro_thumbnail_duration_sec: 5,
+  outro_thumbnail_enabled: false,
+  outro_thumbnail_duration_sec: 5,
 }
 
 type StepId = 'project' | 'content' | 'screenshot' | 'video' | 'thumbnail' | 'advanced'
@@ -125,13 +127,22 @@ function validateStep(id: StepId, settings: GenerateSettings, text: string): Fie
       return errs
     }
     case 'thumbnail': {
-      if (settings.thumbnail_enabled) {
-        if (!(settings.thumbnail_filename ?? '').trim()) {
-          errs.thumbnail_filename = 'Upload an image first'
+      if (settings.intro_thumbnail_enabled) {
+        if (!(settings.intro_thumbnail_filename ?? '').trim()) {
+          errs.intro_thumbnail_filename = 'Upload an image first'
         }
-        const d = num(settings.thumbnail_duration_sec)
+        const d = num(settings.intro_thumbnail_duration_sec)
         if (d === null || d <= 0) {
-          errs.thumbnail_duration_sec = 'Duration must be greater than 0'
+          errs.intro_thumbnail_duration_sec = 'Duration must be greater than 0'
+        }
+      }
+      if (settings.outro_thumbnail_enabled) {
+        if (!(settings.outro_thumbnail_filename ?? '').trim()) {
+          errs.outro_thumbnail_filename = 'Upload an image first'
+        }
+        const d = num(settings.outro_thumbnail_duration_sec)
+        if (d === null || d <= 0) {
+          errs.outro_thumbnail_duration_sec = 'Duration must be greater than 0'
         }
       }
       return errs
@@ -812,10 +823,75 @@ function ThumbnailStep({
   onChange: Setter
   errors: FieldErrors
 }) {
+  return (
+    <>
+      <StepHeader
+        title="Thumbnails"
+        subtitle="Two optional thumbnail slots: intro (slide 2) and outro (2nd-to-last slide). Both are inserted into the final PPT / MP4."
+      />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ThumbnailSlot
+          kind="intro"
+          title="Intro thumbnail"
+          position="Inserted on slide 2"
+          enabled={settings.intro_thumbnail_enabled ?? false}
+          filename={settings.intro_thumbnail_filename ?? ''}
+          durationSec={settings.intro_thumbnail_duration_sec}
+          onEnabledChange={(v) => onChange('intro_thumbnail_enabled', v)}
+          onFilenameChange={(v) => onChange('intro_thumbnail_filename', v)}
+          onDurationChange={(v) => onChange('intro_thumbnail_duration_sec', v)}
+          filenameError={errors.intro_thumbnail_filename}
+          durationError={errors.intro_thumbnail_duration_sec}
+        />
+        <ThumbnailSlot
+          kind="outro"
+          title="Outro thumbnail"
+          position="Inserted on the 2nd-to-last slide"
+          enabled={settings.outro_thumbnail_enabled ?? false}
+          filename={settings.outro_thumbnail_filename ?? ''}
+          durationSec={settings.outro_thumbnail_duration_sec}
+          onEnabledChange={(v) => onChange('outro_thumbnail_enabled', v)}
+          onFilenameChange={(v) => onChange('outro_thumbnail_filename', v)}
+          onDurationChange={(v) => onChange('outro_thumbnail_duration_sec', v)}
+          filenameError={errors.outro_thumbnail_filename}
+          durationError={errors.outro_thumbnail_duration_sec}
+        />
+      </div>
+    </>
+  )
+}
+
+function ThumbnailSlot({
+  kind,
+  title,
+  position,
+  enabled,
+  filename,
+  durationSec,
+  onEnabledChange,
+  onFilenameChange,
+  onDurationChange,
+  filenameError,
+  durationError,
+}: {
+  kind: 'intro' | 'outro'
+  title: string
+  position: string
+  enabled: boolean
+  filename: string
+  durationSec: number | undefined
+  onEnabledChange: (v: boolean) => void
+  onFilenameChange: (v: string) => void
+  onDurationChange: (v: number) => void
+  filenameError?: string
+  durationError?: string
+}) {
   const [uploading, setUploading] = useState(false)
   const [uploadErr, setUploadErr] = useState<string | null>(null)
-  const enabled = settings.thumbnail_enabled ?? false
-  const filename = (settings.thumbnail_filename ?? '').trim()
+  const fileFieldName = `${kind}_thumbnail_filename`
+  const durFieldName = `${kind}_thumbnail_duration_sec`
+  const trimmed = filename.trim()
 
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -824,45 +900,41 @@ function ThumbnailStep({
     setUploadErr(null)
     try {
       const { filename: stored } = await api.uploadThumbnail(file)
-      onChange('thumbnail_filename', stored)
+      onFilenameChange(stored)
     } catch (err) {
       setUploadErr(err instanceof Error ? err.message : String(err))
     } finally {
       setUploading(false)
-      // Allow re-selecting the same file later.
       e.target.value = ''
     }
   }
 
   return (
-    <>
-      <StepHeader
-        title="Thumbnail"
-        subtitle="Optional cover image for the deck. Only used when output is PowerPoint or MP4."
-      />
-      <Toggle
-        label="Include thumbnail slide"
-        description="Insert a dedicated thumbnail slide in the generated deck."
-        checked={enabled}
-        onChange={(v) => onChange('thumbnail_enabled', v)}
-      />
+    <div className="rounded-md border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-slate-900 dark:text-slate-50">{title}</div>
+          <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{position}</div>
+        </div>
+        <Toggle label="" checked={enabled} onChange={onEnabledChange} />
+      </div>
 
       {enabled && (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Thumbnail image" required error={errors.thumbnail_filename}>
+        <div className="space-y-3">
+          <Field label="Image" required error={filenameError}>
             <div className="flex flex-col gap-3">
               <label
                 className={
-                  'flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed px-3 py-6 text-sm transition-colors ' +
-                  (errors.thumbnail_filename
+                  'flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed px-3 py-5 text-sm transition-colors ' +
+                  (filenameError
                     ? 'border-rose-400 bg-rose-50 text-rose-700 hover:bg-rose-100 dark:border-rose-500/60 dark:bg-rose-500/10 dark:text-rose-200'
                     : 'border-slate-300 bg-slate-50 text-slate-600 hover:bg-slate-100 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300')
                 }
               >
                 <Upload size={16} />
-                {uploading ? 'Uploading…' : filename ? 'Replace image' : 'Upload image'}
+                {uploading ? 'Uploading…' : trimmed ? 'Replace image' : 'Upload image'}
                 <input
-                  id={fieldId('thumbnail', 'thumbnail_filename')}
+                  id={fieldId('thumbnail', fileFieldName)}
                   type="file"
                   accept="image/png,image/jpeg,image/webp,image/bmp"
                   className="hidden"
@@ -870,25 +942,25 @@ function ThumbnailStep({
                   disabled={uploading}
                 />
               </label>
-              {filename && (
+              {trimmed && (
                 <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-2 dark:border-white/10 dark:bg-white/[0.03]">
                   <img
-                    src={api.thumbnailUrl(filename)}
-                    alt="Thumbnail preview"
-                    className="h-16 w-24 shrink-0 rounded object-cover"
+                    src={api.thumbnailUrl(trimmed)}
+                    alt={`${title} preview`}
+                    className="h-14 w-20 shrink-0 rounded object-cover"
                   />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs font-medium text-slate-800 dark:text-slate-200">
-                      {filename}
+                      {trimmed}
                     </div>
                     <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                      Stored on backend · served via /thumbnails/
+                      Stored on backend
                     </div>
                   </div>
                   <button
                     type="button"
                     className="btn-ghost text-xs"
-                    onClick={() => onChange('thumbnail_filename', '')}
+                    onClick={() => onFilenameChange('')}
                   >
                     Remove
                   </button>
@@ -898,18 +970,22 @@ function ThumbnailStep({
             </div>
           </Field>
 
-          <NumField
-            step="thumbnail"
-            name="thumbnail_duration_sec"
-            label="Duration (seconds)"
-            numStep={0.5}
-            value={settings.thumbnail_duration_sec}
-            onChange={(v) => onChange('thumbnail_duration_sec', v)}
-            error={errors.thumbnail_duration_sec}
-          />
+          <Field label="Duration (seconds)" error={durationError}>
+            <input
+              id={fieldId('thumbnail', durFieldName)}
+              type="number"
+              step={0.5}
+              className={inputCls(durationError)}
+              value={durationSec ?? ''}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                if (!Number.isNaN(v)) onDurationChange(v)
+              }}
+            />
+          </Field>
         </div>
       )}
-    </>
+    </div>
   )
 }
 

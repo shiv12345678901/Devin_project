@@ -219,9 +219,23 @@ def generate_sse():
         'close_powerpoint_before_start': data.get('close_powerpoint_before_start', True),
         'auto_timing_screenshot_slides': data.get('auto_timing_screenshot_slides', True),
         'fixed_seconds_per_screenshot_slide': data.get('fixed_seconds_per_screenshot_slide', 15),
-        'thumbnail_enabled': data.get('thumbnail_enabled', data.get('thumbnail_on_slide_2', False)),
-        'thumbnail_filename': data.get('thumbnail_filename', ''),
-        'thumbnail_duration_sec': data.get('thumbnail_duration_sec', 5),
+        # Intro thumbnail (inserted on slide 2 of the default PPT template).
+        # Falls back to the legacy single-thumbnail keys so older requests
+        # still resolve to the intro slot.
+        'intro_thumbnail_enabled': data.get(
+            'intro_thumbnail_enabled',
+            data.get('thumbnail_enabled', data.get('thumbnail_on_slide_2', False)),
+        ),
+        'intro_thumbnail_filename': data.get(
+            'intro_thumbnail_filename', data.get('thumbnail_filename', '')
+        ),
+        'intro_thumbnail_duration_sec': data.get(
+            'intro_thumbnail_duration_sec', data.get('thumbnail_duration_sec', 5)
+        ),
+        # Outro thumbnail (inserted on the 2nd-to-last slide).
+        'outro_thumbnail_enabled': data.get('outro_thumbnail_enabled', False),
+        'outro_thumbnail_filename': data.get('outro_thumbnail_filename', ''),
+        'outro_thumbnail_duration_sec': data.get('outro_thumbnail_duration_sec', 5),
     }
 
     cancel_event = register_operation(operation_id)

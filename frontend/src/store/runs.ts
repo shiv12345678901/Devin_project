@@ -27,7 +27,8 @@ export interface RunSettings {
   fps?: number
   video_quality?: number
   slide_duration_sec?: number
-  thumbnail_enabled?: boolean
+  intro_thumbnail_enabled?: boolean
+  outro_thumbnail_enabled?: boolean
 }
 
 export interface Run {
