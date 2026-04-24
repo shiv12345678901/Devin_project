@@ -47,13 +47,16 @@ def get_screenshot(filename):
     if os.path.exists(safe):
         return send_file(safe, mimetype='image/png')
 
-    # Fall back to walking output/ for batch subfolders, still constrained.
-    abs_output = os.path.abspath('output')
+    # Fall back to walking output/screenshots/ for batch subfolders — must
+    # stay rooted at OUTPUT_FOLDER, not `output/`, otherwise a basename match
+    # would serve internal files like `output/cache/ai_responses.json` or
+    # `output/history.json` under the screenshots endpoint.
+    abs_screens = os.path.abspath(OUTPUT_FOLDER)
     basename = os.path.basename(filename)
-    for root, _dirs, files in os.walk(abs_output):
+    for root, _dirs, files in os.walk(abs_screens):
         if basename in files:
             candidate = os.path.abspath(os.path.join(root, basename))
-            if candidate.startswith(abs_output + os.sep):
+            if candidate.startswith(abs_screens + os.sep):
                 return send_file(candidate, mimetype='image/png')
     return jsonify({'error': 'File not found'}), 404
 
