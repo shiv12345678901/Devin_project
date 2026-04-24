@@ -198,10 +198,16 @@ def log_generation(entry):
                     try:
                         history = json.loads(raw) if raw.strip() else []
                     except json.JSONDecodeError:
-                        # Corrupted file — start fresh; keep the bad file
-                        # beside it for forensics.
+                        # Corrupted file — start fresh. Do NOT os.replace the
+                        # file while we still hold `f` open: on POSIX that
+                        # just renames the inode and leaves our write stream
+                        # pointing at the .corrupt path, so the fresh entry
+                        # would vanish with the renamed file. Instead save
+                        # a forensic copy via read-and-write, then truncate
+                        # the original in place below.
                         try:
-                            os.replace(HISTORY_FILE, HISTORY_FILE + '.corrupt')
+                            with open(HISTORY_FILE + '.corrupt', 'w', encoding='utf-8') as forensic:
+                                forensic.write(raw)
                         except OSError:
                             pass
                         history = []

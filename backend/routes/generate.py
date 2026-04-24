@@ -69,6 +69,7 @@ def generate():
         ai_content = get_ai_response(input_text, use_cache=use_cache, model_choice=model_choice)
 
         if not ai_content:
+            metrics_tracker.end(ai_operation_id, success=False)
             metrics_tracker.end(operation_id, success=False)
             return jsonify({'error': 'Failed to get AI response. Check terminal for details.'}), 500
 
@@ -175,6 +176,15 @@ def generate():
         import traceback
         print(f"Error: {e}")
         traceback.print_exc()
+        # End any sub-trackers that might still be running. The local
+        # references only exist once we reach those branches, so fall
+        # back to the derived id string and let metrics_tracker.end()
+        # silently no-op if the id was never started.
+        for sub_id in (f"{operation_id}_ai", f"{operation_id}_screenshot"):
+            try:
+                metrics_tracker.end(sub_id, success=False)
+            except Exception:
+                pass
         metrics_tracker.end(operation_id, success=False, metadata={'error': str(e)})
         return jsonify({'error': f'Error: {str(e)}'}), 500
 
