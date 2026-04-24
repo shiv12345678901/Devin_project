@@ -4,6 +4,43 @@ import re
 import glob
 import json
 import time
+import threading
+
+# Process-wide in-memory lock that serializes history read-modify-write.
+# SSE runs execute on separate Flask worker threads and can finish at the same
+# time; without serializing the JSON file RMW, concurrent writes would clobber
+# each other and silently drop entries (classic TOCTOU).
+_HISTORY_LOCK = threading.Lock()
+
+# Cross-process advisory file lock. Only engaged on POSIX (fcntl). Windows
+# uses msvcrt.locking — we detect at import time.
+try:  # pragma: no cover — platform-dependent
+    import fcntl  # type: ignore
+
+    def _file_lock(fh):
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+
+    def _file_unlock(fh):
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+except ImportError:  # Windows
+    try:
+        import msvcrt  # type: ignore
+
+        def _file_lock(fh):
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+
+        def _file_unlock(fh):
+            try:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+    except ImportError:  # neither available — degrade to thread-only lock
+        def _file_lock(_fh):
+            return None
+
+        def _file_unlock(_fh):
+            return None
 
 from screenshot_engines.playwright_engine import take_screenshot_playwright
 
@@ -131,28 +168,48 @@ def save_html(html_content, prefix="html_notes", folder=None):
 def log_generation(entry):
     """
     Append a generation entry to the history log.
-    
-    entry should be a dict with keys like:
-      tool, input_preview, html_file, screenshot_folder, screenshot_count,
-      settings, timestamp
+
+    Uses a process-wide threading.Lock plus an advisory file lock so the
+    read-modify-write cycle on HISTORY_FILE can't be raced by concurrent
+    SSE workers (two runs completing at once would otherwise silently drop
+    one entry).
     """
-    try:
-        history = []
-        if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                history = json.load(f)
+    entry.setdefault('timestamp', time.time())
+    entry.setdefault('datetime', time.strftime('%Y-%m-%d %H:%M:%S'))
 
-        entry.setdefault('timestamp', time.time())
-        entry.setdefault('datetime', time.strftime('%Y-%m-%d %H:%M:%S'))
-        history.append(entry)
+    with _HISTORY_LOCK:
+        try:
+            # Ensure file exists so we can grab an advisory lock on it.
+            if not os.path.exists(HISTORY_FILE):
+                os.makedirs(os.path.dirname(HISTORY_FILE) or '.', exist_ok=True)
+                with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+                    f.write('[]')
 
-        # Keep last 200 entries
-        history = history[-200:]
+            with open(HISTORY_FILE, 'r+', encoding='utf-8') as f:
+                _file_lock(f)
+                try:
+                    raw = f.read()
+                    try:
+                        history = json.loads(raw) if raw.strip() else []
+                    except json.JSONDecodeError:
+                        # Corrupted file — start fresh; keep the bad file
+                        # beside it for forensics.
+                        try:
+                            os.replace(HISTORY_FILE, HISTORY_FILE + '.corrupt')
+                        except OSError:
+                            pass
+                        history = []
 
-        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(history, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"Warning: Failed to log generation history: {e}")
+                    history.append(entry)
+                    history = history[-200:]
+
+                    f.seek(0)
+                    f.truncate()
+                    json.dump(history, f, indent=2, ensure_ascii=False)
+                finally:
+                    _file_unlock(f)
+        except Exception as e:
+            print(f"Warning: Failed to log generation history: {e}")
 
 
 def get_history():

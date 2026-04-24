@@ -205,6 +205,12 @@ def generate_sse():
     # MP4 export path (Windows) actually uses them today.
     output_name = (data.get('output_name') or '').strip()
     system_prompt = data.get('system_prompt', '')
+    project_info = {
+        'class_name': (data.get('class_name') or '').strip(),
+        'subject': (data.get('subject') or '').strip(),
+        'title': (data.get('title') or '').strip(),
+        'output_format': data.get('output_format', 'images'),
+    }
     video_export_settings = {
         'resolution': data.get('resolution', '1080p'),
         'video_quality': data.get('video_quality', 85),
@@ -322,6 +328,7 @@ def generate_sse():
                 'tool': 'text-to-video',
                 'input_preview': input_text[:200],
                 'output_name': output_name or None,
+                'project': project_info,
                 'html_file': html_filename,
                 'screenshot_folder': screenshot_folder,
                 'screenshot_count': len(screenshot_files),

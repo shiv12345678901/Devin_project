@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Activity,
   CheckCircle2,
@@ -73,20 +74,46 @@ function useNow(enabled: boolean, tickMs = 1000): number {
   return now
 }
 
-function RunRow({ run, onRemove }: { run: Run; onRemove?: (id: string) => void }) {
+function RunRow({
+  run,
+  onRemove,
+  highlight = false,
+}: {
+  run: Run
+  onRemove?: (id: string) => void
+  highlight?: boolean
+}) {
   const meta = toolMeta(run.tool)
   const Icon = meta.icon
   const now = useNow(!run.endedAt)
   const runtime = (run.endedAt ?? now) - run.startedAt
-  const [open, setOpen] = useState(false)
+  const [userOpen, setUserOpen] = useState(false)
+  // Derive `open` from (user click || highlight prop) so we don't need to
+  // setState from an effect just because the prop flipped.
+  const open = userOpen || highlight
+  const scrolled = useRef(false)
+  const rowRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (highlight && rowRef.current && !scrolled.current) {
+      rowRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      scrolled.current = true
+    }
+  }, [highlight])
   const hasOutputs = (run.screenshotFiles?.length ?? 0) > 0 || !!run.htmlFilename
 
   return (
-    <div className="glass overflow-hidden !p-0">
+    <div
+      ref={rowRef}
+      className={
+        highlight
+          ? 'glass overflow-hidden !p-0 ring-2 ring-brand-400 dark:ring-brand-500/60'
+          : 'glass overflow-hidden !p-0'
+      }
+    >
       <button
         type="button"
         className="flex w-full items-center gap-4 px-5 py-4 text-left transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.03]"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setUserOpen((o) => !o)}
       >
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300">
           <Icon size={18} />
@@ -143,6 +170,17 @@ function RunRow({ run, onRemove }: { run: Run; onRemove?: (id: string) => void }
               {run.settings?.model_choice && (
                 <KV label="Model" value={run.settings.model_choice} />
               )}
+              {run.settings?.output_format && (
+                <KV label="Output format" value={String(run.settings.output_format)} />
+              )}
+              {(run.settings?.class_name || run.settings?.subject || run.settings?.title) && (
+                <KV
+                  label="Project"
+                  value={[run.settings?.class_name, run.settings?.subject, run.settings?.title]
+                    .filter(Boolean)
+                    .join(' · ')}
+                />
+              )}
               {run.settings && (
                 <KV
                   label="Viewport"
@@ -184,9 +222,12 @@ function RunRow({ run, onRemove }: { run: Run; onRemove?: (id: string) => void }
               </div>
               <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
                 {run.screenshotFiles.slice(0, 12).map((f) => {
-                  const url = api.screenshotUrl(
-                    run.screenshotFolder ? `${run.screenshotFolder}/${f}` : f,
-                  )
+                  // `f` is already a path relative to OUTPUT_FOLDER
+                  // (e.g. "5(1).png" or "batch 3/5(1).png"). Do NOT prepend
+                  // screenshotFolder — that double-prefixed the path and
+                  // silently fell back to a basename walk that could pick
+                  // the wrong batch.
+                  const url = api.screenshotUrl(f)
                   return (
                     <a
                       key={f}
@@ -277,6 +318,8 @@ function KV({ label, value }: { label: string; value: React.ReactNode }) {
 
 export default function Processes() {
   const { runs, clear, remove } = useRuns()
+  const [searchParams] = useSearchParams()
+  const highlightOp = searchParams.get('op')
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [cache, setCache] = useState<CacheStats | null>(null)
   const [loading, setLoading] = useState(false)
@@ -424,7 +467,12 @@ export default function Processes() {
       ) : (
         <div className="space-y-3">
           {runRows.map((r) => (
-            <RunRow key={r.id} run={r} onRemove={remove} />
+            <RunRow
+              key={r.id}
+              run={r}
+              onRemove={remove}
+              highlight={!!highlightOp && r.operationId === highlightOp}
+            />
           ))}
           {historyRows.length > 0 && (
             <>

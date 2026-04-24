@@ -1,4 +1,26 @@
+export type OutputFormat = 'html' | 'images' | 'pptx' | 'video'
+
+export interface PreflightCheck {
+  ok: boolean
+  detail: string
+}
+
+export interface PreflightResponse {
+  ok: boolean
+  checks: {
+    platform: PreflightCheck
+    backend: PreflightCheck
+    ai_config: PreflightCheck
+    powerpoint: PreflightCheck
+  }
+}
+
 export interface GenerateSettings {
+  // Project metadata (Step 1 — drives gating + history search)
+  class_name?: string
+  subject?: string
+  title?: string
+  output_format?: OutputFormat
   // Screenshot rendering
   zoom?: number
   overlap?: number

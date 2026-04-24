@@ -17,6 +17,17 @@ export interface RunSettings {
   use_cache?: boolean
   model_choice?: string
   enable_verification?: boolean
+  class_name?: string
+  subject?: string
+  title?: string
+  output_format?: 'html' | 'images' | 'pptx' | 'video'
+  system_prompt?: string
+  output_name?: string
+  resolution?: string
+  fps?: number
+  video_quality?: number
+  slide_duration_sec?: number
+  thumbnail_on_slide_2?: boolean
 }
 
 export interface Run {

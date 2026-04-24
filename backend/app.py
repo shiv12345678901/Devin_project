@@ -69,6 +69,70 @@ app.register_blueprint(image_bp)
 app.register_blueprint(resources_bp)
 
 
+# ─── Preflight ────────────────────────────────────────────────────────────
+
+@app.route('/preflight')
+def preflight():
+    """Report what the runtime can do so the wizard can gate outputs.
+
+    Response shape (each check: {ok: bool, detail: str}):
+      - platform:    always ok; reports OS / python version.
+      - backend:     always ok when this handler responds.
+      - ai_config:   ok when config/config.py exists and defines a non-empty API_KEY.
+      - powerpoint:  ok only on Windows with pywin32 and PowerPoint.Application COM.
+    """
+    import platform as _platform
+
+    checks: dict = {
+        'platform': {
+            'ok': True,
+            'detail': f"{_platform.system()} {_platform.release()} · Python {_platform.python_version()}",
+        },
+        'backend': {'ok': True, 'detail': 'Flask responded to /preflight'},
+        'ai_config': {'ok': False, 'detail': ''},
+        'powerpoint': {'ok': False, 'detail': ''},
+    }
+
+    # AI config: does config/config.py have a non-placeholder API_KEY and at
+    # least one real api_key in MODELS_CONFIG?
+    try:
+        sys.path.insert(0, os.path.join(BACKEND_DIR, 'config'))
+        from config import API_KEY, MODELS_CONFIG  # type: ignore
+        placeholder = {'', 'your-api-key-here', 'REPLACE_ME'}
+        top_ok = isinstance(API_KEY, str) and API_KEY.strip() not in placeholder
+        model_ok = any(
+            isinstance(m.get('api_key'), str) and m['api_key'].strip() not in placeholder
+            for m in MODELS_CONFIG.values()
+        )
+        if top_ok or model_ok:
+            checks['ai_config']['ok'] = True
+            checks['ai_config']['detail'] = f"{sum(1 for m in MODELS_CONFIG.values() if m.get('api_key'))} model(s) configured"
+        else:
+            checks['ai_config']['detail'] = 'API_KEY is empty or placeholder — edit backend/config/config.py'
+    except Exception as e:  # pragma: no cover — surfaces in UI
+        checks['ai_config']['detail'] = f'Failed to load config: {e}'
+
+    # PowerPoint: only succeeds on Windows with pywin32 + PowerPoint.
+    if _platform.system() == 'Windows':
+        try:
+            import win32com.client  # type: ignore
+            app_obj = win32com.client.Dispatch('PowerPoint.Application')
+            version = getattr(app_obj, 'Version', 'unknown')
+            checks['powerpoint']['ok'] = True
+            checks['powerpoint']['detail'] = f'PowerPoint {version} detected'
+        except Exception as e:
+            checks['powerpoint']['detail'] = f'PowerPoint not available: {e}'
+    else:
+        checks['powerpoint']['detail'] = (
+            f'PowerPoint COM is Windows-only; this host is {_platform.system()}'
+        )
+
+    return jsonify({
+        'ok': all(c['ok'] for k, c in checks.items() if k != 'powerpoint'),
+        'checks': checks,
+    })
+
+
 # ─── Frontend (React SPA) ─────────────────────────────────────────────────
 
 INDEX_FALLBACK_HTML = """<!doctype html>
@@ -134,6 +198,7 @@ _API_PREFIXES = (
     '/history',
     '/cache',
     '/metrics',
+    '/preflight',
 )
 
 

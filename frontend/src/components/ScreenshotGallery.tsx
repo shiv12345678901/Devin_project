@@ -3,12 +3,19 @@ import { useState } from 'react'
 import { api } from '../api/client'
 
 interface Props {
+  /**
+   * Display-only; not used to construct URLs (files already contain any
+   * batch-folder prefix). Kept in the props so callers don't need to be
+   * edited.
+   */
   screenshotFolder?: string
   files: string[]
   title?: string
 }
 
-export default function ScreenshotGallery({ screenshotFolder, files, title = 'Screenshots' }: Props) {
+export default function ScreenshotGallery(props: Props) {
+  const { files, title = 'Screenshots' } = props
+  // props.screenshotFolder is intentionally unused — see Props docs.
   const [preview, setPreview] = useState<string | null>(null)
   const [zipping, setZipping] = useState(false)
 
@@ -23,7 +30,11 @@ export default function ScreenshotGallery({ screenshotFolder, files, title = 'Sc
   const downloadZip = async () => {
     setZipping(true)
     try {
-      const paths = files.map((f) => (screenshotFolder ? `${screenshotFolder}/${f}` : f))
+      // `files` are already paths relative to OUTPUT_FOLDER (e.g. "batch 3/5(1).png"
+      // or "5(1).png"). The backend /download-zip handler resolves them under
+      // OUTPUT_FOLDER itself, so we MUST NOT prepend screenshotFolder again —
+      // doing so produced "batch 3/batch 3/5(1).png" and empty ZIPs.
+      const paths = files
       const blob = await api.downloadZip(paths, 'screenshots')
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')

@@ -4,6 +4,7 @@ import type {
   GenerateSettings,
   HistoryEntry,
   ListResponse,
+  PreflightResponse,
   SseEvent,
 } from './types'
 
@@ -72,6 +73,8 @@ export const api = {
     })
     return parseJson<{ success?: boolean; error?: string }>(res)
   },
+
+  preflight: () => getJson<PreflightResponse>('/preflight'),
 
   cacheStats: () => getJson<CacheStats>('/cache/stats'),
   clearCache: () => postJson<{ success: boolean; message: string }>('/cache/clear', {}),
