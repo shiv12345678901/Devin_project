@@ -1,11 +1,30 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { FileText, Code2, ImageIcon, Activity, Sparkles } from 'lucide-react'
+import {
+  Activity,
+  Home as HomeIcon,
+  Library,
+  LayoutGrid,
+  Settings as SettingsIcon,
+  Sparkles,
+} from 'lucide-react'
 import clsx from 'clsx'
 
-const nav = [
-  { to: '/text-to-video', label: 'Text to Video', icon: FileText },
-  { to: '/html-to-video', label: 'HTML to Video', icon: Code2 },
-  { to: '/image-to-video', label: 'Image to Video', icon: ImageIcon },
+type NavItem = {
+  to: string
+  label: string
+  icon: typeof HomeIcon
+  end?: boolean
+}
+
+// Four primary destinations + Processes as a secondary drill-down.
+const primaryNav: NavItem[] = [
+  { to: '/', label: 'Home', icon: HomeIcon, end: true },
+  { to: '/workspace', label: 'Workspace', icon: LayoutGrid },
+  { to: '/library', label: 'Library', icon: Library },
+  { to: '/settings', label: 'Settings', icon: SettingsIcon },
+]
+
+const secondaryNav: NavItem[] = [
   { to: '/processes', label: 'Processes', icon: Activity },
 ]
 
@@ -23,14 +42,18 @@ export default function Layout() {
               <div className="font-display text-base font-semibold tracking-tight text-slate-900 dark:text-slate-50">
                 TextBro
               </div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">Text → Video Studio</div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                Text → Video Studio
+              </div>
             </div>
           </div>
+
           <nav className="flex-1 space-y-0.5 p-2">
-            {nav.map((item) => (
+            {primaryNav.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
+                end={item.end}
                 className={({ isActive }) =>
                   clsx(
                     'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
@@ -44,7 +67,28 @@ export default function Layout() {
                 {item.label}
               </NavLink>
             ))}
+
+            <div className="my-3 border-t border-slate-100 dark:border-white/5" />
+
+            {secondaryNav.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  clsx(
+                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-200'
+                      : 'text-slate-500 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-white/[0.04]',
+                  )
+                }
+              >
+                <item.icon size={17} />
+                {item.label}
+              </NavLink>
+            ))}
           </nav>
+
           <div className="border-t border-slate-200 px-5 py-3 text-[11px] text-slate-500 dark:border-white/10 dark:text-slate-400">
             Local backend · http://localhost:5000
           </div>
@@ -64,10 +108,11 @@ export default function Layout() {
         </header>
 
         <nav className="glass m-3 mt-0 flex gap-1 overflow-x-auto p-1.5 md:hidden">
-          {nav.map((item) => (
+          {[...primaryNav, ...secondaryNav].map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
+              end={item.end}
               className={({ isActive }) =>
                 clsx(
                   'flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',

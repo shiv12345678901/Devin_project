@@ -257,6 +257,16 @@ function RunRow({
   )
 }
 
+function formatHistoryTimestamp(ts: number | string | undefined): string {
+  if (ts == null) return ''
+  const num = typeof ts === 'number' ? ts : Number(ts)
+  if (Number.isFinite(num)) {
+    // Backend writes `time.time()` which is seconds since epoch; Date takes ms.
+    return new Date(num * 1000).toLocaleString()
+  }
+  return String(ts)
+}
+
 function HistoryRow({ entry }: { entry: HistoryEntry }) {
   const meta = toolMeta(entry.tool)
   const Icon = meta.icon
@@ -271,8 +281,10 @@ function HistoryRow({ entry }: { entry: HistoryEntry }) {
             {meta.label}
           </span>
           <StatusBadge status="completed" />
-          {entry.timestamp && (
-            <span className="text-xs text-slate-500 dark:text-slate-400">{entry.timestamp}</span>
+          {(entry.datetime || entry.timestamp) && (
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              {entry.datetime ?? formatHistoryTimestamp(entry.timestamp)}
+            </span>
           )}
         </div>
         <p className="mt-1 truncate text-sm text-slate-600 dark:text-slate-300">

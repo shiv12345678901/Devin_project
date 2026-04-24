@@ -20,6 +20,7 @@ import PreflightModal from '../components/PreflightModal'
 import Toggle from '../components/Toggle'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import { api } from '../api/client'
+import { useSettings } from '../store/settings'
 import type { GenerateSettings, OutputFormat } from '../api/types'
 
 // ─── Defaults ──────────────────────────────────────────────────────────────
@@ -184,7 +185,11 @@ export default function TextToVideo() {
   const { state, generate, cancel } = useTrackedGenerate('text-to-video')
   const running = state.status === 'running'
   const [text, setText] = useState('')
-  const [settings, setSettings] = useState<GenerateSettings>(DEFAULT_SETTINGS)
+  const { settings: appSettings } = useSettings()
+  const [settings, setSettings] = useState<GenerateSettings>({
+    ...DEFAULT_SETTINGS,
+    output_format: appSettings.defaultOutputFormat,
+  })
   const [stepId, setStepId] = useState<StepId>('project')
   const [showPreflight, setShowPreflight] = useState(false)
   /** Step ids whose inline errors should be visible (only populated after the

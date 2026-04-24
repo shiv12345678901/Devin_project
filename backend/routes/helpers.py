@@ -82,11 +82,17 @@ def get_next_batch_id():
 # ─── Sanitization ─────────────────────────────────────────────────────────
 
 def sanitize_folder_path(folder_path, default):
-    """Validate folder path is safe (under output/) to prevent path traversal."""
+    """Validate folder path is safe (under output/) to prevent path traversal.
+
+    The check must be strict-boundary: accept the literal "output" or anything
+    under "output/…". Rejects "outputevil", "output_backup", etc. which would
+    otherwise pass a naive `startswith('output')` check.
+    """
     if not folder_path:
         return default
     normalized = os.path.normpath(folder_path)
-    if os.path.isabs(normalized) or normalized.startswith('..') or not normalized.startswith('output'):
+    under_output = normalized == 'output' or normalized.startswith('output' + os.sep)
+    if os.path.isabs(normalized) or normalized.startswith('..') or not under_output:
         print(f"⚠️ Blocked unsafe folder path: {folder_path}, using default: {default}")
         return default
     return normalized

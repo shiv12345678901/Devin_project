@@ -113,7 +113,10 @@ export type SseEvent =
 
 export interface HistoryEntry {
   id?: string | number
-  timestamp?: string
+  /** Unix timestamp as a float (from `time.time()`). Prefer `datetime`. */
+  timestamp?: number | string
+  /** Human-readable local time, e.g. "2024-03-04 10:30:00". */
+  datetime?: string
   tool?: string
   input_preview?: string
   html_file?: string

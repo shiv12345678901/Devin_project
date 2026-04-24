@@ -5,24 +5,25 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Light, minimal sage-green accent. Not the neon mint,
-        // not the emerald jewel — a soft fern that reads as calm.
+        // Brand palette is driven at runtime by CSS variables on :root so the
+        // Settings page can re-skin the whole app. Each var is a space-
+        // separated RGB triplet so Tailwind alpha modifiers still work
+        // (e.g. `bg-brand-500/20`).
         brand: {
-          50: '#f3faf4',
-          100: '#e4f3e7',
-          200: '#c8e6cf',
-          300: '#a0d1ac',
-          400: '#73b583',
-          500: '#4f9862',
-          600: '#3d7c4e',
-          700: '#316340',
-          800: '#284f34',
-          900: '#20402b',
+          50: 'rgb(var(--brand-50) / <alpha-value>)',
+          100: 'rgb(var(--brand-100) / <alpha-value>)',
+          200: 'rgb(var(--brand-200) / <alpha-value>)',
+          300: 'rgb(var(--brand-300) / <alpha-value>)',
+          400: 'rgb(var(--brand-400) / <alpha-value>)',
+          500: 'rgb(var(--brand-500) / <alpha-value>)',
+          600: 'rgb(var(--brand-600) / <alpha-value>)',
+          700: 'rgb(var(--brand-700) / <alpha-value>)',
+          800: 'rgb(var(--brand-800) / <alpha-value>)',
+          900: 'rgb(var(--brand-900) / <alpha-value>)',
         },
       },
       fontFamily: {
-        // San Francisco on Apple devices, Inter elsewhere. Matches the
-        // "feels native on macOS/iOS" look without shipping SF Pro.
+        // San Francisco on Apple devices, Inter elsewhere.
         sans: [
           '-apple-system',
           'BlinkMacSystemFont',
@@ -34,8 +35,7 @@ export default {
           'Roboto',
           'sans-serif',
         ],
-        // Gotham for titles with a Montserrat fallback (visually very close
-        // geometric sans-serif, free to use).
+        // Gotham for titles with Montserrat fallback.
         display: [
           'Gotham',
           '"Gotham HTF"',
@@ -53,7 +53,6 @@ export default {
         xs: '2px',
       },
       boxShadow: {
-        // Softer, tighter — no big purple halo.
         glass: '0 1px 2px 0 rgba(15, 23, 42, 0.04), 0 8px 24px -12px rgba(15, 23, 42, 0.08)',
         'glass-lg': '0 2px 4px 0 rgba(15, 23, 42, 0.04), 0 16px 40px -18px rgba(15, 23, 42, 0.12)',
       },

@@ -2,6 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Theme tokens ────────────────────────────────────────────────────────
+   The brand palette is stored as space-separated RGB triplets so Tailwind's
+   `rgb(var(--brand-500) / <alpha-value>)` pattern works. The Settings page
+   overrides these at runtime with `document.documentElement.style.setProperty`
+   to re-skin the whole app without touching any component. */
+:root {
+  /* Default: sage-green (#4f9862 scale) */
+  --brand-50: 243 250 244;
+  --brand-100: 228 243 231;
+  --brand-200: 200 230 207;
+  --brand-300: 160 209 172;
+  --brand-400: 115 181 131;
+  --brand-500: 79 152 98;
+  --brand-600: 61 124 78;
+  --brand-700: 49 99 64;
+  --brand-800: 40 79 52;
+  --brand-900: 32 64 43;
+}
+
 @layer base {
   html,
   body,

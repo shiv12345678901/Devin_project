@@ -112,8 +112,12 @@ def preflight():
     except Exception as e:  # pragma: no cover — surfaces in UI
         checks['ai_config']['detail'] = f'Failed to load config: {e}'
 
-    # PowerPoint: only succeeds on Windows with pywin32 + PowerPoint.
+    # PowerPoint: only succeeds on Windows with pywin32 + PowerPoint. We MUST
+    # call Quit() afterwards, otherwise every /preflight hit spawns a new
+    # POWERPNT.EXE process that never exits (the wizard triggers preflight
+    # before every run, so this leak accumulates fast).
     if _platform.system() == 'Windows':
+        app_obj = None
         try:
             import win32com.client  # type: ignore
             app_obj = win32com.client.Dispatch('PowerPoint.Application')
@@ -122,6 +126,12 @@ def preflight():
             checks['powerpoint']['detail'] = f'PowerPoint {version} detected'
         except Exception as e:
             checks['powerpoint']['detail'] = f'PowerPoint not available: {e}'
+        finally:
+            if app_obj is not None:
+                try:
+                    app_obj.Quit()
+                except Exception:
+                    pass
     else:
         checks['powerpoint']['detail'] = (
             f'PowerPoint COM is Windows-only; this host is {_platform.system()}'
@@ -177,35 +187,46 @@ def frontend_favicon():
 
 
 # SPA fallback: any unknown path that isn't an API route should return the
-# React index.html so client-side routing (/text-to-video, /resources, etc.)
-# works on a hard refresh.
-_API_PREFIXES = (
+# React index.html so client-side routing (/workspace/html, /text-to-video, …)
+# works on a hard refresh. Two cases:
+#   * Exact endpoint names — routes without a trailing path component.
+#   * Path-style prefixes — require a trailing slash so `/html-to-video`
+#     does NOT match the `/html/<file>` asset endpoint.
+_API_EXACT = {
     '/generate',
     '/generate-sse',
     '/generate-html',
-    '/cancel',
     '/beautify',
     '/minify',
     '/extract-from-image',
     '/image-to-screenshots-sse',
     '/regenerate',
-    '/screenshots',
-    '/html',
-    '/download',
     '/download-zip',
     '/list',
-    '/delete',
     '/history',
-    '/cache',
-    '/metrics',
     '/preflight',
+    '/upload-thumbnail',
+}
+_API_PATH_PREFIXES = (
+    '/cancel/',
+    '/screenshots/',
+    '/html/',
+    '/thumbnails/',
+    '/download/',
+    '/delete/',
+    '/cache/',
+    '/metrics/',
 )
+
+
+def _is_api_path(path: str) -> bool:
+    return path in _API_EXACT or path.startswith(_API_PATH_PREFIXES)
 
 
 @app.errorhandler(404)
 def spa_fallback(_err):
     path = request.path
-    if path.startswith(_API_PREFIXES):
+    if _is_api_path(path):
         return jsonify({'error': 'Not found'}), 404
     if HAS_FRONTEND_BUILD:
         return send_from_directory(FRONTEND_DIST, 'index.html')
