@@ -4,7 +4,7 @@ import ProgressBar from '../components/ProgressBar'
 import ScreenshotGallery from '../components/ScreenshotGallery'
 import SettingsPanel from '../components/SettingsPanel'
 import { api } from '../api/client'
-import { useGenerate } from '../hooks/useGenerate'
+import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import type { GenerateSettings } from '../api/types'
 
 const defaultSettings: GenerateSettings = {
@@ -18,7 +18,7 @@ const defaultSettings: GenerateSettings = {
 export default function HtmlToVideo() {
   const [html, setHtml] = useState('')
   const [settings, setSettings] = useState<GenerateSettings>(defaultSettings)
-  const { state, generateFromHtml } = useGenerate()
+  const { state, generateFromHtml } = useTrackedGenerate('html-to-video')
   const running = state.status === 'running'
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -53,8 +53,8 @@ export default function HtmlToVideo() {
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-50">HTML to Video</h1>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+        <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">HTML to Video</h1>
+        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
           Paste HTML directly — skip the AI step and render it to screenshots.
         </p>
       </div>
@@ -98,7 +98,7 @@ export default function HtmlToVideo() {
           </div>
           <textarea
             id="html-input"
-            className="input h-96 resize-y font-mono text-xs"
+            className="textarea h-96 resize-y font-mono text-xs"
             placeholder="<!DOCTYPE html>..."
             value={html}
             onChange={(e) => setHtml(e.target.value)}

@@ -15,9 +15,9 @@ export default function ProgressBar({ progress, stage, message, etaSeconds }: Pr
         </div>
         <div className="text-sm tabular-nums text-slate-500">{Math.round(clamped)}%</div>
       </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+      <div className="h-2 w-full overflow-hidden rounded-full border border-white/40 bg-white/40 backdrop-blur-md dark:border-white/10 dark:bg-white/5">
         <div
-          className="h-full rounded-full bg-brand-600 transition-[width] duration-300 ease-out"
+          className="h-full rounded-full bg-gradient-to-r from-brand-500 via-brand-500 to-pink-500 transition-[width] duration-300 ease-out"
           style={{ width: `${clamped}%` }}
         />
       </div>

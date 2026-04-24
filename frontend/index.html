@@ -6,8 +6,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TextBro — Text to Video Studio</title>
     <meta name="description" content="Turn text, HTML, images, or PDFs into video-ready screenshots using AI." />
-    <link rel="preconnect" href="https://rsms.me/" />
-    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <!-- Montserrat as a Gotham-family fallback for display headings. Apple
+         devices get native SF Pro through the system font stack; everything
+         else falls back to Inter, which is also loaded from Google Fonts. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Montserrat:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>

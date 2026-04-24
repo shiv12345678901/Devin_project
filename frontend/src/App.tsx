@@ -3,7 +3,7 @@ import Layout from './components/Layout'
 import TextToVideo from './pages/TextToVideo'
 import HtmlToVideo from './pages/HtmlToVideo'
 import ImageToVideo from './pages/ImageToVideo'
-import Resources from './pages/Resources'
+import Processes from './pages/Processes'
 
 function App() {
   return (
@@ -14,7 +14,8 @@ function App() {
           <Route path="text-to-video" element={<TextToVideo />} />
           <Route path="html-to-video" element={<HtmlToVideo />} />
           <Route path="image-to-video" element={<ImageToVideo />} />
-          <Route path="resources" element={<Resources />} />
+          <Route path="processes" element={<Processes />} />
+          <Route path="resources" element={<Navigate to="/processes" replace />} />
           <Route path="*" element={<Navigate to="/text-to-video" replace />} />
         </Route>
       </Routes>

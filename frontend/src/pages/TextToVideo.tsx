@@ -3,7 +3,7 @@ import { useState } from 'react'
 import ProgressBar from '../components/ProgressBar'
 import ScreenshotGallery from '../components/ScreenshotGallery'
 import SettingsPanel from '../components/SettingsPanel'
-import { useGenerate } from '../hooks/useGenerate'
+import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import type { GenerateSettings } from '../api/types'
 
 const defaultSettings: GenerateSettings = {
@@ -21,7 +21,7 @@ const defaultSettings: GenerateSettings = {
 export default function TextToVideo() {
   const [text, setText] = useState('')
   const [settings, setSettings] = useState<GenerateSettings>(defaultSettings)
-  const { state, generate, cancel } = useGenerate()
+  const { state, generate, cancel } = useTrackedGenerate('text-to-video')
   const running = state.status === 'running'
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -33,8 +33,8 @@ export default function TextToVideo() {
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-50">Text to Video</h1>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+        <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">Text to Video</h1>
+        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
           Paste any text. The AI converts it into formatted HTML, captures it as screenshots, and
           you can string those together as a video presentation.
         </p>
@@ -47,7 +47,7 @@ export default function TextToVideo() {
           </label>
           <textarea
             id="input-text"
-            className="input h-60 resize-y font-mono"
+            className="textarea h-60 resize-y font-mono"
             placeholder="Paste the text you want to turn into a video…"
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -93,7 +93,7 @@ export default function TextToVideo() {
           <div className="flex items-center gap-2 text-sm">
             <Code2 size={16} />
             <span className="text-slate-700 dark:text-slate-300">Generated HTML:</span>
-            <code className="rounded bg-slate-100 px-2 py-0.5 text-xs dark:bg-slate-800">
+            <code className="rounded-md border border-white/60 bg-white/60 px-2 py-0.5 font-mono text-xs backdrop-blur-md dark:border-white/10 dark:bg-white/5">
               {state.result.html_filename}
             </code>
           </div>

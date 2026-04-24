@@ -9,35 +9,118 @@
     @apply h-full;
   }
 
+  html {
+    font-feature-settings: 'ss01', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
   body {
-    @apply bg-slate-50 text-slate-800 antialiased;
+    @apply font-sans text-slate-800 antialiased;
+    background: radial-gradient(circle at 0% 0%, rgba(124, 58, 237, 0.18), transparent 40%),
+      radial-gradient(circle at 100% 0%, rgba(59, 130, 246, 0.14), transparent 42%),
+      radial-gradient(circle at 50% 100%, rgba(244, 114, 182, 0.14), transparent 45%),
+      linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+    background-attachment: fixed;
   }
 
   .dark body {
-    @apply bg-slate-950 text-slate-100;
+    @apply text-slate-100;
+    background: radial-gradient(circle at 0% 0%, rgba(124, 58, 237, 0.28), transparent 40%),
+      radial-gradient(circle at 100% 0%, rgba(59, 130, 246, 0.22), transparent 42%),
+      radial-gradient(circle at 50% 100%, rgba(236, 72, 153, 0.18), transparent 45%),
+      linear-gradient(180deg, #020617 0%, #0b1229 100%);
+    background-attachment: fixed;
+  }
+
+  /* Display / title typography defaults to Gotham-family. */
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display tracking-tight;
   }
 }
 
 @layer components {
-  .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  /* ─── Glass surfaces ─────────────────────────────────────────────────── */
+
+  .glass {
+    @apply rounded-2xl border border-white/40 bg-white/55 shadow-glass backdrop-blur-xl
+           dark:border-white/10 dark:bg-white/5;
   }
-  .btn-primary {
-    @apply btn bg-brand-600 text-white hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-400;
+
+  .glass-strong {
+    @apply rounded-2xl border border-white/60 bg-white/75 shadow-glass backdrop-blur-2xl
+           dark:border-white/10 dark:bg-white/[0.08];
   }
-  .btn-secondary {
-    @apply btn bg-slate-200 text-slate-900 hover:bg-slate-300 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700;
-  }
-  .btn-danger {
-    @apply btn bg-red-600 text-white hover:bg-red-700;
-  }
-  .input {
-    @apply w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100;
-  }
-  .label {
-    @apply block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1;
-  }
+
   .card {
-    @apply rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900;
+    @apply glass p-6;
   }
+
+  .card-sm {
+    @apply glass p-4;
+  }
+
+  /* ─── Buttons ────────────────────────────────────────────────────────── */
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium
+           transition-all duration-150 ease-out
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn border border-brand-500/30 bg-brand-600/95 text-white
+           shadow-[0_8px_24px_-8px_rgba(124,58,237,0.6)]
+           hover:bg-brand-600 hover:-translate-y-px
+           focus:outline-none focus:ring-2 focus:ring-brand-400/60;
+  }
+
+  .btn-secondary {
+    @apply btn border border-white/50 bg-white/60 text-slate-800 backdrop-blur-md
+           hover:bg-white/80
+           dark:border-white/10 dark:bg-white/10 dark:text-slate-100 dark:hover:bg-white/15;
+  }
+
+  .btn-ghost {
+    @apply btn border border-transparent bg-transparent text-slate-600 hover:bg-white/40
+           dark:text-slate-300 dark:hover:bg-white/10;
+  }
+
+  .btn-danger {
+    @apply btn border border-red-500/30 bg-red-500/90 text-white
+           shadow-[0_8px_24px_-8px_rgba(239,68,68,0.5)]
+           hover:bg-red-500;
+  }
+
+  /* ─── Form controls ─────────────────────────────────────────────────── */
+
+  .input,
+  .textarea,
+  .select {
+    @apply w-full rounded-xl border border-white/60 bg-white/70 px-3.5 py-2.5 text-sm
+           text-slate-900 shadow-sm backdrop-blur-md
+           placeholder:text-slate-400
+           focus:border-brand-500/60 focus:bg-white focus:outline-none
+           focus:ring-2 focus:ring-brand-400/40
+           dark:border-white/10 dark:bg-white/5 dark:text-slate-100
+           dark:placeholder:text-slate-500 dark:focus:bg-white/10;
+  }
+
+  .label {
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-600 dark:text-slate-400;
+  }
+
+  /* ─── Badges / pills ─────────────────────────────────────────────────── */
+
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full border border-white/50 bg-white/60
+           px-2.5 py-0.5 text-xs font-medium text-slate-700 backdrop-blur-md
+           dark:border-white/10 dark:bg-white/10 dark:text-slate-200;
+  }
+
+  .badge-success { @apply badge border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300; }
+  .badge-running { @apply badge border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300; }
+  .badge-error   { @apply badge border-red-500/30 bg-red-500/15 text-red-700 dark:text-red-300; }
+  .badge-neutral { @apply badge; }
 }
