@@ -4,12 +4,15 @@ import './index.css'
 import App from './App.tsx'
 import { RunsProvider } from './store/RunsProvider'
 import { SettingsProvider } from './store/SettingsProvider'
+import { TrackedGenerationProvider } from './hooks/useTrackedGenerate'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <SettingsProvider>
       <RunsProvider>
-        <App />
+        <TrackedGenerationProvider>
+          <App />
+        </TrackedGenerationProvider>
       </RunsProvider>
     </SettingsProvider>
   </StrictMode>,

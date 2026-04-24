@@ -340,6 +340,16 @@ def generate_sse():
                 cancel_event=cancel_event
             )
 
+            # The screenshot engine breaks out of its loop on cancel and
+            # returns whatever it captured so far — without this explicit
+            # check the SSE stream would emit `complete` with the partial
+            # batch and the UI would treat a cancelled run as successful.
+            if cancel_event.is_set():
+                metrics_tracker.end(screenshot_operation_id, success=False)
+                metrics_tracker.end(operation_id, success=False)
+                yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
+                return
+
             # Log history (#8)
             log_generation({
                 'tool': 'text-to-video',
