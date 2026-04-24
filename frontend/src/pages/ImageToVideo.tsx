@@ -102,7 +102,7 @@ export default function ImageToVideo() {
           </div>
         </div>
 
-        <SettingsPanel value={settings} onChange={setSettings} showAdvanced={false} />
+        <SettingsPanel value={settings} onChange={setSettings} showAdvanced={false} showImagesToVideo />
 
         <div className="flex flex-wrap items-center gap-3">
           {!running ? (

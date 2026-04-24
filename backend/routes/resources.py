@@ -126,7 +126,7 @@ def delete_file_route(file_type, filename):
         abs_folder = os.path.abspath(folder)
         abs_file = os.path.abspath(file_path)
 
-        if not abs_file.startswith(abs_folder):
+        if not (abs_file == abs_folder or abs_file.startswith(abs_folder + os.sep)):
             return jsonify({'error': 'Invalid file path'}), 403
 
         if not os.path.exists(file_path):

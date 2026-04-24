@@ -200,6 +200,23 @@ def generate_sse():
     use_cache = data.get('use_cache', True)
     beautify_html = data.get('beautify_html', False)
 
+    # Pass-through fields: accepted into the request + history so the UI
+    # keeps parity with the old HF-Space form, but only the PowerPoint /
+    # MP4 export path (Windows) actually uses them today.
+    output_name = (data.get('output_name') or '').strip()
+    system_prompt = data.get('system_prompt', '')
+    video_export_settings = {
+        'resolution': data.get('resolution', '1080p'),
+        'video_quality': data.get('video_quality', 85),
+        'fps': data.get('fps', 30),
+        'slide_duration_sec': data.get('slide_duration_sec', 3),
+        'close_powerpoint_before_start': data.get('close_powerpoint_before_start', True),
+        'auto_timing_screenshot_slides': data.get('auto_timing_screenshot_slides', True),
+        'fixed_seconds_per_screenshot_slide': data.get('fixed_seconds_per_screenshot_slide', 15),
+        'thumbnail_on_slide_2': data.get('thumbnail_on_slide_2', False),
+        'thumbnail_filename': data.get('thumbnail_filename', ''),
+    }
+
     cancel_event = register_operation(operation_id)
     metrics_tracker.start(operation_id)
 
@@ -296,12 +313,19 @@ def generate_sse():
 
             # Log history (#8)
             log_generation({
-                'tool': 'text-to-image',
+                'tool': 'text-to-video',
                 'input_preview': input_text[:200],
+                'output_name': output_name or None,
                 'html_file': html_filename,
                 'screenshot_folder': screenshot_folder,
                 'screenshot_count': len(screenshot_files),
-                'settings': {'zoom': zoom, 'overlap': overlap, 'width': viewport_width, 'height': viewport_height},
+                'settings': {
+                    'zoom': zoom, 'overlap': overlap,
+                    'width': viewport_width, 'height': viewport_height,
+                    'model_choice': model_choice,
+                    'system_prompt_used': bool(system_prompt),
+                    **video_export_settings,
+                },
             })
 
             metrics_tracker.end(screenshot_operation_id, success=True)

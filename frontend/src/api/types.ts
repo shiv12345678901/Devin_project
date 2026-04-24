@@ -1,4 +1,5 @@
 export interface GenerateSettings {
+  // Screenshot rendering
   zoom?: number
   overlap?: number
   viewport_width?: number
@@ -8,8 +9,21 @@ export interface GenerateSettings {
   beautify_html?: boolean
   enable_verification?: boolean
   model_choice?: string
+  system_prompt?: string
+  // Output paths / names
+  output_name?: string
   screenshot_folder?: string
   html_folder?: string
+  // Images → MP4 / PowerPoint export (Windows-only; pass-through otherwise)
+  resolution?: '720p' | '1080p' | '1440p' | '4k'
+  video_quality?: number
+  fps?: number
+  slide_duration_sec?: number
+  close_powerpoint_before_start?: boolean
+  auto_timing_screenshot_slides?: boolean
+  fixed_seconds_per_screenshot_slide?: number
+  thumbnail_on_slide_2?: boolean
+  thumbnail_filename?: string
 }
 
 export interface GenerateResponse {

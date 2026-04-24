@@ -76,7 +76,8 @@ export const api = {
   cacheStats: () => getJson<CacheStats>('/cache/stats'),
   clearCache: () => postJson<{ success: boolean; message: string }>('/cache/clear', {}),
 
-  screenshotUrl: (filename: string) => buildUrl(`/screenshots/${filename}`),
+  screenshotUrl: (filename: string) =>
+    buildUrl(`/screenshots/${filename.split('/').map(encodeURIComponent).join('/')}`),
   htmlUrl: (filename: string) => buildUrl(`/html/${encodeURIComponent(filename)}`),
 
   downloadZip: async (files: string[], name = 'screenshots'): Promise<Blob> => {

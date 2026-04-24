@@ -60,7 +60,7 @@ def extract_from_image():
         else:
             image_paths_to_process = [temp_path]
 
-        from src.core.vision_client import extract_text_from_multiple_images
+        from core.vision_client import extract_text_from_multiple_images
         result = extract_text_from_multiple_images(image_paths_to_process, instructions)
 
         # Cleanup
@@ -146,7 +146,7 @@ def image_to_screenshots_sse():
 
                 try:
                     if is_pdf and len(image_paths_to_process) > 1:
-                        from src.core.vision_client import extract_text_from_image
+                        from core.vision_client import extract_text_from_image
                         all_pages_text = []
                         total_pages = len(image_paths_to_process)
                         for i, img_path in enumerate(image_paths_to_process):
@@ -164,7 +164,7 @@ def image_to_screenshots_sse():
                         else:
                             extraction_result = None
                     else:
-                        from src.core.vision_client import extract_text_from_multiple_images
+                        from core.vision_client import extract_text_from_multiple_images
                         extraction_result = extract_text_from_multiple_images(image_paths_to_process, instructions)
                 except Exception as vision_err:
                     extraction_result = None

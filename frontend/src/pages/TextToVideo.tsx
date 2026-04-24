@@ -16,10 +16,21 @@ const defaultSettings: GenerateSettings = {
   enable_verification: true,
   beautify_html: false,
   model_choice: 'default',
+  system_prompt: '',
+  // Images → MP4 defaults (Windows PowerPoint path)
+  resolution: '1080p',
+  video_quality: 85,
+  fps: 30,
+  slide_duration_sec: 3,
+  close_powerpoint_before_start: true,
+  auto_timing_screenshot_slides: true,
+  fixed_seconds_per_screenshot_slide: 15,
+  thumbnail_on_slide_2: false,
 }
 
 export default function TextToVideo() {
   const [text, setText] = useState('')
+  const [outputName, setOutputName] = useState('')
   const [settings, setSettings] = useState<GenerateSettings>(defaultSettings)
   const { state, generate, cancel } = useTrackedGenerate('text-to-video')
   const running = state.status === 'running'
@@ -27,7 +38,7 @@ export default function TextToVideo() {
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!text.trim()) return
-    await generate(text, settings)
+    await generate(text, { ...settings, output_name: outputName.trim() || undefined })
   }
 
   return (
@@ -35,20 +46,19 @@ export default function TextToVideo() {
       <div>
         <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">Text to Video</h1>
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-          Paste any text. The AI converts it into formatted HTML, captures it as screenshots, and
-          you can string those together as a video presentation.
+          Single chain: text → HTML → screenshots → MP4.
         </p>
       </div>
 
       <form onSubmit={onSubmit} className="space-y-4">
         <div className="card">
           <label className="label" htmlFor="input-text">
-            Input text
+            Text Input
           </label>
           <textarea
             id="input-text"
             className="textarea h-60 resize-y font-mono"
-            placeholder="Paste the text you want to turn into a video…"
+            placeholder="Paste your lesson notes here…"
             value={text}
             onChange={(e) => setText(e.target.value)}
             disabled={running}
@@ -58,7 +68,21 @@ export default function TextToVideo() {
           </div>
         </div>
 
-        <SettingsPanel value={settings} onChange={setSettings} />
+        <div className="card">
+          <label className="label" htmlFor="output-name">
+            Output Name
+          </label>
+          <input
+            id="output-name"
+            className="input"
+            placeholder="Class 8 nepali chapter 1"
+            value={outputName}
+            onChange={(e) => setOutputName(e.target.value)}
+            disabled={running}
+          />
+        </div>
+
+        <SettingsPanel value={settings} onChange={setSettings} showImagesToVideo />
 
         <div className="flex flex-wrap items-center gap-3">
           {!running ? (
