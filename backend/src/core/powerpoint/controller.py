@@ -193,24 +193,32 @@ class PowerPointController:
     def create_presentation(
         self,
         template_path: str,
-        image_folder: str,
         output_path: str,
+        image_files: Optional[List[str]] = None,
+        image_folder: Optional[str] = None,
         slide_duration: float = 3.0,
         transition_type: str = "fade"
     ) -> str:
         """
         Create a PowerPoint presentation from images.
-        
+
+        Pass either an explicit list of image paths via ``image_files`` (the
+        preferred path — guarantees the deck only contains screenshots from
+        the *current* run) or a folder via ``image_folder`` (legacy behaviour
+        that globs every PNG in the folder, including leftovers from previous
+        runs). Mixing the two raises ``ValueError``.
+
         Args:
             template_path: Path to .pptx template file
-            image_folder: Folder containing images to insert
             output_path: Where to save the presentation
+            image_files: Explicit ordered list of image paths to insert.
+            image_folder: Folder to glob (legacy fallback only).
             slide_duration: Duration per slide in seconds
             transition_type: Type of transition between slides
-            
+
         Returns:
             Path to created presentation file
-            
+
         Raises:
             FileNotFoundError: If template or images not found
             ValueError: If invalid configuration provided
@@ -218,9 +226,28 @@ class PowerPointController:
         """
         # Validate template
         self.validate_template(template_path)
-        
-        # Get sorted image files
-        image_files = self.get_image_files(image_folder)
+
+        # Resolve image list — prefer explicit ``image_files`` so a deck
+        # only contains screenshots from this run, never leftovers in the
+        # output folder from a previous job. Fall back to globbing only
+        # when the caller explicitly opts in via ``image_folder``.
+        if image_files is not None and image_folder is not None:
+            raise ValueError("Pass either image_files or image_folder, not both")
+        if image_files is not None:
+            if not image_files:
+                raise ValueError("image_files is empty")
+            missing = [p for p in image_files if not Path(p).is_file()]
+            if missing:
+                raise FileNotFoundError(
+                    f"Image file(s) not found: {missing[0]}"
+                    + (f" (+{len(missing) - 1} more)" if len(missing) > 1 else "")
+                )
+            resolved_image_files: List[str] = list(image_files)
+        elif image_folder is not None:
+            resolved_image_files = self.get_image_files(image_folder)
+        else:
+            raise ValueError("Must provide either image_files or image_folder")
+        image_files = resolved_image_files
         
         # Validate slide duration
         if slide_duration <= 0:

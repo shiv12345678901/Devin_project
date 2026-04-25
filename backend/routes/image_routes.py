@@ -8,6 +8,7 @@ import uuid
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 from core.ai_client import get_ai_response, register_operation, unregister_operation, CancelledError
+from utils.run_guard import begin_run, end_run, RunRejected
 from routes.helpers import (
     OUTPUT_FOLDER, HTML_FOLDER,
     get_next_batch_id,
@@ -115,6 +116,37 @@ def image_to_screenshots_sse():
         image_file.save(temp_path)
 
         operation_id = f"image_to_scp_{int(time.time() * 1000)}"
+
+        # Single-flight + dedup guard. We can't fingerprint the actual
+        # uploaded bytes cheaply, so we hash the (filename, size,
+        # instructions, viewport) tuple — good enough to catch the
+        # "user double-clicks Submit" case.
+        try:
+            file_size = os.path.getsize(temp_path)
+        except OSError:
+            file_size = -1
+        try:
+            begin_run(operation_id, '/image-to-screenshots-sse', {
+                'filename': image_file.filename,
+                'size': file_size,
+                'instructions': instructions,
+                'zoom': zoom,
+                'overlap': overlap,
+                'viewport_width': viewport_width,
+                'viewport_height': viewport_height,
+                'max_screenshots': max_screenshots,
+            })
+        except RunRejected as rr:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            return jsonify({
+                'error': rr.message,
+                'reason': rr.reason,
+                'active_operation_id': rr.operation_id,
+            }), 409
+
         cancel_event = register_operation(operation_id)
 
         def generate_events():
@@ -256,6 +288,7 @@ def image_to_screenshots_sse():
                 yield f"data: {json.dumps({'type': 'error', 'message': f'Error: {str(e)}'})}\n\n"
             finally:
                 unregister_operation(operation_id)
+                end_run(operation_id)
 
         return Response(
             stream_with_context(generate_events()),

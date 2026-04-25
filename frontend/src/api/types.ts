@@ -80,6 +80,8 @@ export type SseEvent =
       estimated_total_seconds?: number
       stage?: string
       progress?: number
+      /** Server-side per-run log file. Read via GET /logs/<op_id>?tail=N. */
+      log_path?: string
     }
   | {
       type: 'progress'
@@ -113,7 +115,7 @@ export type SseEvent =
       performance?: Record<string, number>
       message?: string
     }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; log_path?: string }
   | { type: 'cancelled'; message: string }
 
 export interface HistoryEntry {

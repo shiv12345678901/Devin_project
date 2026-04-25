@@ -4,6 +4,7 @@ import time
 from flask import Blueprint, request, jsonify
 
 from utils.html_beautifier import HTMLBeautifier
+from utils.run_guard import begin_run, end_run, RunRejected
 from routes.helpers import (
     OUTPUT_FOLDER, HTML_FOLDER,
     get_next_batch_id,
@@ -35,18 +36,40 @@ def generate_html_direct():
         print(f"⚙️  Settings: {viewport_width}x{viewport_height}, zoom={zoom}x, overlap={overlap}px")
         print(f"{'='*60}\n")
 
-        # Save HTML
-        html_filename, _ = save_html(html_content, prefix="html")
+        # Single-flight + dedup guard. /generate-html is synchronous so a
+        # double-submit otherwise spawns two parallel Playwright runs that
+        # contend for the browser pool.
+        operation_id = f"html_{int(time.time() * 1000)}"
+        try:
+            begin_run(operation_id, '/generate-html', {
+                'html': html_content,
+                'zoom': zoom, 'overlap': overlap,
+                'viewport_width': viewport_width,
+                'viewport_height': viewport_height,
+                'max_screenshots': max_screenshots,
+            })
+        except RunRejected as rr:
+            return jsonify({
+                'error': rr.message,
+                'reason': rr.reason,
+                'active_operation_id': rr.operation_id,
+            }), 409
 
-        # Take screenshots (DRY #12)
-        screenshot_name = get_next_batch_id()
-        screenshot_files, screenshot_names = take_screenshots(
-            html_content, screenshot_name,
-            screenshot_folder=OUTPUT_FOLDER,
-            zoom=zoom, overlap=overlap,
-            viewport_width=viewport_width, viewport_height=viewport_height,
-            max_screenshots=max_screenshots
-        )
+        try:
+            # Save HTML
+            html_filename, _ = save_html(html_content, prefix="html")
+
+            # Take screenshots (DRY #12)
+            screenshot_name = get_next_batch_id()
+            screenshot_files, screenshot_names = take_screenshots(
+                html_content, screenshot_name,
+                screenshot_folder=OUTPUT_FOLDER,
+                zoom=zoom, overlap=overlap,
+                viewport_width=viewport_width, viewport_height=viewport_height,
+                max_screenshots=max_screenshots
+            )
+        finally:
+            end_run(operation_id)
 
         # Log to history (#8)
         log_generation({

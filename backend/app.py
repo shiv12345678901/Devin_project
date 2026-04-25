@@ -152,8 +152,23 @@ app.register_blueprint(resources_bp)
 
 @app.route('/healthz')
 def healthz():
-    """Liveness probe — cheap, always 200 if Flask can route a request."""
-    return jsonify({'ok': True, 'service': 'textbro-backend'})
+    """Liveness probe — cheap, always 200 if Flask can route a request.
+
+    Also reports whether a generation is currently in flight, so the UI
+    can show a live "another run is in progress" hint without polling
+    every blueprint individually.
+    """
+    try:
+        sys.path.insert(0, os.path.join(BACKEND_DIR, 'src'))
+        from utils.run_guard import current_run  # type: ignore  # noqa: E402
+        active = current_run()
+    except Exception:
+        active = None
+    return jsonify({
+        'ok': True,
+        'service': 'textbro-backend',
+        'active_operation_id': active,
+    })
 
 
 # Memoize the (relatively expensive) preflight result for a short window so a
@@ -369,6 +384,7 @@ _API_PATH_PREFIXES = (
     '/delete/',
     '/cache/',
     '/metrics/',
+    '/logs/',
 )
 
 

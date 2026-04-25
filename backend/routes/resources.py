@@ -337,3 +337,38 @@ def get_metrics(operation_id):
     if metrics:
         return jsonify(metrics)
     return jsonify({'error': 'Metrics not found'}), 404
+
+
+# ─── Per-run log tail ─────────────────────────────────────────────────────
+
+@resources_bp.route('/logs/<operation_id>', methods=['GET'])
+def get_run_log(operation_id):
+    """Return the last N lines of the per-run log file.
+
+    Designed for the frontend to drop into a "Backend log" panel so users
+    can see what the server is doing without ssh-ing into the host. Use
+    ``?tail=200`` to control how many lines are returned (default 200,
+    max 2000). Returns 404 if no log file exists for the given id.
+    """
+    from utils.run_logger import run_log_path
+    path = run_log_path(operation_id)
+    if not os.path.isfile(path):
+        return jsonify({'error': 'Log file not found', 'operation_id': operation_id}), 404
+    try:
+        tail = max(1, min(2000, int(request.args.get('tail', '200'))))
+    except (TypeError, ValueError):
+        tail = 200
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as fp:
+            lines = fp.readlines()
+    except OSError as e:
+        return jsonify({'error': f'Could not read log: {e}'}), 500
+    selected = lines[-tail:]
+    return jsonify({
+        'operation_id': operation_id,
+        'path': path,
+        'returned_lines': len(selected),
+        'total_lines': len(lines),
+        'truncated': len(lines) > tail,
+        'lines': [ln.rstrip('\n') for ln in selected],
+    })
