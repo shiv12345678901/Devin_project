@@ -144,24 +144,48 @@ def take_screenshots(html_content, screenshot_name, screenshot_folder=None,
     Shared screenshot helper that handles:
     1. Cleaning up old files with the same name
     2. Taking screenshots with Playwright
-    3. Returning (file_paths, basenames)
-    
+    3. Returning (file_paths, basenames-relative-to-screenshot_folder)
+
+    Each run gets its own ``batch <screenshot_name>/`` subdirectory inside
+    ``screenshot_folder``. Previously the engine wrote ``5(1).png``,
+    ``5(2).png`` directly into the parent folder while ``get_next_batch_id``
+    pre-created an *empty* ``batch 5/`` directory next to it — so output
+    accumulated as a flat soup of ``N(M).png`` files plus a parallel set of
+    empty ``batch N/`` folders. Writing into the batch folder keeps each
+    run self-contained, makes ZIP downloads naturally scoped, and matches
+    the ``batch 3/5(1).png`` paths the frontend already encodes.
+
     Returns:
-        tuple: (screenshot_files, screenshot_names)
+        tuple: (screenshot_files, screenshot_names) where ``screenshot_names``
+        are paths *relative to* ``screenshot_folder`` (e.g.
+        ``"batch 5/5(1).png"``) so they round-trip cleanly through the
+        ``/screenshots/<path:filename>`` endpoint.
     """
     folder = screenshot_folder or OUTPUT_FOLDER
     os.makedirs(folder, exist_ok=True)
 
-    screenshot_filename = f"{screenshot_name}.png"
-    screenshot_path = os.path.join(folder, screenshot_filename)
+    # Per-run subfolder. ``get_next_batch_id`` already created ``batch N/``
+    # for us; we just have to write into it. Fall back to plain ``batch
+    # <name>`` if a caller passed a name that wasn't reserved (defensive —
+    # ``mkdir(exist_ok=True)`` is idempotent).
+    batch_subdir = f"batch {screenshot_name}"
+    batch_folder = os.path.join(folder, batch_subdir)
+    os.makedirs(batch_folder, exist_ok=True)
 
-    # Delete old screenshots to prevent leftovers
-    old_pattern = os.path.join(folder, f"{screenshot_name}(*).png")
-    for old_file in glob.glob(old_pattern):
-        try:
-            os.remove(old_file)
-        except Exception:
-            pass
+    screenshot_filename = f"{screenshot_name}.png"
+    screenshot_path = os.path.join(batch_folder, screenshot_filename)
+
+    # Delete old screenshots to prevent leftovers (covers both the new
+    # subfolder layout and the legacy flat layout for in-place upgrades).
+    for old_pattern in (
+        os.path.join(batch_folder, f"{screenshot_name}(*).png"),
+        os.path.join(folder, f"{screenshot_name}(*).png"),
+    ):
+        for old_file in glob.glob(old_pattern):
+            try:
+                os.remove(old_file)
+            except Exception:
+                pass
 
     # Build kwargs
     kwargs = dict(
@@ -177,7 +201,12 @@ def take_screenshots(html_content, screenshot_name, screenshot_folder=None,
         kwargs['cancel_event'] = cancel_event
 
     screenshot_files = take_screenshot_playwright(html_content, screenshot_path, **kwargs)
-    screenshot_names = [os.path.basename(f) for f in screenshot_files]
+    # Return paths relative to ``folder`` so the frontend can request them
+    # as ``/screenshots/batch 5/5(1).png`` (the existing encoded-path
+    # support handles the slash correctly).
+    screenshot_names = [
+        os.path.relpath(f, folder).replace(os.sep, '/') for f in screenshot_files
+    ]
 
     return screenshot_files, screenshot_names
 

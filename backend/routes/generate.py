@@ -11,6 +11,8 @@ from flask import Blueprint, request, jsonify, Response, stream_with_context
 from core.ai_client import get_ai_response, verify_html_content, get_ai_revision, register_operation, cancel_operation, unregister_operation, CancelledError
 from utils.html_beautifier import HTMLBeautifier
 from utils.performance_metrics import metrics_tracker
+from utils.run_guard import begin_run, end_run, RunRejected
+from utils.run_logger import RunLogger, run_log_path
 from routes.helpers import (
     OUTPUT_FOLDER, HTML_FOLDER,
     get_next_batch_id, sanitize_folder_path,
@@ -275,8 +277,43 @@ def generate_sse():
         'outro_thumbnail_duration_sec': data.get('outro_thumbnail_duration_sec', 5),
     }
 
+    # Single-flight + dedup guard. Has to happen *before* we register the
+    # cancel event / metrics tracker so a rejected duplicate doesn't leak
+    # state. Reject with 409 + a structured error event so the React UI
+    # can show a useful "another run is already in progress" toast
+    # instead of a generic SSE failure.
+    try:
+        begin_run(operation_id, '/generate-sse', {
+            'text': input_text,
+            'screenshot_folder': screenshot_folder,
+            'html_folder': html_folder,
+            'zoom': zoom,
+            'overlap': overlap,
+            'viewport_width': viewport_width,
+            'viewport_height': viewport_height,
+            'max_screenshots': max_screenshots,
+            'output_name': output_name,
+            'project_info': project_info,
+            'video_export_settings': video_export_settings,
+        })
+    except RunRejected as rr:
+        return jsonify({
+            'error': rr.message,
+            'reason': rr.reason,
+            'active_operation_id': rr.operation_id,
+        }), 409
+
     cancel_event = register_operation(operation_id)
     metrics_tracker.start(operation_id)
+    run_logger = RunLogger(operation_id)
+    log_path = run_logger.path
+    run_logger.section(f"GENERATE-SSE  op={operation_id}  text_chars={len(input_text)}")
+    run_logger.info(
+        f"Settings: zoom={zoom} overlap={overlap} "
+        f"viewport={viewport_width}x{viewport_height} "
+        f"max_screenshots={max_screenshots} use_cache={use_cache} "
+        f"output_format={project_info.get('output_format')!r}"
+    )
 
     def generate_events():
         try:
@@ -286,7 +323,11 @@ def generate_sse():
                 model_choice, len(input_text), max_screenshots, 
                 use_cache=use_cache, enable_verification=enable_verification
             )
-            yield f"data: {json.dumps({'type': 'started', 'operation_id': operation_id, 'estimated_total_seconds': estimated_total_seconds})}\n\n"
+            run_logger.info(
+                f"Predicted total: ~{estimated_total_seconds}s  "
+                f"model={model_choice} verify={enable_verification}"
+            )
+            yield f"data: {json.dumps({'type': 'started', 'operation_id': operation_id, 'estimated_total_seconds': estimated_total_seconds, 'log_path': log_path})}\n\n"
             # Immediately follow `started` with an actual progress event so
             # the UI flips off 0%/"Starting…" even if the AI call is about
             # to block or the WSGI layer buffers the first chunk until it
@@ -338,24 +379,34 @@ def generate_sse():
             ai_started = time.time()
             ai_thread = threading.Thread(target=_ai_worker, daemon=True)
             ai_thread.start()
+            run_logger.info(f"AI worker started (model={model_choice})")
 
+            last_log_elapsed = -1
             while True:
                 try:
-                    msg = ai_q.get(timeout=2)
+                    # 1s timeout so the SSE stream gets fresh "still alive"
+                    # events at human-perceptible intervals; previously this
+                    # was 2s which left the progress bar visibly stalled.
+                    msg = ai_q.get(timeout=1)
                 except queue.Empty:
                     if cancel_event.is_set():
                         ai_thread.join(timeout=10)
                         metrics_tracker.end(ai_operation_id, success=False)
                         metrics_tracker.end(operation_id, success=False)
+                        run_logger.warn("AI phase cancelled by user")
                         yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
                         return
                     elapsed = int(time.time() - ai_started)
                     progress = min(28, 5 + max(1, elapsed // 3))
+                    if elapsed != last_log_elapsed and elapsed % 5 == 0:
+                        run_logger.info(f"AI still working… {elapsed}s elapsed")
+                        last_log_elapsed = elapsed
                     yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai', 'message': f'AI is generating HTML... {elapsed}s elapsed', 'progress': progress})}\n\n"
                     continue
 
                 if msg.get('kind') == '_done':
                     break
+            run_logger.info(f"AI worker finished in {int(time.time() - ai_started)}s")
 
             ai_thread.join(timeout=10)
             if ai_holder['error']:
@@ -379,6 +430,7 @@ def generate_sse():
 
             if enable_verification:
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai_verify', 'message': 'Verifying completeness...', 'progress': 20})}\n\n"
+                run_logger.info("AI verification phase starting")
 
                 # Verification revision loop. Previously this ran up to 3
                 # full re-generation passes, which on a slow AI endpoint
@@ -390,27 +442,35 @@ def generate_sse():
                 max_revisions = int(os.environ.get('AI_MAX_REVISIONS', '1'))
                 for attempt in range(max_revisions):
                     v_start = time.time()
+                    run_logger.info(f"Verification attempt {attempt + 1}/{max_revisions} starting")
                     feedback = verify_html_content(input_text, ai_content, cancel_event=cancel_event, model_choice=model_choice)
                     v_duration = time.time() - v_start
                     eta_tracker.record_verification(v_duration)
-                    
+                    run_logger.info(
+                        f"Verification attempt {attempt + 1} done in {v_duration:.1f}s "
+                        f"(verdict={'PASS' if not feedback or feedback == 'PASS' else 'REVISE'})"
+                    )
+
                     if cancel_event.is_set():
                         yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
                         return
-                        
+
                     if not feedback or feedback == "PASS":
                         break
-                        
+
                     yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai_revision', 'message': f'Revising missing content (Attempt {attempt + 1}/{max_revisions})...', 'progress': 20 + (attempt * 3)})}\n\n"
+                    run_logger.info(f"Asking AI for revision pass {attempt + 1}")
                     revised_content = get_ai_revision(input_text, ai_content, feedback, cancel_event=cancel_event, model_choice=model_choice)
-                    
+
                     if cancel_event.is_set():
                         yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
                         return
-                        
+
                     if revised_content:
                         ai_content = revised_content
+                        run_logger.info(f"Revision pass {attempt + 1} applied")
             else:
+                run_logger.info("AI verification skipped (enable_verification=False)")
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai_verify_skip', 'message': 'AI verification skipped...', 'progress': 20})}\n\n"
 
             yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai_done', 'message': 'AI response finalized', 'progress': 30})}\n\n"
@@ -477,6 +537,9 @@ def generate_sse():
             yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshot', 'message': 'Launching browser…', 'progress': 37})}\n\n"
             screenshot_started = time.time()
             last_screenshot_progress = 37
+            run_logger.info("Screenshot worker started")
+            last_logged_inner = -1
+            last_warmup_log = -1
 
             # Drain progress events until the worker signals completion.
             # The inner callback reports 10–90 within the screenshot phase;
@@ -484,7 +547,10 @@ def generate_sse():
             # keeps progressing evenly through the whole run.
             while True:
                 try:
-                    msg = progress_q.get(timeout=2)
+                    # 1s heartbeat so the SSE event loop notices cancels
+                    # quickly and the UI's "Ns elapsed" counter ticks at a
+                    # human-perceptible rate while the browser is rendering.
+                    msg = progress_q.get(timeout=1)
                 except queue.Empty:
                     # Keep the SSE connection alive and re-check cancel.
                     if cancel_event.is_set():
@@ -493,11 +559,15 @@ def generate_sse():
                         worker.join(timeout=10)
                         metrics_tracker.end(screenshot_operation_id, success=False)
                         metrics_tracker.end(operation_id, success=False)
+                        run_logger.warn("Screenshot phase cancelled by user")
                         yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
                         return
                     elapsed = int(time.time() - screenshot_started)
                     warmup_progress = min(45, last_screenshot_progress + 1)
                     last_screenshot_progress = warmup_progress
+                    if elapsed != last_warmup_log and elapsed % 5 == 0:
+                        run_logger.info(f"Browser still rendering… {elapsed}s elapsed")
+                        last_warmup_log = elapsed
                     yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshot', 'message': f'Browser is rendering screenshots... {elapsed}s elapsed', 'progress': warmup_progress})}\n\n"
                     continue
 
@@ -508,9 +578,16 @@ def generate_sse():
                 outer = 35 + int(inner * 0.60)
                 outer = max(35, min(outer, 95))
                 last_screenshot_progress = max(last_screenshot_progress, outer)
+                if inner != last_logged_inner and inner - last_logged_inner >= 5:
+                    run_logger.info(f"Screenshot progress: {inner}% — {msg.get('message', '')}")
+                    last_logged_inner = inner
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshot', 'message': msg.get('message', ''), 'progress': outer})}\n\n"
 
             worker.join(timeout=10)
+            run_logger.info(
+                f"Screenshot worker finished in {int(time.time() - screenshot_started)}s "
+                f"({len(result_holder.get('files') or [])} files)"
+            )
 
             if result_holder['error']:
                 metrics_tracker.end(screenshot_operation_id, success=False)
@@ -574,10 +651,14 @@ def generate_sse():
                         if not video_file or not os.path.exists(video_file):
                             raise RuntimeError(export_warning or 'PowerPoint did not produce an MP4 file')
                     else:
+                        # Pass the *explicit* screenshot list from this run —
+                        # using image_folder would glob every PNG in the
+                        # folder (including leftovers from previous runs)
+                        # and inject those as slides.
                         controller.create_presentation(
                             template_path=POWERPOINT_TEMPLATE_PATH,
-                            image_folder=screenshot_folder,
                             output_path=pptx_path,
+                            image_files=screenshot_files,
                             slide_duration=float(video_export_settings.get('slide_duration_sec') or 5),
                         )
                         presentation_file = pptx_path
@@ -635,11 +716,16 @@ def generate_sse():
             yield f"data: {json.dumps({'type': 'complete', 'success': True, 'message': final_message, 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': screenshot_names, 'screenshot_count': len(screenshot_files), 'screenshot_folder': screenshot_folder, 'presentation_file': presentation_file, 'video_file': video_file, 'operation_id': operation_id})}\n\n"
 
         except CancelledError:
+            run_logger.warn("Run cancelled (CancelledError)")
             yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            run_logger.error(f"Run failed: {e!r}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'log_path': log_path})}\n\n"
         finally:
             unregister_operation(operation_id)
+            end_run(operation_id)
+            run_logger.info("Run finished — log file closed")
+            run_logger.close()
 
     return Response(
         stream_with_context(generate_events()),

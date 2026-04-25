@@ -1,1 +1,538 @@
-""" PowerPoint COM Automation Module  This module handles COM automation for PowerPoint video export functionality. It provides a wrapper around the Windows COM interface to PowerPoint for exporting presentations to video format. """  import os import time from pathlib import Path from typing import Optional, Tuple import logging  # Import platform check utilities from src.utils.platform_check import is_windows, require_windows  # Set up logging logger = logging.getLogger(__name__)   class PowerPointExporter:     """Handles COM automation for PowerPoint video export.          This class provides methods to open PowerPoint presentations via COM,     export them to video format, and manage the PowerPoint application lifecycle.          Attributes:         ppt_app: PowerPoint Application COM object         presentation: Currently open presentation COM object     """          def __init__(self):         """Initialize COM interface to PowerPoint.                  Raises:             RuntimeError: If not running on Windows             ImportError: If pywin32 is not installed         """         # Ensure we're on Windows         require_windows()                  # Import Windows-specific modules         try:             import win32com.client             import pywintypes             import pythoncom             self.win32com = win32com             self.pywintypes = pywintypes             self.pythoncom = pythoncom         except ImportError as e:             raise ImportError(                 "pywin32 is required for PowerPoint automation. "                 "Install with: pip install pywin32"             ) from e                  self.ppt_app = None         self.presentation = None         self._com_initialized = False          def is_powerpoint_installed(self) -> bool:         """Check if PowerPoint is installed and accessible.                  Returns:             True if PowerPoint is available, False otherwise         """         if not is_windows():             return False                  try:             self.pythoncom.CoInitialize()             # Try to create PowerPoint application instance             ppt = self.win32com.client.DispatchEx("PowerPoint.Application")             ppt.Quit()             return True         except Exception as e:             logger.warning(f"PowerPoint not accessible: {e}")             return False         finally:             try:                 self.pythoncom.CoUninitialize()             except Exception:                 pass          def _initialize_powerpoint(self) -> None:         """Initialize PowerPoint application if not already initialized.                  Raises:             RuntimeError: If PowerPoint cannot be initialized         """         if self.ppt_app is None:             try:                 self.pythoncom.CoInitialize()                 self._com_initialized = True                 self.ppt_app = self.win32com.client.DispatchEx("PowerPoint.Application")                 # Make PowerPoint visible (required for CreateVideo)                 self.ppt_app.Visible = 1                 # Disable alerts (e.g., macro warnings, link updates) which can hang COM                 self.ppt_app.DisplayAlerts = 1  # 1 = ppAlertsNone                 logger.info("PowerPoint application initialized")             except Exception as e:                 if self._com_initialized:                     try:                         self.pythoncom.CoUninitialize()                     except Exception:                         pass                     self._com_initialized = False                 raise RuntimeError(                     f"Failed to initialize PowerPoint application: {e}"                 ) from e          def open_presentation(self, path: str) -> None:         """Open a presentation file in PowerPoint.                  Args:             path: Path to .pptx file to open                      Raises:             FileNotFoundError: If presentation file doesn't exist             RuntimeError: If PowerPoint cannot open the file         """         # Validate file exists         if not os.path.exists(path):             raise FileNotFoundError(f"Presentation file not found: {path}")                  # Convert to absolute path         abs_path = str(Path(path).resolve())                  # Initialize PowerPoint if needed         self._initialize_powerpoint()                  # Close any existing presentation         if self.presentation is not None:             try:                 self.presentation.Close()             except Exception as e:                 logger.warning(f"Error closing previous presentation: {e}")                  # Open the presentation with retry logic         max_retries = 3         retry_delay = 1  # seconds                  for attempt in range(max_retries):             try:                 self.presentation = self.ppt_app.Presentations.Open(                     abs_path,                     ReadOnly=False,                     Untitled=False,                     WithWindow=True                 )                 logger.info(f"Opened presentation: {abs_path}")                 return             except self.pywintypes.com_error as e:                 if attempt < max_retries - 1:                     logger.warning(                         f"Attempt {attempt + 1} failed to open presentation, "                         f"retrying in {retry_delay}s: {e}"                     )                     time.sleep(retry_delay)                     retry_delay *= 2  # Exponential backoff                 else:                     raise RuntimeError(                         f"Failed to open presentation after {max_retries} attempts: {e}"                     ) from e          def export_video(         self,         output_path: str,         width: int = 3840,         height: int = 2160,         fps: int = 30,         quality: int = 5     ) -> None:         """Export presentation to video using PowerPoint's native export.                  Uses PowerPoint's CreateVideo method via COM automation to export         the presentation to MP4 video format.                  Args:             output_path: Path where video file should be saved             width: Video width in pixels (default: 3840 for 4K)             height: Video height in pixels (default: 2160 for 4K)             fps: Frames per second (default: 30)             quality: Video quality 1-5, where 5 is highest (default: 5)                      Raises:             RuntimeError: If no presentation is open or export fails             ValueError: If quality is not in range 1-5         """         if self.presentation is None:             raise RuntimeError("No presentation is open. Call open_presentation() first.")                  # Validate quality parameter         if not 1 <= quality <= 5:             raise ValueError(f"Quality must be between 1 and 5, got: {quality}")                  # Ensure output directory exists         output_dir = Path(output_path).parent         output_dir.mkdir(parents=True, exist_ok=True)                  # Convert to absolute path         abs_output_path = str(Path(output_path).resolve())                  # Remove existing file if it exists         if os.path.exists(abs_output_path):             try:                 os.remove(abs_output_path)                 logger.info(f"Removed existing video file: {abs_output_path}")             except Exception as e:                 logger.warning(f"Could not remove existing file: {e}")                  # Export video with retry logic         max_retries = 3         retry_delay = 2  # seconds                  for attempt in range(max_retries):             try:                 # PowerPoint CreateVideo method parameters:                 # CreateVideo(FileName, UseTimingsAndNarrations, VertResolution,                  #             FramesPerSecond, Quality)                 #                  # UseTimingsAndNarrations: True to use slide timings                 # VertResolution: Vertical resolution in pixels                 # FramesPerSecond: Frames per second                 # Quality: 1-5 where 5 is highest quality                                  logger.info(                     f"Starting video export: {abs_output_path} "                     f"({width}x{height}, {fps}fps, quality={quality})"                 )                                  self.presentation.CreateVideo(                     abs_output_path,                     True,  # Use timings and narrations                     height,  # Vertical resolution (PowerPoint uses vertical resolution)                     fps,                     quality                 )                                  # Wait for export to complete                 # PowerPoint's CreateVideo is asynchronous, so we need to wait                 # for the file to be created and finalized                 self._wait_for_video_export(abs_output_path)                                  logger.info(f"Video export completed: {abs_output_path}")                 return                              except self.pywintypes.com_error as e:                 if attempt < max_retries - 1:                     logger.warning(                         f"Attempt {attempt + 1} failed to export video, "                         f"retrying in {retry_delay}s: {e}"                     )                     time.sleep(retry_delay)                     retry_delay *= 2  # Exponential backoff                 else:                     raise RuntimeError(                         f"Failed to export video after {max_retries} attempts: {e}"                     ) from e          def _wait_for_video_export(         self,          output_path: str,          timeout: int = 1800,         check_interval: int = 5     ) -> None:         """Wait for video export to complete.                  PowerPoint's CreateVideo method is asynchronous, so we need to wait         for the file to be created and finalized before returning.                  Args:             output_path: Path to the video file being created             timeout: Maximum time to wait in seconds (default: 1800 = 30 minutes)             check_interval: How often to check file status in seconds (default: 5)                      Raises:             TimeoutError: If export doesn't complete within timeout         """         start_time = time.time()         last_size = 0         stable_count = 0         stable_threshold = 3  # Number of checks with same size to consider complete                  logger.info(f"Waiting for video export to complete (timeout: {timeout}s)...")                  while True:             elapsed = time.time() - start_time                          # Check timeout             if elapsed > timeout:                 raise TimeoutError(                     f"Video export did not complete within {timeout} seconds"                 )                          # Check if file exists and get size             if os.path.exists(output_path):                 try:                     current_size = os.path.getsize(output_path)                                          # Check if file size is stable (not growing)                     if current_size == last_size and current_size > 0:                         stable_count += 1                         if stable_count >= stable_threshold:                             # File size has been stable for multiple checks                             logger.info(                                 f"Video export complete. File size: {current_size} bytes"                             )                             return                     else:                         stable_count = 0                         last_size = current_size                         logger.debug(                             f"Video export in progress... Size: {current_size} bytes "                             f"(elapsed: {elapsed:.1f}s)"                         )                 except OSError as e:                     # File might be locked during write                     logger.debug(f"Could not check file size: {e}")                          # Wait before next check             time.sleep(check_interval)          def create_from_template(         self,         template_path: str,         image_files: list,         output_path: str,         base_slide_index: int = 3     ) -> str:         """         Create presentation from template using COM automation.                  Replicates VBA macro logic:         1. Open template         2. Remove old content slides between base_slide_index and last slide         3. Duplicate base slide for each image (preserving watermark/transitions)         4. Insert images as background (sent to back)         5. Save As to output_path                  Args:             template_path: Path to .pptm template file             image_files: List of image file paths (already sorted)             output_path: Where to save the presentation             base_slide_index: 1-based index of the base content slide (default: 3)                      Returns:             Path to created presentation file         """         import re                  # Validate         if not os.path.exists(template_path):             raise FileNotFoundError(f"Template not found: {template_path}")                  if not image_files:             raise ValueError("No image files provided")                  # Sort image files by numeric order: N(M).png -> sort by M         def sort_key(filepath):             basename = os.path.basename(filepath)             # Match pattern like "1(2).png" or "screenshot_1(3).png"             match = re.search(r'\((\d+)\)', basename)             if match:                 return int(match.group(1))             # Fallback: try any number in filename             nums = re.findall(r'\d+', basename)             return int(nums[-1]) if nums else 0                  sorted_images = sorted(image_files, key=sort_key)                  # Convert paths to absolute         abs_template = str(Path(template_path).resolve())         abs_output = str(Path(output_path).resolve())                  # Ensure output directory exists         Path(output_path).parent.mkdir(parents=True, exist_ok=True)                  # Initialize PowerPoint         self._initialize_powerpoint()                  try:             # Open template             print(f"DEBUG: Opening template {abs_template}...")             # Use explicit integer constants for COM booleans: msoFalse = 0, msoTrue = -1             self.presentation = self.ppt_app.Presentations.Open(                 abs_template,                 ReadOnly=0,                 Untitled=0,                 WithWindow=-1             )                          total_slides = self.presentation.Slides.Count             print(f"DEBUG: Template opened successfully. Total slides: {total_slides}")             logger.info(f"Template opened: {total_slides} slides")                          if total_slides < base_slide_index:                 raise ValueError(                     f"Template has only {total_slides} slides, "                     f"but base_slide_index is {base_slide_index}"                 )                          # Step 1: Remove old content slides between base slide and last slide             # Keep: slides 1 to base_slide_index, and the last slide (end slide)             # Remove: slides (base_slide_index + 1) to (total_slides - 1)             if total_slides > base_slide_index + 1:                 # Delete from the end backward to avoid index shifting                 for i in range(total_slides - 1, base_slide_index, -1):                     try:                         self.presentation.Slides(i).Delete()                         logger.debug(f"Deleted old content slide at index {i}")                     except Exception as e:                         logger.warning(f"Could not delete slide {i}: {e}")                          # After deletion, we should have:             # slides 1..base_slide_index, and the last slide (end)             remaining = self.presentation.Slides.Count             logger.info(f"After cleanup: {remaining} slides remaining")                          # Step 2: Duplicate base slide for each image             # The base slide is at index base_slide_index (1-based)             base_slide = self.presentation.Slides(base_slide_index)                          # Duplicate (count - 1) times (base slide itself will get the first image)             for i in range(len(sorted_images) - 1):                 base_slide.Duplicate()                          logger.info(f"Duplicated base slide {len(sorted_images) - 1} times")                          # Step 3: Insert images into slides starting at base_slide_index             slide_width = self.presentation.PageSetup.SlideWidth             slide_height = self.presentation.PageSetup.SlideHeight                          for i, img_path in enumerate(sorted_images):                 slide_idx = base_slide_index + i                 abs_img = str(Path(img_path).resolve())                                  if not os.path.exists(abs_img):                     logger.warning(f"Image not found, skipping: {abs_img}")                     continue                                  slide = self.presentation.Slides(slide_idx)                                  print(f"DEBUG: Inserting image {abs_img} into slide {slide_idx}...")                 # Add picture: msoFalse = 0, msoTrue = -1                 pic = slide.Shapes.AddPicture(                     FileName=abs_img,                     LinkToFile=0,     # msoFalse                     SaveWithDocument=-1, # msoTrue                     Left=0,                     Top=0,                     Width=slide_width,                     Height=slide_height                 )                                  # Send image to back (behind watermark and other elements)                 pic.ZOrder(1) # 1 = msoSendToBack                 print(f"DEBUG: Image {i+1}/{len(sorted_images)} inserted successfully.")                                  logger.debug(f"Inserted image {os.path.basename(img_path)} into slide {slide_idx}")                          logger.info(f"Inserted {len(sorted_images)} images")                          # Step 4: Save As to output path             # ppSaveAsDefault = 11, ppSaveAsOpenXMLPresentation = 24             # ppSaveAsOpenXMLPresentationMacroEnabled = 25             ext = os.path.splitext(output_path)[1].lower()             if ext == '.pptm':                 save_format = 25  # ppSaveAsOpenXMLPresentationMacroEnabled             else:                 save_format = 24  # ppSaveAsOpenXMLPresentation                          print(f"DEBUG: Saving presentation as {abs_output} (format {save_format})...")             self.presentation.SaveAs(abs_output, save_format)             print("DEBUG: Presentation saved successfully.")             logger.info(f"Presentation saved: {abs_output}")                          return output_path                      except Exception as e:             logger.error(f"Error creating presentation from template: {e}")             raise                def close_presentation(self, save: bool = False) -> None:         """Close the current presentation.                  Args:             save: Whether to save changes before closing (default: False)         """         if self.presentation is not None:             try:                 if save:                     self.presentation.Save()                 self.presentation.Close()                 logger.info("Presentation closed")             except Exception as e:                 logger.warning(f"Error closing presentation: {e}")             finally:                 self.presentation = None          def quit_powerpoint(self) -> None:         """Quit PowerPoint application.                  This should be called when done with all PowerPoint operations         to properly clean up COM resources.         """         # Close presentation if open         if self.presentation is not None:             self.close_presentation(save=False)                  # Quit PowerPoint application         if self.ppt_app is not None:             try:                 self.ppt_app.Quit()                 logger.info("PowerPoint application quit")             except Exception as e:                 logger.warning(f"Error quitting PowerPoint: {e}")             finally:                 self.ppt_app = None                  if self._com_initialized:             try:                 self.pythoncom.CoUninitialize()             except Exception as e:                 logger.warning(f"Error uninitializing COM: {e}")             finally:                 self._com_initialized = False          def __enter__(self):         """Context manager entry."""         return self          def __exit__(self, exc_type, exc_val, exc_tb):         """Context manager exit - ensures cleanup."""         self.quit_powerpoint()         return False
+"""
+PowerPoint COM Automation Module
+
+This module handles COM automation for PowerPoint video export functionality.
+It provides a wrapper around the Windows COM interface to PowerPoint for
+exporting presentations to video format.
+"""
+
+import os
+import time
+from pathlib import Path
+from typing import Optional, Tuple
+import logging
+
+# Import platform check utilities
+from src.utils.platform_check import is_windows, require_windows
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+
+class PowerPointExporter:
+    """Handles COM automation for PowerPoint video export.
+    
+    This class provides methods to open PowerPoint presentations via COM,
+    export them to video format, and manage the PowerPoint application lifecycle.
+    
+    Attributes:
+        ppt_app: PowerPoint Application COM object
+        presentation: Currently open presentation COM object
+    """
+    
+    def __init__(self):
+        """Initialize COM interface to PowerPoint.
+        
+        Raises:
+            RuntimeError: If not running on Windows
+            ImportError: If pywin32 is not installed
+        """
+        # Ensure we're on Windows
+        require_windows()
+        
+        # Import Windows-specific modules
+        try:
+            import win32com.client
+            import pywintypes
+            import pythoncom
+            self.win32com = win32com
+            self.pywintypes = pywintypes
+            self.pythoncom = pythoncom
+        except ImportError as e:
+            raise ImportError(
+                "pywin32 is required for PowerPoint automation. "
+                "Install with: pip install pywin32"
+            ) from e
+        
+        self.ppt_app = None
+        self.presentation = None
+        self._com_initialized = False
+    
+    def is_powerpoint_installed(self) -> bool:
+        """Check if PowerPoint is installed and accessible.
+        
+        Returns:
+            True if PowerPoint is available, False otherwise
+        """
+        if not is_windows():
+            return False
+        
+        try:
+            self.pythoncom.CoInitialize()
+            # Try to create PowerPoint application instance
+            ppt = self.win32com.client.DispatchEx("PowerPoint.Application")
+            ppt.Quit()
+            return True
+        except Exception as e:
+            logger.warning(f"PowerPoint not accessible: {e}")
+            return False
+        finally:
+            try:
+                self.pythoncom.CoUninitialize()
+            except Exception:
+                pass
+    
+    def _initialize_powerpoint(self) -> None:
+        """Initialize PowerPoint application if not already initialized.
+        
+        Raises:
+            RuntimeError: If PowerPoint cannot be initialized
+        """
+        if self.ppt_app is None:
+            try:
+                self.pythoncom.CoInitialize()
+                self._com_initialized = True
+                self.ppt_app = self.win32com.client.DispatchEx("PowerPoint.Application")
+                # Make PowerPoint visible (required for CreateVideo)
+                self.ppt_app.Visible = 1
+                # Disable alerts (e.g., macro warnings, link updates) which can hang COM
+                self.ppt_app.DisplayAlerts = 1  # 1 = ppAlertsNone
+                logger.info("PowerPoint application initialized")
+            except Exception as e:
+                if self._com_initialized:
+                    try:
+                        self.pythoncom.CoUninitialize()
+                    except Exception:
+                        pass
+                    self._com_initialized = False
+                raise RuntimeError(
+                    f"Failed to initialize PowerPoint application: {e}"
+                ) from e
+    
+    def open_presentation(self, path: str) -> None:
+        """Open a presentation file in PowerPoint.
+        
+        Args:
+            path: Path to .pptx file to open
+            
+        Raises:
+            FileNotFoundError: If presentation file doesn't exist
+            RuntimeError: If PowerPoint cannot open the file
+        """
+        # Validate file exists
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Presentation file not found: {path}")
+        
+        # Convert to absolute path
+        abs_path = str(Path(path).resolve())
+        
+        # Initialize PowerPoint if needed
+        self._initialize_powerpoint()
+        
+        # Close any existing presentation
+        if self.presentation is not None:
+            try:
+                self.presentation.Close()
+            except Exception as e:
+                logger.warning(f"Error closing previous presentation: {e}")
+        
+        # Open the presentation with retry logic
+        max_retries = 3
+        retry_delay = 1  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                self.presentation = self.ppt_app.Presentations.Open(
+                    abs_path,
+                    ReadOnly=False,
+                    Untitled=False,
+                    WithWindow=True
+                )
+                logger.info(f"Opened presentation: {abs_path}")
+                return
+            except self.pywintypes.com_error as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Attempt {attempt + 1} failed to open presentation, "
+                        f"retrying in {retry_delay}s: {e}"
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    raise RuntimeError(
+                        f"Failed to open presentation after {max_retries} attempts: {e}"
+                    ) from e
+    
+    def export_video(
+        self,
+        output_path: str,
+        width: int = 3840,
+        height: int = 2160,
+        fps: int = 30,
+        quality: int = 5
+    ) -> None:
+        """Export presentation to video using PowerPoint's native export.
+        
+        Uses PowerPoint's CreateVideo method via COM automation to export
+        the presentation to MP4 video format.
+        
+        Args:
+            output_path: Path where video file should be saved
+            width: Video width in pixels (default: 3840 for 4K)
+            height: Video height in pixels (default: 2160 for 4K)
+            fps: Frames per second (default: 30)
+            quality: Video quality 1-5, where 5 is highest (default: 5)
+            
+        Raises:
+            RuntimeError: If no presentation is open or export fails
+            ValueError: If quality is not in range 1-5
+        """
+        if self.presentation is None:
+            raise RuntimeError("No presentation is open. Call open_presentation() first.")
+        
+        # Validate quality parameter
+        if not 1 <= quality <= 5:
+            raise ValueError(f"Quality must be between 1 and 5, got: {quality}")
+        
+        # Ensure output directory exists
+        output_dir = Path(output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Convert to absolute path
+        abs_output_path = str(Path(output_path).resolve())
+        
+        # Remove existing file if it exists
+        if os.path.exists(abs_output_path):
+            try:
+                os.remove(abs_output_path)
+                logger.info(f"Removed existing video file: {abs_output_path}")
+            except Exception as e:
+                logger.warning(f"Could not remove existing file: {e}")
+        
+        # Export video with retry logic
+        max_retries = 3
+        retry_delay = 2  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                # PowerPoint CreateVideo method parameters:
+                # CreateVideo(FileName, UseTimingsAndNarrations, VertResolution, 
+                #             FramesPerSecond, Quality)
+                # 
+                # UseTimingsAndNarrations: True to use slide timings
+                # VertResolution: Vertical resolution in pixels
+                # FramesPerSecond: Frames per second
+                # Quality: 1-5 where 5 is highest quality
+                
+                logger.info(
+                    f"Starting video export: {abs_output_path} "
+                    f"({width}x{height}, {fps}fps, quality={quality})"
+                )
+                
+                self.presentation.CreateVideo(
+                    abs_output_path,
+                    True,  # Use timings and narrations
+                    height,  # Vertical resolution (PowerPoint uses vertical resolution)
+                    fps,
+                    quality
+                )
+                
+                # Wait for export to complete
+                # PowerPoint's CreateVideo is asynchronous, so we need to wait
+                # for the file to be created and finalized
+                self._wait_for_video_export(abs_output_path)
+                
+                logger.info(f"Video export completed: {abs_output_path}")
+                return
+                
+            except self.pywintypes.com_error as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Attempt {attempt + 1} failed to export video, "
+                        f"retrying in {retry_delay}s: {e}"
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    raise RuntimeError(
+                        f"Failed to export video after {max_retries} attempts: {e}"
+                    ) from e
+    
+    def _wait_for_video_export(
+        self, 
+        output_path: str, 
+        timeout: int = 1800,
+        check_interval: int = 5
+    ) -> None:
+        """Wait for video export to complete.
+        
+        PowerPoint's CreateVideo method is asynchronous, so we need to wait
+        for the file to be created and finalized before returning.
+        
+        Args:
+            output_path: Path to the video file being created
+            timeout: Maximum time to wait in seconds (default: 1800 = 30 minutes)
+            check_interval: How often to check file status in seconds (default: 5)
+            
+        Raises:
+            TimeoutError: If export doesn't complete within timeout
+        """
+        start_time = time.time()
+        last_size = 0
+        stable_count = 0
+        stable_threshold = 3  # Number of checks with same size to consider complete
+        
+        logger.info(f"Waiting for video export to complete (timeout: {timeout}s)...")
+        
+        while True:
+            elapsed = time.time() - start_time
+            
+            # Check timeout
+            if elapsed > timeout:
+                raise TimeoutError(
+                    f"Video export did not complete within {timeout} seconds"
+                )
+            
+            # Check if file exists and get size
+            if os.path.exists(output_path):
+                try:
+                    current_size = os.path.getsize(output_path)
+                    
+                    # Check if file size is stable (not growing)
+                    if current_size == last_size and current_size > 0:
+                        stable_count += 1
+                        if stable_count >= stable_threshold:
+                            # File size has been stable for multiple checks
+                            logger.info(
+                                f"Video export complete. File size: {current_size} bytes"
+                            )
+                            return
+                    else:
+                        stable_count = 0
+                        last_size = current_size
+                        logger.debug(
+                            f"Video export in progress... Size: {current_size} bytes "
+                            f"(elapsed: {elapsed:.1f}s)"
+                        )
+                except OSError as e:
+                    # File might be locked during write
+                    logger.debug(f"Could not check file size: {e}")
+            
+            # Wait before next check
+            time.sleep(check_interval)
+    
+    def create_from_template(
+        self,
+        template_path: str,
+        image_files: list,
+        output_path: str,
+        base_slide_index: int = 3
+    ) -> str:
+        """
+        Create presentation from template using COM automation.
+        
+        Replicates VBA macro logic:
+        1. Open template
+        2. Remove old content slides between base_slide_index and last slide
+        3. Duplicate base slide for each image (preserving watermark/transitions)
+        4. Insert images as background (sent to back)
+        5. Save As to output_path
+        
+        Args:
+            template_path: Path to .pptm template file
+            image_files: List of image file paths (already sorted)
+            output_path: Where to save the presentation
+            base_slide_index: 1-based index of the base content slide (default: 3)
+            
+        Returns:
+            Path to created presentation file
+        """
+        import re
+        
+        # Validate
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Template not found: {template_path}")
+        
+        if not image_files:
+            raise ValueError("No image files provided")
+        
+        # Sort image files by numeric order: N(M).png -> sort by M
+        def sort_key(filepath):
+            basename = os.path.basename(filepath)
+            # Match pattern like "1(2).png" or "screenshot_1(3).png"
+            match = re.search(r'\((\d+)\)', basename)
+            if match:
+                return int(match.group(1))
+            # Fallback: try any number in filename
+            nums = re.findall(r'\d+', basename)
+            return int(nums[-1]) if nums else 0
+        
+        sorted_images = sorted(image_files, key=sort_key)
+        
+        # Convert paths to absolute
+        abs_template = str(Path(template_path).resolve())
+        abs_output = str(Path(output_path).resolve())
+        
+        # Ensure output directory exists
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize PowerPoint
+        self._initialize_powerpoint()
+        
+        try:
+            # Open template
+            print(f"DEBUG: Opening template {abs_template}...")
+            # Use explicit integer constants for COM booleans: msoFalse = 0, msoTrue = -1
+            self.presentation = self.ppt_app.Presentations.Open(
+                abs_template,
+                ReadOnly=0,
+                Untitled=0,
+                WithWindow=-1
+            )
+            
+            total_slides = self.presentation.Slides.Count
+            print(f"DEBUG: Template opened successfully. Total slides: {total_slides}")
+            logger.info(f"Template opened: {total_slides} slides")
+            
+            if total_slides < base_slide_index:
+                raise ValueError(
+                    f"Template has only {total_slides} slides, "
+                    f"but base_slide_index is {base_slide_index}"
+                )
+            
+            # Step 1: Remove old content slides between base slide and last slide
+            # Keep: slides 1 to base_slide_index, and the last slide (end slide)
+            # Remove: slides (base_slide_index + 1) to (total_slides - 1)
+            if total_slides > base_slide_index + 1:
+                # Delete from the end backward to avoid index shifting
+                for i in range(total_slides - 1, base_slide_index, -1):
+                    try:
+                        self.presentation.Slides(i).Delete()
+                        logger.debug(f"Deleted old content slide at index {i}")
+                    except Exception as e:
+                        logger.warning(f"Could not delete slide {i}: {e}")
+            
+            # After deletion, we should have:
+            # slides 1..base_slide_index, and the last slide (end)
+            remaining = self.presentation.Slides.Count
+            logger.info(f"After cleanup: {remaining} slides remaining")
+            
+            # Step 2: Duplicate base slide for each image
+            # The base slide is at index base_slide_index (1-based)
+            base_slide = self.presentation.Slides(base_slide_index)
+            
+            # Duplicate (count - 1) times (base slide itself will get the first image)
+            for i in range(len(sorted_images) - 1):
+                base_slide.Duplicate()
+            
+            logger.info(f"Duplicated base slide {len(sorted_images) - 1} times")
+            
+            # Step 3: Insert images into slides starting at base_slide_index
+            slide_width = self.presentation.PageSetup.SlideWidth
+            slide_height = self.presentation.PageSetup.SlideHeight
+            
+            for i, img_path in enumerate(sorted_images):
+                slide_idx = base_slide_index + i
+                abs_img = str(Path(img_path).resolve())
+                
+                if not os.path.exists(abs_img):
+                    logger.warning(f"Image not found, skipping: {abs_img}")
+                    continue
+                
+                slide = self.presentation.Slides(slide_idx)
+                
+                print(f"DEBUG: Inserting image {abs_img} into slide {slide_idx}...")
+                # Add picture: msoFalse = 0, msoTrue = -1
+                pic = slide.Shapes.AddPicture(
+                    FileName=abs_img,
+                    LinkToFile=0,     # msoFalse
+                    SaveWithDocument=-1, # msoTrue
+                    Left=0,
+                    Top=0,
+                    Width=slide_width,
+                    Height=slide_height
+                )
+                
+                # Send image to back (behind watermark and other elements)
+                pic.ZOrder(1) # 1 = msoSendToBack
+                print(f"DEBUG: Image {i+1}/{len(sorted_images)} inserted successfully.")
+                
+                logger.debug(f"Inserted image {os.path.basename(img_path)} into slide {slide_idx}")
+            
+            logger.info(f"Inserted {len(sorted_images)} images")
+            
+            # Step 4: Save As to output path
+            # ppSaveAsDefault = 11, ppSaveAsOpenXMLPresentation = 24
+            # ppSaveAsOpenXMLPresentationMacroEnabled = 25
+            ext = os.path.splitext(output_path)[1].lower()
+            if ext == '.pptm':
+                save_format = 25  # ppSaveAsOpenXMLPresentationMacroEnabled
+            else:
+                save_format = 24  # ppSaveAsOpenXMLPresentation
+            
+            print(f"DEBUG: Saving presentation as {abs_output} (format {save_format})...")
+            self.presentation.SaveAs(abs_output, save_format)
+            print("DEBUG: Presentation saved successfully.")
+            logger.info(f"Presentation saved: {abs_output}")
+            
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Error creating presentation from template: {e}")
+            raise
+    
+
+    
+    def close_presentation(self, save: bool = False) -> None:
+        """Close the current presentation.
+        
+        Args:
+            save: Whether to save changes before closing (default: False)
+        """
+        if self.presentation is not None:
+            try:
+                if save:
+                    self.presentation.Save()
+                self.presentation.Close()
+                logger.info("Presentation closed")
+            except Exception as e:
+                logger.warning(f"Error closing presentation: {e}")
+            finally:
+                self.presentation = None
+    
+    def quit_powerpoint(self) -> None:
+        """Quit PowerPoint application.
+        
+        This should be called when done with all PowerPoint operations
+        to properly clean up COM resources.
+        """
+        # Close presentation if open
+        if self.presentation is not None:
+            self.close_presentation(save=False)
+        
+        # Quit PowerPoint application
+        if self.ppt_app is not None:
+            try:
+                self.ppt_app.Quit()
+                logger.info("PowerPoint application quit")
+            except Exception as e:
+                logger.warning(f"Error quitting PowerPoint: {e}")
+            finally:
+                self.ppt_app = None
+        
+        if self._com_initialized:
+            try:
+                self.pythoncom.CoUninitialize()
+            except Exception as e:
+                logger.warning(f"Error uninitializing COM: {e}")
+            finally:
+                self._com_initialized = False
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensures cleanup."""
+        self.quit_powerpoint()
+        return False
