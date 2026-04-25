@@ -19,6 +19,7 @@ import ScreenshotGallery from '../components/ScreenshotGallery'
 import PreflightModal from '../components/PreflightModal'
 import Toggle from '../components/Toggle'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
+import { useBackendPlatform } from '../hooks/useBackendPlatform'
 import { api } from '../api/client'
 import { useSettings } from '../store/settings'
 import type { GenerateSettings, OutputFormat } from '../api/types'
@@ -680,14 +681,31 @@ function ProjectStep({
           })}
         </div>
         {errors.output_format && <FieldError message={errors.output_format} />}
-        {(settings.output_format === 'pptx' || settings.output_format === 'video') && (
-          <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-            Heads up: PowerPoint / MP4 export needs a Windows host with PowerPoint installed — the
-            preflight check will verify this before the run starts.
-          </p>
-        )}
+        <WindowsOnlyWarning outputFormat={settings.output_format ?? 'images'} />
       </div>
     </>
+  )
+}
+
+function WindowsOnlyWarning({ outputFormat }: { outputFormat: OutputFormat }) {
+  const platform = useBackendPlatform()
+  const needsWindows = outputFormat === 'pptx' || outputFormat === 'video'
+  if (!needsWindows) return null
+  const label = outputFormat === 'video' ? 'MP4 video' : 'PowerPoint deck'
+  if (platform === 'non-windows') {
+    return (
+      <p className="mt-2 rounded-md border border-rose-300/60 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+        <strong>{label}</strong> export won't work on this backend — it requires a Windows host
+        with PowerPoint installed. Pick <em>Screenshots</em> or <em>HTML file</em> to avoid
+        surprise output. The run will be refused if you proceed.
+      </p>
+    )
+  }
+  return (
+    <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+      Heads up: PowerPoint / MP4 export needs a Windows host with PowerPoint installed — the
+      preflight check will verify this before the run starts.
+    </p>
   )
 }
 

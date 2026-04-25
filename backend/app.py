@@ -160,7 +160,7 @@ def healthz():
 # wizard-initiated triple-call (component mount + retry + parent re-render)
 # doesn't spawn three POWERPNT.EXE processes on Windows.
 import threading as _preflight_threading
-_PREFLIGHT_TTL = float(os.environ.get('PREFLIGHT_CACHE_SECS', '15'))
+_PREFLIGHT_TTL = float(os.environ.get('PREFLIGHT_CACHE_SECS', '30'))
 _preflight_cache: dict = {'value': None, 'fetched_at': 0.0}
 _preflight_lock = _preflight_threading.Lock()
 

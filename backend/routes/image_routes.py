@@ -237,6 +237,7 @@ def image_to_screenshots_sse():
                     'html_file': html_filename,
                     'screenshot_folder': f"batch {batch_id}",
                     'screenshot_count': len(screenshot_files),
+                    'operation_id': operation_id,
                     'settings': {'zoom': zoom, 'overlap': overlap, 'width': viewport_width, 'height': viewport_height},
                 })
 

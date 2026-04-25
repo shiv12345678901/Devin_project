@@ -27,7 +27,7 @@ export default function Settings() {
     setPingState('pinging')
     setPingError('')
     try {
-      await api.preflight()
+      await api.preflight({ fresh: true })
       setPingState('ok')
     } catch (e) {
       setPingState('error')

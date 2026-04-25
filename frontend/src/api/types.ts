@@ -122,6 +122,8 @@ export interface HistoryEntry {
   html_file?: string
   screenshot_folder?: string
   screenshot_count?: number
+  /** Included since the dedup work in #8 — matches the tracked run's operationId. */
+  operation_id?: string
   settings?: Record<string, unknown>
 }
 

@@ -12,7 +12,8 @@ import {
   XCircle,
 } from 'lucide-react'
 
-import { api } from '../api/client'
+import { RefreshCw } from 'lucide-react'
+import { api, invalidatePreflightCache } from '../api/client'
 import ErrorCard from '../components/ErrorCard'
 import { useRuns, formatRelative } from '../store/runs'
 import type { PreflightResponse } from '../api/types'
@@ -44,31 +45,41 @@ export default function Home() {
   const [preflightErr, setPreflightErr] = useState<string | null>(null)
 
   const [reloadToken, setReloadToken] = useState(0)
-  const loadPreflight = useCallback(() => setReloadToken((n) => n + 1), [])
+  const [forceFresh, setForceFresh] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const loadPreflight = useCallback(() => {
+    // Explicit user-initiated refresh → bypass the 30s client cache.
+    invalidatePreflightCache()
+    setForceFresh(true)
+    setReloadToken((n) => n + 1)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
-    // Defer the "clear previous result" setState past the effect body so
-    // the react-hooks/set-state-in-effect rule stays happy. The timeout
-    // guarantees React has flushed this pass before we mutate state.
     const t = setTimeout(() => {
       if (cancelled) return
       setPreflightErr(null)
-      setPreflight(null)
+      setRefreshing(true)
       api
-        .preflight()
+        .preflight(forceFresh ? { fresh: true } : undefined)
         .then((r) => {
           if (!cancelled) setPreflight(r)
         })
         .catch((e) => {
           if (!cancelled) setPreflightErr(e instanceof Error ? e.message : String(e))
         })
+        .finally(() => {
+          if (!cancelled) {
+            setRefreshing(false)
+            setForceFresh(false)
+          }
+        })
     }, 0)
     return () => {
       cancelled = true
       clearTimeout(t)
     }
-  }, [reloadToken])
+  }, [reloadToken, forceFresh])
 
   const stats = useMemo(() => {
     const running = runs.filter((r) => r.status === 'running').length
@@ -136,15 +147,30 @@ export default function Home() {
 
       {/* ─── Preflight ──────────────────────────────────────────────────── */}
       <section>
-        <SectionHeader
-          eyebrow="System"
-          title="Backend preflight"
-          hint={
-            <>
-              Pulled from <code className="font-mono text-[12px]">GET /preflight</code>
-            </>
-          }
-        />
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <SectionHeader
+            eyebrow="System"
+            title="Backend preflight"
+            hint={
+              <>
+                Cached for 30s — hit <em>Refresh</em> for a live probe.
+              </>
+            }
+          />
+          <button
+            type="button"
+            onClick={loadPreflight}
+            disabled={refreshing}
+            className="btn-ghost btn-sm shrink-0 text-muted hover:text-[rgb(var(--text-strong))]"
+            aria-label="Refresh preflight"
+          >
+            <RefreshCw
+              size={14}
+              className={refreshing ? 'animate-spin' : ''}
+            />
+            {refreshing ? 'Checking…' : 'Refresh'}
+          </button>
+        </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {preflight
             ? (['platform', 'backend', 'ai_config', 'powerpoint'] as const).map(

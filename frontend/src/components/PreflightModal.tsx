@@ -57,7 +57,10 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
       try {
         // Walk through the visual rows so the user sees each one light up in
         // sequence, even though the backend reports them all at once.
-        const res = await api.preflight()
+        // Always request fresh — the user is gating a run behind this
+        // modal and needs the actual current state of the backend, not a
+        // 30-second-stale cached result.
+        const res = await api.preflight({ fresh: true })
         if (cancelled) return
         for (const row of ROWS) {
           setLoadingKey(row.key)

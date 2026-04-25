@@ -56,6 +56,23 @@ async function getJson<T>(path: string): Promise<T> {
   return data
 }
 
+// ─── Preflight cache ───────────────────────────────────────────────────────
+// User complaint: "preflight being hit every 2-3s from the UI". Nothing in
+// the codebase polls that fast but components fetch preflight on mount,
+// so a tab-happy user can easily trigger 5+ calls in a second. Cache the
+// response for 30s and coalesce concurrent lookups to a single request.
+const PREFLIGHT_CACHE_MS = 30_000
+interface PreflightCache {
+  value: PreflightResponse | null
+  fetchedAt: number
+  inFlight: Promise<PreflightResponse> | null
+}
+let _preflightCache: PreflightCache = { value: null, fetchedAt: 0, inFlight: null }
+
+export function invalidatePreflightCache(): void {
+  _preflightCache = { value: null, fetchedAt: 0, inFlight: null }
+}
+
 export const api = {
   generate: (text: string, settings: GenerateSettings = {}) =>
     postJson<GenerateResponse>('/generate', { text, ...settings }),
@@ -92,7 +109,39 @@ export const api = {
     return parseJson<{ success?: boolean; error?: string }>(res)
   },
 
-  preflight: () => getJson<PreflightResponse>('/preflight'),
+  /**
+   * Preflight probes are expensive on Windows (they spawn POWERPNT.EXE to
+   * verify COM availability). A single client cache with a 30s TTL stops
+   * us from hammering the backend every time a component mounts.
+   *
+   * Pass `{ fresh: true }` to bypass the cache — the "Refresh" button on
+   * the Home preflight tile uses this, and the Settings page's "Ping"
+   * button does too.
+   */
+  preflight: (opts?: { fresh?: boolean }): Promise<PreflightResponse> => {
+    if (!opts?.fresh) {
+      const now = Date.now()
+      if (
+        _preflightCache.value &&
+        now - _preflightCache.fetchedAt < PREFLIGHT_CACHE_MS
+      ) {
+        return Promise.resolve(_preflightCache.value)
+      }
+      // Coalesce concurrent in-flight calls into a single request.
+      if (_preflightCache.inFlight) return _preflightCache.inFlight
+    }
+    const p = getJson<PreflightResponse>(opts?.fresh ? '/preflight?fresh=1' : '/preflight')
+      .then((r) => {
+        _preflightCache = { value: r, fetchedAt: Date.now(), inFlight: null }
+        return r
+      })
+      .catch((e) => {
+        _preflightCache = { ..._preflightCache, inFlight: null }
+        throw e
+      })
+    _preflightCache = { ..._preflightCache, inFlight: p }
+    return p
+  },
 
   cacheStats: () => getJson<CacheStats>('/cache/stats'),
   clearCache: () => postJson<{ success: boolean; message: string }>('/cache/clear', {}),
