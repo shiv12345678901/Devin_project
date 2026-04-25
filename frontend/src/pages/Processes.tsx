@@ -8,10 +8,13 @@ import {
   Database,
   FileText,
   ImageIcon,
+  ListOrdered,
   Loader2,
   RefreshCw,
+  StopCircle,
   Trash2,
   Wand2,
+  X,
   XCircle,
 } from 'lucide-react'
 import { api } from '../api/client'
@@ -21,6 +24,9 @@ import type { Run, RunStatus, RunTool } from '../store/runs'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
 import HtmlPreviewModal from '../components/HtmlPreviewModal'
+import ProgressBar from '../components/ProgressBar'
+import { useGenerationQueue } from '../hooks/useTrackedGenerate'
+import type { QueueItem } from '../hooks/useTrackedGenerate'
 
 type ToolLike = RunTool | 'regenerate' | 'text-to-image' | 'html-to-image' | 'image-to-screenshots' | string | undefined
 
@@ -341,10 +347,101 @@ function KV({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
+function LiveRunCard({ onCancel }: { onCancel: () => void }) {
+  const { state } = useGenerationQueue()
+  if (state.status !== 'running') return null
+  return (
+    <div className="card ring-2 ring-brand-400/40 dark:ring-brand-500/40">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-75"></span>
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-brand-500"></span>
+          </span>
+          <div className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
+            Live run
+          </div>
+          {state.operationId && (
+            <code className="text-[10px] text-slate-500 dark:text-slate-400">
+              {state.operationId}
+            </code>
+          )}
+        </div>
+        <button type="button" className="btn-danger" onClick={onCancel}>
+          <StopCircle size={14} /> Cancel run
+        </button>
+      </div>
+      <ProgressBar
+        progress={state.progress ?? 0}
+        stage={state.stage}
+        message={state.message}
+        etaSeconds={state.etaSeconds}
+        active
+      />
+    </div>
+  )
+}
+
+function QueueCard({
+  items,
+  onCancelQueued,
+}: {
+  items: QueueItem[]
+  onCancelQueued: (id: string) => void
+}) {
+  if (items.length === 0) return null
+  return (
+    <div className="card">
+      <div className="mb-3 flex items-center gap-2">
+        <ListOrdered size={16} className="text-slate-500" />
+        <div className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
+          Queue
+        </div>
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-white/[0.05] dark:text-slate-300">
+          {items.length} pending
+        </span>
+      </div>
+      <ul className="space-y-2">
+        {items.map((q, idx) => {
+          const meta = toolMeta(q.tool)
+          const Icon = meta.icon
+          return (
+            <li
+              key={q.id}
+              className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50/60 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/[0.03]"
+            >
+              <span className="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-white/10 dark:text-slate-300">
+                #{idx + 1}
+              </span>
+              <Icon size={14} className="shrink-0 text-slate-500" />
+              <span className="shrink-0 text-xs font-medium text-slate-700 dark:text-slate-200">
+                {meta.label}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-xs text-slate-600 dark:text-slate-300">
+                {q.inputPreview || '(no preview)'}
+              </span>
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => onCancelQueued(q.id)}
+                title="Remove from queue"
+              >
+                <X size={12} /> Remove
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
 export default function Processes() {
   const { runs, clear, remove } = useRuns()
+  const { queue, cancelQueued, cancel: cancelLive, state: liveState } = useGenerationQueue()
   const [searchParams] = useSearchParams()
   const highlightOp = searchParams.get('op')
+  const highlightQueue = searchParams.get('queue')
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [cache, setCache] = useState<CacheStats | null>(null)
   const [loading, setLoading] = useState(false)
@@ -502,7 +599,10 @@ export default function Processes() {
 
       {err && <div className="card text-sm text-red-600 dark:text-red-300">{err}</div>}
 
-      {runRows.length === 0 && historyRows.length === 0 ? (
+      <LiveRunCard onCancel={cancelLive} />
+      <QueueCard items={queue.slice(1)} onCancelQueued={cancelQueued} />
+
+      {runRows.length === 0 && historyRows.length === 0 && queue.length === 0 && liveState.status !== 'running' ? (
         <div className="card text-center text-sm text-slate-500">
           No runs yet. Head over to Text / HTML / Image to Video to generate your first one —
           it'll show up here with input, runtime, and outputs side-by-side.
@@ -515,8 +615,14 @@ export default function Processes() {
               run={r}
               onRemove={remove}
               highlight={
-                !!highlightOp &&
-                (r.operationId === highlightOp || r.id === highlightOp)
+                (!!highlightOp &&
+                  (r.operationId === highlightOp || r.id === highlightOp)) ||
+                // Highlight the newest running row when we landed via
+                // /processes?queue=… — the queue id is transient, so we key
+                // off status+recency instead of a direct match.
+                (!!highlightQueue &&
+                  r.status === 'running' &&
+                  r === runRows.find((x) => x.status === 'running'))
               }
             />
           ))}

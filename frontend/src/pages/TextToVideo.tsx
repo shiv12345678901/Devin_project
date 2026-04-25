@@ -242,8 +242,11 @@ export default function TextToVideo() {
     return true
   }
 
-  // Redirect to Processes as soon as the backend accepts the request and we
-  // have an operation_id.
+  // Redirect to Processes as soon as the backend accepts a live request so
+  // the user watches progress there rather than the wizard. For *queued*
+  // submissions we also auto-navigate on submit (see onPreflightProceed
+  // below) so the user sees the queue entry without waiting for it to
+  // reach the head and flip to `running`.
   useEffect(() => {
     if (state.status === 'running' && state.operationId) {
       nav(`/processes?op=${encodeURIComponent(state.operationId)}`, { replace: true })
@@ -271,7 +274,11 @@ export default function TextToVideo() {
     payload.class_name = (payload.class_name ?? '').trim() || undefined
     payload.subject = (payload.subject ?? '').trim() || undefined
     payload.title = (payload.title ?? '').trim() || undefined
-    await generate(text, payload)
+    // Enqueues and (if idle) kicks off immediately. Navigate right away so
+    // the user sees either the running run or the queue entry without
+    // staying on the wizard.
+    const { queueId } = generate(text, payload)
+    nav(`/processes?queue=${encodeURIComponent(queueId)}`)
   }
 
   const goNext = () => {

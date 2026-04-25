@@ -1,5 +1,6 @@
 import { Play, Sparkles, Minimize2 } from 'lucide-react'
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import ProgressBar from '../components/ProgressBar'
 import ScreenshotGallery from '../components/ScreenshotGallery'
 import SettingsPanel from '../components/SettingsPanel'
@@ -21,12 +22,14 @@ export default function HtmlToVideo() {
   const [settings, setSettings] = useState<GenerateSettings>(defaultSettings)
   const { state, generateFromHtml } = useTrackedGenerate('html-to-video')
   const toast = useToast()
+  const nav = useNavigate()
   const running = state.status === 'running'
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!html.trim()) return
-    await generateFromHtml(html, settings)
+    const { queueId } = generateFromHtml(html, settings)
+    nav(`/processes?queue=${encodeURIComponent(queueId)}`)
   }
 
   const beautify = async () => {

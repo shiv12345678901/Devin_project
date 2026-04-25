@@ -211,10 +211,28 @@ def get_ai_response(input_text, use_cache=True, cancel_event=None, system_prompt
     try:
         model_config = MODELS_CONFIG.get(model_choice, MODELS_CONFIG['default'])
 
-        # Initialize OpenAI client with NVIDIA endpoint
+        # Fail fast on an obviously-unconfigured key rather than making the
+        # UI sit at 0% while the OpenAI client retries a bogus endpoint.
+        placeholder_keys = {'', 'your-api-key-here', 'REPLACE_ME'}
+        resolved_key = (model_config.get('api_key') or '').strip()
+        if resolved_key in placeholder_keys:
+            raise RuntimeError(
+                "AI is not configured: API_KEY is missing or a placeholder. "
+                "Edit backend/config/config.py (or set the API_KEY env var) "
+                "with a real key and restart the backend."
+            )
+
+        # Initialize OpenAI client with the configured endpoint. `timeout`
+        # is required — without it the streaming completion will sit on a
+        # dead socket forever if the endpoint is unreachable, leaving the
+        # frontend stuck at "0%" with no way to know what happened. 30s is
+        # generous for an initial connect + first byte; the retry decorator
+        # on _make_ai_request handles transient failures.
         client = OpenAI(
             base_url=API_URL,
-            api_key=model_config['api_key']
+            api_key=resolved_key,
+            timeout=float(os.environ.get('AI_REQUEST_TIMEOUT', '60')),
+            max_retries=0,  # _make_ai_request already handles retries
         )
 
         system_prompt = resolved_system_prompt

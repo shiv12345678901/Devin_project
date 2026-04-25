@@ -15,6 +15,7 @@ import clsx from 'clsx'
 
 import { api } from '../api/client'
 import { useRuns } from '../store/runs'
+import { useGenerationQueue } from '../hooks/useTrackedGenerate'
 
 type NavItem = {
   to: string
@@ -152,10 +153,15 @@ function Brand() {
 
 function SidebarNav() {
   const { runs } = useRuns()
+  const { queue } = useGenerationQueue()
   // A run is "live" if at least one tracked entry is still in the running
   // state. Shown next to the Processes link so the user never loses sight
   // of an in-flight job when they navigate to Library / Settings / etc.
+  // The queue *includes* the currently-executing item, so pending = len-1
+  // when a run is live, or = len when idle.
   const runningCount = runs.filter((r) => r.status === 'running').length
+  const queuedCount = Math.max(0, queue.length - (runningCount > 0 ? 1 : 0))
+  const badgeCount = runningCount + queuedCount
   return (
     <nav className="flex-1 overflow-y-auto px-3 pb-4 pt-3">
       {NAV_GROUPS.map((group) => (
@@ -165,7 +171,7 @@ function SidebarNav() {
           </div>
           <div className="space-y-0.5">
             {group.items.map((item) => {
-              const showRunningBadge = item.to === '/processes' && runningCount > 0
+              const showRunningBadge = item.to === '/processes' && badgeCount > 0
               return (
               <NavLink
                 key={item.to}
@@ -202,16 +208,26 @@ function SidebarNav() {
                       )}
                     />
                     <span className="flex-1">{item.label}</span>
-                    {showRunningBadge && (
-                      <span
-                        className="inline-flex items-center gap-1 rounded-full bg-brand-500/15 px-1.5 py-0.5 text-[10px] font-medium text-brand-700 dark:text-brand-200"
-                        title={`${runningCount} run${runningCount === 1 ? '' : 's'} in progress`}
-                        aria-label={`${runningCount} run${runningCount === 1 ? '' : 's'} in progress`}
-                      >
-                        <Loader2 size={10} className="animate-spin" />
-                        {runningCount}
-                      </span>
-                    )}
+                    {showRunningBadge && (() => {
+                      const parts: string[] = []
+                      if (runningCount > 0) {
+                        parts.push(`${runningCount} running`)
+                      }
+                      if (queuedCount > 0) {
+                        parts.push(`${queuedCount} queued`)
+                      }
+                      const label = parts.join(' · ')
+                      return (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-brand-500/15 px-1.5 py-0.5 text-[10px] font-medium text-brand-700 dark:text-brand-200"
+                          title={label}
+                          aria-label={label}
+                        >
+                          {runningCount > 0 && <Loader2 size={10} className="animate-spin" />}
+                          {badgeCount}
+                        </span>
+                      )
+                    })()}
                   </>
                 )}
               </NavLink>

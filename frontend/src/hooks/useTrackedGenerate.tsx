@@ -1,5 +1,5 @@
 /**
- * Tracked-generation context.
+ * Tracked-generation context + run queue.
  *
  * The SSE lifecycle (AbortController, event handlers, accumulated result)
  * lives in a React context mounted at the App level. That way navigating
@@ -7,11 +7,21 @@
  * tab — doesn't unmount the component that owns the stream and doesn't
  * orphan the in-flight request.
  *
- * Consumers still call `useTrackedGenerate('text-to-video')` per page and
- * receive a bound `generate(text, settings)` style API; the only real
- * change is that the underlying state is shared.
+ * A FIFO **queue** sits on top of the single-run executor. Wizards call
+ * `generate(...)`; if nothing is running it kicks off immediately, otherwise
+ * the job is enqueued and the provider auto-dequeues when the current run
+ * reaches a terminal state. This gives users "submit more work while the
+ * first run is executing" without any extra UI on the wizards.
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { ReactNode } from 'react'
 import { useGenerate } from './useGenerate'
 import type { GenerationState } from './useGenerate'
@@ -21,27 +31,67 @@ import type { GenerateSettings } from '../api/types'
 
 type PendingMeta = Omit<Run, 'id' | 'status' | 'startedAt'>
 
+export type QueueItemKind = 'text' | 'html' | 'image'
+
+export interface QueueItem {
+  id: string
+  tool: RunTool
+  kind: QueueItemKind
+  inputPreview: string
+  queuedAt: number
+  settings?: GenerateSettings
+  // payload variants — only one of these is populated per item
+  text?: string
+  html?: string
+  formData?: FormData
+  files?: File[]
+}
+
+export interface EnqueueResult {
+  /** Stable queue id — clients can show this in UI or pass to `cancelQueued`. */
+  queueId: string
+  /** True when this item started executing immediately (queue was empty). */
+  startedImmediately: boolean
+}
+
 interface TrackedGenerationContextValue {
   state: GenerationState
+  queue: QueueItem[]
   cancel: () => void
+  cancelQueued: (queueId: string) => void
   reset: () => void
-  generate: (tool: RunTool, text: string, settings: GenerateSettings) => Promise<unknown>
-  generateFromHtml: (tool: RunTool, html: string, settings: GenerateSettings) => Promise<unknown>
-  generateFromImage: (
+  enqueueText: (tool: RunTool, text: string, settings: GenerateSettings) => EnqueueResult
+  enqueueHtml: (tool: RunTool, html: string, settings: GenerateSettings) => EnqueueResult
+  enqueueImage: (
     tool: RunTool,
     formData: FormData,
-    meta?: { files?: File[]; settings?: GenerateSettings },
-  ) => Promise<unknown>
+    meta: { files: File[]; settings?: GenerateSettings },
+  ) => EnqueueResult
 }
 
 const Ctx = createContext<TrackedGenerationContextValue | null>(null)
+
+let queueCounter = 0
+function nextQueueId(): string {
+  queueCounter += 1
+  return `queue-${Date.now().toString(36)}-${queueCounter}`
+}
 
 export function TrackedGenerationProvider({ children }: { children: ReactNode }) {
   const gen = useGenerate()
   const runs = useRuns()
   const runIdRef = useRef<string | null>(null)
   const pendingRef = useRef<PendingMeta | null>(null)
+  const [queue, setQueue] = useState<QueueItem[]>([])
+  // Tracks which queue item (if any) is currently executing so we can pop
+  // it when the run terminates. A ref rather than state because the pop
+  // happens inside the terminal-state effect and we don't want re-renders
+  // to re-trigger it.
+  const activeQueueIdRef = useRef<string | null>(null)
 
+  // Connect generation events → runs store. Lifts the "run row" into
+  // existence as soon as the SSE stream reports `running`, finishes it on
+  // terminal events.
   useEffect(() => {
     const s = gen.state
 
@@ -71,50 +121,149 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     }
   }, [gen.state, runs])
 
-  const generate = useCallback(
-    (tool: RunTool, text: string, settings: GenerateSettings) => {
-      pendingRef.current = { tool, inputPreview: text.slice(0, 200), settings }
-      return gen.generate(text, settings)
+  // Dispatcher — starts a queue item's generate call. Safe to call with
+  // any item kind; chooses the right hook under the hood.
+  const dispatch = useCallback(
+    (item: QueueItem) => {
+      activeQueueIdRef.current = item.id
+      if (item.kind === 'text' && item.text !== undefined && item.settings) {
+        pendingRef.current = { tool: item.tool, inputPreview: item.inputPreview, settings: item.settings }
+        void gen.generate(item.text, item.settings)
+      } else if (item.kind === 'html' && item.html !== undefined && item.settings) {
+        pendingRef.current = { tool: item.tool, inputPreview: item.inputPreview, settings: item.settings }
+        void gen.generateFromHtml(item.html, item.settings)
+      } else if (item.kind === 'image' && item.formData) {
+        pendingRef.current = {
+          tool: item.tool,
+          inputPreview: item.inputPreview,
+          inputFiles: item.files?.map((f) => f.name),
+          settings: item.settings,
+        }
+        void gen.generateFromImage(item.formData)
+      }
     },
     [gen],
   )
 
-  const generateFromHtml = useCallback(
-    (tool: RunTool, html: string, settings: GenerateSettings) => {
-      pendingRef.current = { tool, inputPreview: html.slice(0, 200), settings }
-      return gen.generateFromHtml(html, settings)
+  // Auto-dequeue: when the current run terminates, pop the next queue
+  // item and kick it off. The short delay gives React a tick to render the
+  // "success"/"error" state before we flip back to "running" for the next
+  // item — otherwise the UI never flashes the completion state for a run
+  // whose successor is queued behind it.
+  useEffect(() => {
+    const s = gen.state
+    if (s.status !== 'success' && s.status !== 'error' && s.status !== 'cancelled') {
+      return
+    }
+    if (!activeQueueIdRef.current && queue.length === 0) return
+
+    const timer = window.setTimeout(() => {
+      setQueue((prev) => {
+        const next = prev.slice()
+        const finishedId = activeQueueIdRef.current
+        if (finishedId) {
+          const idx = next.findIndex((q) => q.id === finishedId)
+          if (idx >= 0) next.splice(idx, 1)
+        }
+        activeQueueIdRef.current = null
+        const head = next[0]
+        if (head) {
+          // Fire the next item on the next tick so state updates in
+          // gen.reset() / gen.generate() don't collide with this setState.
+          window.setTimeout(() => dispatch(head), 0)
+        }
+        return next
+      })
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [gen.state, queue.length, dispatch])
+
+  const pushOrStart = useCallback(
+    (item: QueueItem): EnqueueResult => {
+      const idleNow =
+        gen.state.status === 'idle' ||
+        gen.state.status === 'success' ||
+        gen.state.status === 'error' ||
+        gen.state.status === 'cancelled'
+      if (idleNow && !activeQueueIdRef.current) {
+        // Claim the active slot *synchronously* so a rapid second submission
+        // in the same tick doesn't also see `activeQueueIdRef` as empty and
+        // race to dispatch. The real work still defers one tick so React
+        // has time to commit the new queue state.
+        activeQueueIdRef.current = item.id
+        setQueue((q) => [...q, item])
+        window.setTimeout(() => dispatch(item), 0)
+        return { queueId: item.id, startedImmediately: true }
+      }
+      setQueue((q) => [...q, item])
+      return { queueId: item.id, startedImmediately: false }
     },
-    [gen],
+    [dispatch, gen.state.status],
   )
 
-  const generateFromImage = useCallback(
+  const enqueueText = useCallback(
+    (tool: RunTool, text: string, settings: GenerateSettings): EnqueueResult =>
+      pushOrStart({
+        id: nextQueueId(),
+        tool,
+        kind: 'text',
+        inputPreview: text.slice(0, 200),
+        queuedAt: Date.now(),
+        text,
+        settings,
+      }),
+    [pushOrStart],
+  )
+
+  const enqueueHtml = useCallback(
+    (tool: RunTool, html: string, settings: GenerateSettings): EnqueueResult =>
+      pushOrStart({
+        id: nextQueueId(),
+        tool,
+        kind: 'html',
+        inputPreview: html.slice(0, 200),
+        queuedAt: Date.now(),
+        html,
+        settings,
+      }),
+    [pushOrStart],
+  )
+
+  const enqueueImage = useCallback(
     (
       tool: RunTool,
       formData: FormData,
-      meta?: { files?: File[]; settings?: GenerateSettings },
-    ) => {
-      const files = meta?.files ?? []
-      pendingRef.current = {
+      meta: { files: File[]; settings?: GenerateSettings },
+    ): EnqueueResult =>
+      pushOrStart({
+        id: nextQueueId(),
         tool,
-        inputPreview: files.length ? files.map((f) => f.name).join(', ') : '(image/pdf)',
-        inputFiles: files.map((f) => f.name),
-        settings: meta?.settings,
-      }
-      return gen.generateFromImage(formData)
-    },
-    [gen],
+        kind: 'image',
+        inputPreview: meta.files.length ? meta.files.map((f) => f.name).join(', ') : '(image/pdf)',
+        queuedAt: Date.now(),
+        formData,
+        files: meta.files,
+        settings: meta.settings,
+      }),
+    [pushOrStart],
   )
+
+  const cancelQueued = useCallback((queueId: string) => {
+    setQueue((prev) => prev.filter((q) => q.id !== queueId || q.id === activeQueueIdRef.current))
+  }, [])
 
   const value = useMemo<TrackedGenerationContextValue>(
     () => ({
       state: gen.state,
+      queue,
       cancel: gen.cancel,
+      cancelQueued,
       reset: gen.reset,
-      generate,
-      generateFromHtml,
-      generateFromImage,
+      enqueueText,
+      enqueueHtml,
+      enqueueImage,
     }),
-    [gen.state, gen.cancel, gen.reset, generate, generateFromHtml, generateFromImage],
+    [gen.state, gen.cancel, gen.reset, queue, cancelQueued, enqueueText, enqueueHtml, enqueueImage],
   )
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
@@ -129,16 +278,34 @@ export function useTrackedGenerate(tool: RunTool) {
   return useMemo(
     () => ({
       state: ctx.state,
+      queue: ctx.queue,
       cancel: ctx.cancel,
+      cancelQueued: ctx.cancelQueued,
       reset: ctx.reset,
-      generate: (text: string, settings: GenerateSettings) => ctx.generate(tool, text, settings),
+      // Back-compat aliases so existing wizards keep working verbatim: all
+      // three are now enqueues and return void (ignored by old callers).
+      generate: (text: string, settings: GenerateSettings) => ctx.enqueueText(tool, text, settings),
       generateFromHtml: (html: string, settings: GenerateSettings) =>
-        ctx.generateFromHtml(tool, html, settings),
+        ctx.enqueueHtml(tool, html, settings),
       generateFromImage: (
         fd: FormData,
         meta?: { files?: File[]; settings?: GenerateSettings },
-      ) => ctx.generateFromImage(tool, fd, meta),
+      ) => ctx.enqueueImage(tool, fd, { files: meta?.files ?? [], settings: meta?.settings }),
     }),
     [ctx, tool],
   )
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function useGenerationQueue() {
+  const ctx = useContext(Ctx)
+  if (!ctx) {
+    throw new Error('useGenerationQueue must be used inside <TrackedGenerationProvider>')
+  }
+  return {
+    queue: ctx.queue,
+    cancelQueued: ctx.cancelQueued,
+    cancel: ctx.cancel,
+    state: ctx.state,
+  }
 }
