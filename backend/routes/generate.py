@@ -1,5 +1,8 @@
 """Text-to-Image / Generate Blueprint — routes for converting text to screenshots."""
 import json
+import os
+import queue
+import threading
 import time
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
@@ -266,9 +269,19 @@ def generate_sse():
             # sees a second write.
             yield f"data: {json.dumps({'type': 'progress', 'stage': 'init', 'message': 'Warming up…', 'progress': 2})}\n\n"
 
-            import os
             for folder in [screenshot_folder, html_folder]:
                 os.makedirs(folder, exist_ok=True)
+
+            # Guard: output_format=video/pptx requires Windows + PowerPoint
+            # but /generate-sse only produces screenshots. Without this the
+            # user would sit through a 5-minute run and get a batch of PNGs
+            # instead of the MP4 they asked for.
+            import platform as _platform
+            requested_format = project_info.get('output_format', 'images')
+            if requested_format in ('video', 'pptx') and _platform.system() != 'Windows':
+                label = 'MP4 video' if requested_format == 'video' else 'PowerPoint deck'
+                yield f"data: {json.dumps({'type': 'error', 'message': f'{label} export requires a Windows host with PowerPoint installed. This backend is {_platform.system()} — pick `screenshots` or `HTML file` instead.'})}\n\n"
+                return
 
             estimated_tokens = len(input_text) // 4
             if estimated_tokens > 100000:
@@ -304,9 +317,15 @@ def generate_sse():
 
             if enable_verification:
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai_verify', 'message': 'Verifying completeness...', 'progress': 20})}\n\n"
-                
-                # Verification Loop (up to 3 times)
-                max_revisions = 3
+
+                # Verification revision loop. Previously this ran up to 3
+                # full re-generation passes, which on a slow AI endpoint
+                # added ~2 extra full AI calls per request and pushed a
+                # 3–4 min run into 8+ min territory. The vast majority of
+                # content gaps get fixed on the first revision, so the
+                # cap is now 1 pass. Override with `AI_MAX_REVISIONS` if
+                # you really need the old behaviour.
+                max_revisions = int(os.environ.get('AI_MAX_REVISIONS', '1'))
                 for attempt in range(max_revisions):
                     v_start = time.time()
                     feedback = verify_html_content(input_text, ai_content, cancel_event=cancel_event, model_choice=model_choice)
@@ -345,18 +364,94 @@ def generate_sse():
             # Let the UI preview the generated HTML before screenshots finish.
             yield f"data: {json.dumps({'type': 'html_generated', 'html_filename': html_filename, 'html_content': html_content})}\n\n"
 
-            # Step 3: Screenshots (DRY #12)
+            # Step 3: Screenshots (DRY #12).
+            # Run Playwright on a background thread and stream per-shot
+            # progress back to the SSE generator via a Queue. Without this
+            # the generator would sit blocked inside take_screenshots for
+            # minutes and the UI would flatline — users reported "I don't
+            # know if anything is happening". The progress_callback on the
+            # playwright engine already fires once per shot; we just need
+            # a way to surface it from the worker thread back to the SSE
+            # loop.
             screenshot_name = get_next_batch_id()
             screenshot_operation_id = f"{operation_id}_screenshot"
             metrics_tracker.start(screenshot_operation_id)
-            screenshot_files, screenshot_names = take_screenshots(
-                html_content, screenshot_name,
-                screenshot_folder=screenshot_folder,
-                zoom=zoom, overlap=overlap,
-                viewport_width=viewport_width, viewport_height=viewport_height,
-                max_screenshots=max_screenshots,
-                cancel_event=cancel_event
-            )
+
+            progress_q: "queue.Queue[dict]" = queue.Queue()
+            result_holder: dict = {'files': [], 'names': [], 'error': None}
+
+            def _on_progress(message, pct):
+                try:
+                    progress_q.put_nowait({
+                        'kind': 'progress',
+                        'message': message,
+                        'progress': int(pct),
+                    })
+                except queue.Full:  # pragma: no cover — unbounded queue
+                    pass
+
+            def _worker():
+                try:
+                    files, names = take_screenshots(
+                        html_content, screenshot_name,
+                        screenshot_folder=screenshot_folder,
+                        zoom=zoom, overlap=overlap,
+                        viewport_width=viewport_width,
+                        viewport_height=viewport_height,
+                        max_screenshots=max_screenshots,
+                        progress_callback=_on_progress,
+                        cancel_event=cancel_event,
+                    )
+                    result_holder['files'] = files
+                    result_holder['names'] = names
+                except Exception as exc:  # pragma: no cover — surfaced in UI
+                    result_holder['error'] = str(exc)
+                finally:
+                    progress_q.put({'kind': '_done'})
+
+            worker = threading.Thread(target=_worker, daemon=True)
+            worker.start()
+
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshot', 'message': 'Launching browser…', 'progress': 37})}\n\n"
+
+            # Drain progress events until the worker signals completion.
+            # The inner callback reports 10–90 within the screenshot phase;
+            # we map that into the outer 35–95 band so the overall bar
+            # keeps progressing evenly through the whole run.
+            while True:
+                try:
+                    msg = progress_q.get(timeout=2)
+                except queue.Empty:
+                    # Keep the SSE connection alive and re-check cancel.
+                    if cancel_event.is_set():
+                        # Worker will see the flag and exit its loop; we
+                        # still join it so we don't leak the thread.
+                        worker.join(timeout=10)
+                        metrics_tracker.end(screenshot_operation_id, success=False)
+                        metrics_tracker.end(operation_id, success=False)
+                        yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
+                        return
+                    yield ": heartbeat\n\n"
+                    continue
+
+                if msg.get('kind') == '_done':
+                    break
+
+                inner = msg.get('progress', 0)
+                outer = 35 + int(inner * 0.60)
+                outer = max(35, min(outer, 95))
+                yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshot', 'message': msg.get('message', ''), 'progress': outer})}\n\n"
+
+            worker.join(timeout=10)
+
+            if result_holder['error']:
+                metrics_tracker.end(screenshot_operation_id, success=False)
+                metrics_tracker.end(operation_id, success=False)
+                yield f"data: {json.dumps({'type': 'error', 'message': result_holder['error']})}\n\n"
+                return
+
+            screenshot_files = result_holder['files']
+            screenshot_names = result_holder['names']
 
             # The screenshot engine breaks out of its loop on cancel and
             # returns whatever it captured so far — without this explicit
@@ -377,6 +472,9 @@ def generate_sse():
                 'html_file': html_filename,
                 'screenshot_folder': screenshot_folder,
                 'screenshot_count': len(screenshot_files),
+                # Included so the frontend can dedupe against a tracked
+                # run (the tracked run stores operation_id too).
+                'operation_id': operation_id,
                 'settings': {
                     'zoom': zoom, 'overlap': overlap,
                     'width': viewport_width, 'height': viewport_height,

@@ -2,6 +2,7 @@
 import os
 import sys
 import threading
+import httpx  # type: ignore
 from openai import OpenAI  # type: ignore
 
 # Add config to path
@@ -222,16 +223,25 @@ def get_ai_response(input_text, use_cache=True, cancel_event=None, system_prompt
                 "with a real key and restart the backend."
             )
 
-        # Initialize OpenAI client with the configured endpoint. `timeout`
-        # is required — without it the streaming completion will sit on a
-        # dead socket forever if the endpoint is unreachable, leaving the
-        # frontend stuck at "0%" with no way to know what happened. 30s is
-        # generous for an initial connect + first byte; the retry decorator
-        # on _make_ai_request handles transient failures.
+        # Initialize OpenAI client with per-phase timeouts. A single
+        # scalar `timeout=60` was previously used, which treated the
+        # whole streaming completion as one 60-second budget and meant
+        # any AI response taking longer than 60s (common for 1000-char
+        # inputs on slower endpoints) timed out, got retried 3x by the
+        # backoff decorator, and pushed a normal 3-4 min run past 8 min.
+        # httpx.Timeout gives us fast-fail on connect + generous read
+        # time for the streamed body. Override via env vars.
+        connect_timeout = float(os.environ.get('AI_CONNECT_TIMEOUT', '15'))
+        read_timeout = float(os.environ.get('AI_READ_TIMEOUT', '600'))
         client = OpenAI(
             base_url=API_URL,
             api_key=resolved_key,
-            timeout=float(os.environ.get('AI_REQUEST_TIMEOUT', '60')),
+            timeout=httpx.Timeout(
+                connect=connect_timeout,
+                read=read_timeout,
+                write=30.0,
+                pool=30.0,
+            ),
             max_retries=0,  # _make_ai_request already handles retries
         )
 

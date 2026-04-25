@@ -473,15 +473,49 @@ export default function Processes() {
 
   const { runRows, historyRows } = useMemo(() => {
     const filtered = filter === 'all' ? runs : runs.filter((r) => r.tool === filter)
+    // Dedupe history entries against the tracked runs. Match on any of
+    // (operation_id, html_file, or input_preview + tight time window) —
+    // the backend now emits operation_id on history entries (primary key)
+    // but older entries only have html_file, and a very recently completed
+    // run may briefly have neither populated on the tracked side. The
+    // input+timestamp fuzzy match is the fallback that was missing in #7.
+    const runSeenOpIds = new Set(
+      runs.map((r) => r.operationId).filter(Boolean) as string[],
+    )
     const runSeenHtml = new Set(runs.map((r) => r.htmlFilename).filter(Boolean) as string[])
+    const runFingerprints = runs
+      .map((r) => ({
+        preview: (r.inputPreview || '').slice(0, 120),
+        endedAt: r.endedAt ?? r.startedAt,
+      }))
+      .filter((r) => r.preview)
     const remainingHistory = history
-      .filter((h) => !h.html_file || !runSeenHtml.has(h.html_file))
+      .filter((h) => {
+        if (h.operation_id && runSeenOpIds.has(h.operation_id)) return false
+        if (h.html_file && runSeenHtml.has(h.html_file)) return false
+        if (h.input_preview && h.timestamp) {
+          const hPreview = String(h.input_preview).slice(0, 120)
+          const hTsMs = typeof h.timestamp === 'number'
+            ? h.timestamp * 1000
+            : Date.parse(String(h.timestamp))
+          if (!Number.isNaN(hTsMs)) {
+            const match = runFingerprints.find(
+              (rf) => rf.preview === hPreview && Math.abs(rf.endedAt - hTsMs) < 5 * 60_000,
+            )
+            if (match) return false
+          }
+        }
+        return true
+      })
       .filter((h) => {
         if (filter === 'all') return true
         const t = h.tool
-        if (filter === 'text-to-video') return t === 'text-to-image'
-        if (filter === 'html-to-video') return t === 'html-to-image'
-        if (filter === 'image-to-video') return t === 'image-to-screenshots'
+        // Accept both the legacy backend labels (`text-to-image`) and the
+        // newer ones (`text-to-video`) so history entries show up under
+        // their matching filter regardless of which codepath produced them.
+        if (filter === 'text-to-video') return t === 'text-to-image' || t === 'text-to-video'
+        if (filter === 'html-to-video') return t === 'html-to-image' || t === 'html-to-video'
+        if (filter === 'image-to-video') return t === 'image-to-screenshots' || t === 'image-to-video'
         return false
       })
       .slice()
