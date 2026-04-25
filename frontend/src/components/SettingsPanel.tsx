@@ -37,9 +37,14 @@ export default function SettingsPanel({
                   value={value.model_choice ?? 'default'}
                   onChange={(e) => set('model_choice', e.target.value)}
                 >
-                  <option value="default">Default Model (highest quality)</option>
+                  <option value="default">Qwen 3.5 122B (default)</option>
                   <option value="fast">Fast (lower latency, smaller model)</option>
-                  <option value="quality">Quality (deterministic, highest tokens)</option>
+                  <option value="quality">DeepSeek V4 Pro</option>
+                  <option value="glm_5_1">GLM 5.1</option>
+                  <option value="deepseek_v4_pro">DeepSeek V4 Pro</option>
+                  <option value="kimi_2_5">Kimi K2.5</option>
+                  <option value="nemotron">Nemotron 3 Super 120B</option>
+                  <option value="llama">Llama 3.3 70B</option>
                 </select>
               </div>
             )}

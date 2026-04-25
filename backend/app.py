@@ -15,10 +15,12 @@ import logging
 import os
 import sys
 
-# Force unbuffered output for Windows
+# Force UTF-8-safe, unbuffered output for Windows terminals/services.
 if sys.version_info >= (3, 7):
     if isinstance(sys.stdout, io.TextIOWrapper):
-        sys.stdout.reconfigure(line_buffering=True)
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
+    if isinstance(sys.stderr, io.TextIOWrapper):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
 
 # Add src to path so blueprints can import `core.*`, `utils.*` unprefixed.
 BACKEND_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -222,18 +224,30 @@ def preflight():
     # before every run, so this leak accumulates fast).
     if _platform.system() == 'Windows':
         app_obj = None
+        com_initialized = False
         try:
+            import pythoncom  # type: ignore
             import win32com.client  # type: ignore
-            app_obj = win32com.client.Dispatch('PowerPoint.Application')
+
+            pythoncom.CoInitialize()
+            com_initialized = True
+            app_obj = win32com.client.DispatchEx('PowerPoint.Application')
             version = getattr(app_obj, 'Version', 'unknown')
             checks['powerpoint']['ok'] = True
             checks['powerpoint']['detail'] = f'PowerPoint {version} detected'
         except Exception as e:
-            checks['powerpoint']['detail'] = f'PowerPoint not available: {e}'
+            checks['powerpoint']['detail'] = (
+                f'Optional for screenshots; PowerPoint not available: {e}'
+            )
         finally:
             if app_obj is not None:
                 try:
                     app_obj.Quit()
+                except Exception:
+                    pass
+            if com_initialized:
+                try:
+                    pythoncom.CoUninitialize()  # type: ignore[name-defined]
                 except Exception:
                     pass
     else:

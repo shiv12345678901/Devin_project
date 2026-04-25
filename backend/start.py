@@ -1,6 +1,13 @@
 """Startup script for Screenshot Studio with environment checks."""
 import os
 import sys
+import io
+
+if sys.version_info >= (3, 7):
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
+    if isinstance(sys.stderr, io.TextIOWrapper):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
 
 def check_dependencies():
     """Check if all required dependencies are installed."""
@@ -107,8 +114,11 @@ def main():
     os.chdir(os.path.abspath(os.path.dirname(__file__)))
 
     # Import and run the app
-    from app import app
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    from app import app, _env_bool
+    host = os.environ.get('FLASK_HOST') or os.environ.get('HOST', '127.0.0.1')
+    port = int(os.environ.get('PORT', '5000'))
+    debug = _env_bool('FLASK_DEBUG', False) or _env_bool('DEBUG', False)
+    app.run(debug=debug, port=port, host=host, use_reloader=debug)
 
 if __name__ == '__main__':
     main()
