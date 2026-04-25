@@ -1,5 +1,6 @@
 import { Play, StopCircle, Upload } from 'lucide-react'
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type React from 'react'
 import ProgressBar from '../components/ProgressBar'
 import ScreenshotGallery from '../components/ScreenshotGallery'
@@ -26,6 +27,7 @@ export default function ImageToVideo() {
   const [dropError, setDropError] = useState<string | null>(null)
   const { state, generateFromImage, cancel } = useTrackedGenerate('image-to-video')
   const running = state.status === 'running'
+  const nav = useNavigate()
 
   // Drag-and-drop — accepts the first dropped file that matches an image
   // or a PDF. Mirrors the accept="image/*,application/pdf" rule on the
@@ -66,7 +68,8 @@ export default function ImageToVideo() {
     fd.append('viewport_width', String(settings.viewport_width ?? 1920))
     fd.append('viewport_height', String(settings.viewport_height ?? 1080))
     fd.append('max_screenshots', String(settings.max_screenshots ?? 50))
-    await generateFromImage(fd, { files: [file], settings })
+    const { queueId } = generateFromImage(fd, { files: [file], settings })
+    nav(`/processes?queue=${encodeURIComponent(queueId)}`)
   }
 
   return (

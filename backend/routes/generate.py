@@ -260,6 +260,11 @@ def generate_sse():
                 use_cache=use_cache, enable_verification=enable_verification
             )
             yield f"data: {json.dumps({'type': 'started', 'operation_id': operation_id, 'estimated_total_seconds': estimated_total_seconds})}\n\n"
+            # Immediately follow `started` with an actual progress event so
+            # the UI flips off 0%/"Starting…" even if the AI call is about
+            # to block or the WSGI layer buffers the first chunk until it
+            # sees a second write.
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'init', 'message': 'Warming up…', 'progress': 2})}\n\n"
 
             import os
             for folder in [screenshot_folder, html_folder]:
@@ -270,8 +275,11 @@ def generate_sse():
                 yield f"data: {json.dumps({'type': 'error', 'message': f'Text too long! ~{estimated_tokens} tokens, max ~100,000'})}\n\n"
                 return
 
-            # Step 1: AI
-            yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai', 'message': 'Sending request to AI...', 'progress': 5})}\n\n"
+            # Step 1: AI — emit the stage change first, then the blocking
+            # call. If the AI endpoint is unreachable the RuntimeError
+            # raised by get_ai_response will surface via the `except
+            # Exception` handler below as a structured error event.
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai', 'message': 'Connecting to AI model…', 'progress': 5})}\n\n"
             
             ai_operation_id = f"{operation_id}_ai"
             metrics_tracker.start(ai_operation_id)
