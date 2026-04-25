@@ -62,6 +62,8 @@ export interface GenerateResponse {
   html_content?: string
   screenshot_files?: string[]
   screenshot_count?: number
+  presentation_file?: string
+  video_file?: string
   screenshot_folder?: string
   estimated_total_seconds?: number
   performance?: {
@@ -105,8 +107,11 @@ export type SseEvent =
       screenshot_files: string[]
       screenshot_count: number
       screenshot_folder: string
+      presentation_file?: string
+      video_file?: string
       operation_id?: string
       performance?: Record<string, number>
+      message?: string
     }
   | { type: 'error'; message: string }
   | { type: 'cancelled'; message: string }
@@ -122,6 +127,8 @@ export interface HistoryEntry {
   html_file?: string
   screenshot_folder?: string
   screenshot_count?: number
+  presentation_file?: string
+  video_file?: string
   /** Included since the dedup work in #8 — matches the tracked run's operationId. */
   operation_id?: string
   settings?: Record<string, unknown>

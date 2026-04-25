@@ -2,6 +2,7 @@
 import json
 import os
 import queue
+import re
 import threading
 import time
 
@@ -19,6 +20,29 @@ from utils.eta_tracker import eta_tracker
 
 generate_bp = Blueprint('generate', __name__)
 html_beautifier = HTMLBeautifier()
+
+
+def _safe_export_stem(output_name: str, fallback: str) -> str:
+    raw = (output_name or fallback).strip() or fallback
+    return re.sub(r'[^A-Za-z0-9._-]+', '_', raw)[:80].strip('._-') or fallback
+
+
+def _resolution_tuple(label: str) -> tuple[int, int]:
+    return {
+        '720p': (1280, 720),
+        '1080p': (1920, 1080),
+        '1440p': (2560, 1440),
+        '4k': (3840, 2160),
+    }.get(str(label).lower(), (1920, 1080))
+
+
+def _ppt_quality(ui_quality) -> int:
+    try:
+        q = int(ui_quality)
+    except (TypeError, ValueError):
+        return 5
+    # UI exposes 1-100; PowerPoint exporter expects 1-5.
+    return max(1, min(5, round(q / 20)))
 
 
 @generate_bp.route('/generate', methods=['POST'])
@@ -272,10 +296,7 @@ def generate_sse():
             for folder in [screenshot_folder, html_folder]:
                 os.makedirs(folder, exist_ok=True)
 
-            # Guard: output_format=video/pptx requires Windows + PowerPoint
-            # but /generate-sse only produces screenshots. Without this the
-            # user would sit through a 5-minute run and get a batch of PNGs
-            # instead of the MP4 they asked for.
+            # Guard: output_format=video/pptx requires Windows + PowerPoint.
             import platform as _platform
             requested_format = project_info.get('output_format', 'images')
             if requested_format in ('video', 'pptx') and _platform.system() != 'Windows':
@@ -463,6 +484,62 @@ def generate_sse():
                 yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
                 return
 
+            presentation_file = None
+            video_file = None
+            export_warning = None
+            if requested_format in ('pptx', 'video'):
+                yield f"data: {json.dumps({'type': 'progress', 'stage': 'export', 'message': 'Creating PowerPoint export...', 'progress': 96})}\n\n"
+                try:
+                    import sys
+                    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+                    config_dir = os.path.join(backend_dir, 'config')
+                    if config_dir not in sys.path:
+                        sys.path.insert(0, config_dir)
+                    from config import (  # type: ignore
+                        POWERPOINT_TEMPLATE_PATH,
+                        POWERPOINT_OUTPUT_FOLDER,
+                        POWERPOINT_VIDEO_FOLDER,
+                    )
+                    from core.powerpoint.controller import PowerPointController
+
+                    stem = _safe_export_stem(output_name, f"{operation_id}")
+                    pptx_path = os.path.join(POWERPOINT_OUTPUT_FOLDER, f"{stem}.pptx")
+                    video_path = os.path.join(POWERPOINT_VIDEO_FOLDER, f"{stem}.mp4")
+                    os.makedirs(POWERPOINT_OUTPUT_FOLDER, exist_ok=True)
+                    os.makedirs(POWERPOINT_VIDEO_FOLDER, exist_ok=True)
+
+                    controller = PowerPointController()
+                    if requested_format == 'video':
+                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'export', 'message': 'Exporting MP4 video with PowerPoint...', 'progress': 98})}\n\n"
+                        export_result = controller.create_and_export_video(
+                            template_path=POWERPOINT_TEMPLATE_PATH,
+                            image_files=screenshot_files,
+                            output_pptx_path=pptx_path,
+                            output_video_path=video_path,
+                            slide_duration=float(video_export_settings.get('slide_duration_sec') or 5),
+                            resolution=_resolution_tuple(video_export_settings.get('resolution')),
+                            fps=int(video_export_settings.get('fps') or 30),
+                            quality=_ppt_quality(video_export_settings.get('video_quality')),
+                        )
+                        presentation_file = export_result.get('presentation_path')
+                        video_file = export_result.get('video_path')
+                        export_warning = export_result.get('warning')
+                        if not video_file or not os.path.exists(video_file):
+                            raise RuntimeError(export_warning or 'PowerPoint did not produce an MP4 file')
+                    else:
+                        controller.create_presentation(
+                            template_path=POWERPOINT_TEMPLATE_PATH,
+                            image_folder=screenshot_folder,
+                            output_path=pptx_path,
+                            slide_duration=float(video_export_settings.get('slide_duration_sec') or 5),
+                        )
+                        presentation_file = pptx_path
+                except Exception as exc:
+                    metrics_tracker.end(screenshot_operation_id, success=True)
+                    metrics_tracker.end(operation_id, success=False)
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'{requested_format.upper()} export failed after screenshots: {exc}'})}\n\n"
+                    return
+
             # Log history (#8)
             log_generation({
                 'tool': 'text-to-video',
@@ -472,6 +549,8 @@ def generate_sse():
                 'html_file': html_filename,
                 'screenshot_folder': screenshot_folder,
                 'screenshot_count': len(screenshot_files),
+                'presentation_file': presentation_file,
+                'video_file': video_file,
                 # Included so the frontend can dedupe against a tracked
                 # run (the tracked run stores operation_id too).
                 'operation_id': operation_id,
@@ -487,7 +566,12 @@ def generate_sse():
             metrics_tracker.end(screenshot_operation_id, success=True)
             metrics_tracker.end(operation_id, success=True)
 
-            yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshots_done', 'message': f'Generated {len(screenshot_files)} screenshot(s)', 'progress': 95})}\n\n"
+            final_message = f'Successfully generated {len(screenshot_files)} screenshot(s)'
+            if requested_format == 'video':
+                final_message = 'Successfully generated MP4 video'
+            elif requested_format == 'pptx':
+                final_message = 'Successfully generated PowerPoint deck'
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshots_done', 'message': final_message, 'progress': 99})}\n\n"
             
             # Record tracking for ETA system
             ai_metrics = metrics_tracker.get_metrics(ai_operation_id)
@@ -501,7 +585,7 @@ def generate_sse():
                 use_cache=use_cache
             )
 
-            yield f"data: {json.dumps({'type': 'complete', 'success': True, 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': screenshot_names, 'screenshot_count': len(screenshot_files), 'screenshot_folder': screenshot_folder, 'operation_id': operation_id})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'success': True, 'message': final_message, 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': screenshot_names, 'screenshot_count': len(screenshot_files), 'screenshot_folder': screenshot_folder, 'presentation_file': presentation_file, 'video_file': video_file, 'operation_id': operation_id})}\n\n"
 
         except CancelledError:
             yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"

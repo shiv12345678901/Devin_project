@@ -109,6 +109,8 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         htmlFilename: s.result?.html_filename,
         screenshotFiles: s.result?.screenshot_files,
         screenshotFolder: s.result?.screenshot_folder,
+        presentationFile: s.result?.presentation_file,
+        videoFile: s.result?.video_file,
         operationId: s.result?.operation_id ?? s.operationId,
       })
       runIdRef.current = null

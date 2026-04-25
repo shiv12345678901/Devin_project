@@ -109,7 +109,11 @@ function RunRow({
       scrolled.current = true
     }
   }, [highlight])
-  const hasOutputs = (run.screenshotFiles?.length ?? 0) > 0 || !!run.htmlFilename
+  const hasOutputs =
+    (run.screenshotFiles?.length ?? 0) > 0 ||
+    !!run.htmlFilename ||
+    !!run.presentationFile ||
+    !!run.videoFile
 
   return (
     <div
@@ -213,6 +217,24 @@ function RunRow({
                   title={run.htmlFilename}
                 >
                   HTML · {run.htmlFilename}
+                </a>
+              )}
+              {run.videoFile && (
+                <a
+                  href={api.downloadUrl(run.videoFile)}
+                  className="block truncate text-xs text-brand-600 hover:underline dark:text-brand-300"
+                  title={run.videoFile}
+                >
+                  MP4 - {run.videoFile}
+                </a>
+              )}
+              {run.presentationFile && (
+                <a
+                  href={api.downloadUrl(run.presentationFile)}
+                  className="block truncate text-xs text-brand-600 hover:underline dark:text-brand-300"
+                  title={run.presentationFile}
+                >
+                  PPTX - {run.presentationFile}
                 </a>
               )}
               <KV
@@ -321,6 +343,22 @@ function HistoryRow({ entry }: { entry: HistoryEntry }) {
           className="btn-secondary hidden shrink-0 sm:inline-flex"
         >
           <Code2 size={14} /> HTML
+        </a>
+      )}
+      {entry.video_file && (
+        <a
+          href={api.downloadUrl(entry.video_file)}
+          className="btn-secondary hidden shrink-0 sm:inline-flex"
+        >
+          MP4
+        </a>
+      )}
+      {entry.presentation_file && (
+        <a
+          href={api.downloadUrl(entry.presentation_file)}
+          className="btn-secondary hidden shrink-0 sm:inline-flex"
+        >
+          PPTX
         </a>
       )}
     </div>

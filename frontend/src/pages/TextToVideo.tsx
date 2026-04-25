@@ -193,6 +193,7 @@ export default function TextToVideo() {
   })
   const [stepId, setStepId] = useState<StepId>('project')
   const [showPreflight, setShowPreflight] = useState(false)
+  const preflightProceedingRef = useRef(false)
   /** Step ids whose inline errors should be visible (only populated after the
    * user clicks Next on an invalid step). Silent until then. */
   const [erroredSteps, setErroredSteps] = useState<Set<StepId>>(new Set())
@@ -266,10 +267,13 @@ export default function TextToVideo() {
       focusFirstError(broken.id, perStepErrors[broken.id])
       return
     }
+    preflightProceedingRef.current = false
     setShowPreflight(true)
   }
 
   const onPreflightProceed = async () => {
+    if (preflightProceedingRef.current) return
+    preflightProceedingRef.current = true
     setShowPreflight(false)
     const payload: GenerateSettings = { ...settings }
     payload.class_name = (payload.class_name ?? '').trim() || undefined

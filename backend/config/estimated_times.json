@@ -1,8 +1,8 @@
 {
     "models": {
         "default": {
-            "chars_per_second": 1000.0,
-            "samples": 1
+            "chars_per_second": 510.8860448721849,
+            "samples": 3
         },
         "fast": {
             "chars_per_second": 1500.0,
@@ -14,11 +14,11 @@
         }
     },
     "screenshots": {
-        "seconds_per_screenshot": 0.7258205377573391,
-        "samples": 6
+        "seconds_per_screenshot": 1.103621211115537,
+        "samples": 10
     },
     "verification": {
-        "average_seconds": 42.81124020767212,
-        "samples": 4
+        "average_seconds": 18.777437458529665,
+        "samples": 8
     }
 }

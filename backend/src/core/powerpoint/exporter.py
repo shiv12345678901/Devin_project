@@ -44,8 +44,10 @@ class PowerPointExporter:
         try:
             import win32com.client
             import pywintypes
+            import pythoncom
             self.win32com = win32com
             self.pywintypes = pywintypes
+            self.pythoncom = pythoncom
         except ImportError as e:
             raise ImportError(
                 "pywin32 is required for PowerPoint automation. "
@@ -54,6 +56,7 @@ class PowerPointExporter:
         
         self.ppt_app = None
         self.presentation = None
+        self._com_initialized = False
     
     def is_powerpoint_installed(self) -> bool:
         """Check if PowerPoint is installed and accessible.
@@ -65,13 +68,19 @@ class PowerPointExporter:
             return False
         
         try:
+            self.pythoncom.CoInitialize()
             # Try to create PowerPoint application instance
-            ppt = self.win32com.client.Dispatch("PowerPoint.Application")
+            ppt = self.win32com.client.DispatchEx("PowerPoint.Application")
             ppt.Quit()
             return True
         except Exception as e:
             logger.warning(f"PowerPoint not accessible: {e}")
             return False
+        finally:
+            try:
+                self.pythoncom.CoUninitialize()
+            except Exception:
+                pass
     
     def _initialize_powerpoint(self) -> None:
         """Initialize PowerPoint application if not already initialized.
@@ -81,13 +90,21 @@ class PowerPointExporter:
         """
         if self.ppt_app is None:
             try:
-                self.ppt_app = self.win32com.client.Dispatch("PowerPoint.Application")
+                self.pythoncom.CoInitialize()
+                self._com_initialized = True
+                self.ppt_app = self.win32com.client.DispatchEx("PowerPoint.Application")
                 # Make PowerPoint visible (required for CreateVideo)
                 self.ppt_app.Visible = 1
                 # Disable alerts (e.g., macro warnings, link updates) which can hang COM
                 self.ppt_app.DisplayAlerts = 1  # 1 = ppAlertsNone
                 logger.info("PowerPoint application initialized")
             except Exception as e:
+                if self._com_initialized:
+                    try:
+                        self.pythoncom.CoUninitialize()
+                    except Exception:
+                        pass
+                    self._com_initialized = False
                 raise RuntimeError(
                     f"Failed to initialize PowerPoint application: {e}"
                 ) from e
@@ -502,6 +519,14 @@ class PowerPointExporter:
                 logger.warning(f"Error quitting PowerPoint: {e}")
             finally:
                 self.ppt_app = None
+        
+        if self._com_initialized:
+            try:
+                self.pythoncom.CoUninitialize()
+            except Exception as e:
+                logger.warning(f"Error uninitializing COM: {e}")
+            finally:
+                self._com_initialized = False
     
     def __enter__(self):
         """Context manager entry."""

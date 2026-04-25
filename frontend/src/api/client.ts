@@ -11,10 +11,11 @@ import type {
 // Base URL for the Flask backend. Starts from the build-time env var, but can
 // be overridden at runtime from the Settings page via `setBackendBaseUrl()` —
 // that way users can point the UI at a different host without a rebuild.
-let API_BASE: string = (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? ''
+const DEFAULT_API_BASE: string = (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? ''
+let API_BASE: string = DEFAULT_API_BASE
 
 export function setBackendBaseUrl(url: string): void {
-  API_BASE = (url ?? '').trim()
+  API_BASE = (url ?? '').trim() || DEFAULT_API_BASE
 }
 
 export function getBackendBaseUrl(): string {
@@ -149,6 +150,8 @@ export const api = {
   screenshotUrl: (filename: string) =>
     buildUrl(`/screenshots/${filename.split('/').map(encodeURIComponent).join('/')}`),
   htmlUrl: (filename: string) => buildUrl(`/html/${encodeURIComponent(filename)}`),
+  downloadUrl: (filepath: string) =>
+    buildUrl(`/download/${filepath.split(/[\\/]/).map(encodeURIComponent).join('/')}`),
   thumbnailUrl: (filename: string) =>
     buildUrl(`/thumbnails/${encodeURIComponent(filename)}`),
 

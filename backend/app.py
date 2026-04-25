@@ -77,8 +77,20 @@ app.config['MAX_CONTENT_LENGTH'] = int(
 # remote machine, set ``CORS_ORIGINS`` to a comma-separated allowlist (or
 # the literal string ``*`` to disable the allowlist for prototyping).
 # Wide-open ``*`` is also allowed but logged as a warning.
-_DEFAULT_CORS = 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:5000,http://127.0.0.1:5000'
-_cors_raw = os.environ.get('CORS_ORIGINS', _DEFAULT_CORS).strip()
+_DEFAULT_CORS = ','.join(
+    [
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+        'http://localhost:5174',
+        'http://127.0.0.1:5174',
+        'http://localhost:5175',
+        'http://127.0.0.1:5175',
+        'http://localhost:5000',
+        'http://127.0.0.1:5000',
+    ]
+)
+_cors_raw = os.environ.get('CORS_ORIGINS') or os.environ.get('ALLOWED_ORIGINS', _DEFAULT_CORS)
+_cors_raw = _cors_raw.strip()
 if _cors_raw == '*':
     CORS_ORIGINS: list = ['*']
 else:

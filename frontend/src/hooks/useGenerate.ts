@@ -7,6 +7,8 @@ export interface GenerationResult {
   html_content?: string
   screenshot_files: string[]
   screenshot_folder?: string
+  presentation_file?: string
+  video_file?: string
   operation_id?: string
 }
 
@@ -87,12 +89,14 @@ export function useGenerate() {
           result.html_content = ev.html_content ?? result.html_content
           result.screenshot_files = ev.screenshot_files ?? result.screenshot_files
           result.screenshot_folder = ev.screenshot_folder
+          result.presentation_file = ev.presentation_file
+          result.video_file = ev.video_file
           result.operation_id = ev.operation_id ?? opId
           setState({
             status: 'success',
             progress: 100,
             stage: 'complete',
-            message: `Generated ${result.screenshot_files.length} screenshot(s)`,
+            message: ev.message ?? `Generated ${result.screenshot_files.length} screenshot(s)`,
             result,
             operationId: result.operation_id,
           })
@@ -158,12 +162,14 @@ export function useGenerate() {
           result.html_filename = ev.html_filename ?? result.html_filename
           result.screenshot_files = ev.screenshot_files ?? result.screenshot_files
           result.screenshot_folder = ev.screenshot_folder
+          result.presentation_file = ev.presentation_file
+          result.video_file = ev.video_file
           result.operation_id = ev.operation_id ?? opId
           setState({
             status: 'success',
             progress: 100,
             stage: 'complete',
-            message: `Generated ${result.screenshot_files.length} screenshot(s)`,
+            message: ev.message ?? `Generated ${result.screenshot_files.length} screenshot(s)`,
             result,
             operationId: result.operation_id,
           })
@@ -213,6 +219,8 @@ export function useGenerate() {
           html_filename: res.html_filename,
           screenshot_files: res.screenshot_files ?? [],
           screenshot_folder: res.screenshot_folder,
+          presentation_file: res.presentation_file,
+          video_file: res.video_file,
         }
         setState({
           status: 'success',

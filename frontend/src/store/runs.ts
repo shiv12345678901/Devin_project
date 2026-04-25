@@ -44,6 +44,8 @@ export interface Run {
   htmlFilename?: string
   screenshotFiles?: string[]
   screenshotFolder?: string
+  presentationFile?: string
+  videoFile?: string
   operationId?: string
   error?: string
 }
@@ -56,7 +58,14 @@ export interface RunsContextValue {
     patch: Partial<
       Pick<
         Run,
-        'status' | 'htmlFilename' | 'screenshotFiles' | 'screenshotFolder' | 'operationId' | 'error'
+        | 'status'
+        | 'htmlFilename'
+        | 'screenshotFiles'
+        | 'screenshotFolder'
+        | 'presentationFile'
+        | 'videoFile'
+        | 'operationId'
+        | 'error'
       >
     >,
   ) => void
