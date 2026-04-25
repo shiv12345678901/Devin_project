@@ -1,52 +1,127 @@
-"""Configuration file for Screenshot Studio.
+"""Configuration for TextBro / Screenshot Studio.
 
-Copy this file to config.py and fill in your actual values.
+Copy this file to ``config.py`` (which is gitignored) and fill in your
+actual values. Every entry can also be supplied through an environment
+variable (or a ``.env`` file in the project root) — env wins over the
+literal default below, so you can keep an unredacted ``config.py`` empty
+on shared machines.
+
+Env vars used:
+    API_KEY, API_URL, MODEL_VISION, MODEL_VISION_FALLBACK
+    HOST, PORT, DEBUG, MAX_CONTENT_LENGTH_BYTES
+    CORS_ORIGINS  (comma-separated allowlist; ``*`` for wide-open)
+    RATE_LIMIT, RATE_LIMIT_DEFAULT  (e.g. RATE_LIMIT_DEFAULT="60/minute;10/second")
+    PREFLIGHT_CACHE_SECS
+
+The backend talks to any OpenAI-compatible chat-completions endpoint
+(OpenAI, Groq, Together, NVIDIA NIM, a local llama.cpp server, …).
 """
+import os
 
-# API Configuration
-API_KEY = "your-api-key-here"
-API_URL = "https://api.example.com/v1"
-MODEL = "meta/llama-3.1-70b-instruct"
 
-# Application Settings
-DEBUG = True
-PORT = 5000
-HOST = "0.0.0.0"
+def _env(name: str, default: str = "") -> str:
+    return os.environ.get(name, default)
 
-# Output Settings
+
+# ─── API Configuration ─────────────────────────────────────────────────────
+#
+# `API_KEY` and `API_URL` are used by the vision/OCR client
+# (src/core/vision_client.py). `API_URL` is also used as the base URL for
+# chat completions — each entry in MODELS_CONFIG below provides its own
+# `api_key` so you can mix providers if you want.
+
+API_KEY = _env("API_KEY", "your-api-key-here")
+API_URL = _env("API_URL", "https://api.groq.com/openai/v1")
+
+# ─── Chat Models (used by src/core/ai_client.py) ───────────────────────────
+#
+# The frontend exposes three choices: default / fast / quality. Feel free
+# to point them at any model your provider exposes. Each entry MUST define
+# `model`, `temperature`, `top_p`, `max_tokens`, and `api_key`.
+
+MODELS_CONFIG = {
+    "default": {
+        "model": _env("MODEL_DEFAULT", "llama-3.1-70b-versatile"),
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "max_tokens": int(_env("MAX_TOKENS_DEFAULT", "16384")),
+        "api_key": API_KEY,
+    },
+    "fast": {
+        "model": _env("MODEL_FAST", "llama-3.1-8b-instant"),
+        "temperature": 0.3,
+        "top_p": 0.9,
+        "max_tokens": int(_env("MAX_TOKENS_FAST", "8192")),
+        "api_key": API_KEY,
+    },
+    "quality": {
+        "model": _env("MODEL_QUALITY", "llama-3.1-70b-versatile"),
+        "temperature": 0.1,
+        "top_p": 0.9,
+        "max_tokens": int(_env("MAX_TOKENS_QUALITY", "16384")),
+        "api_key": API_KEY,
+    },
+}
+
+# ─── Vision Model (used by src/core/vision_client.py) ──────────────────────
+
+MODEL_VISION = _env("MODEL_VISION", "llama-3.2-90b-vision-preview")
+MODEL_VISION_FALLBACK = _env("MODEL_VISION_FALLBACK", "llama-3.2-11b-vision-preview")
+
+# ─── Application Settings ──────────────────────────────────────────────────
+#
+# Defaults mirror the safe values used by ``app.py`` when run as a script.
+# DEBUG defaults to False to avoid the Werkzeug debugger (which is
+# remote-code-execution-by-design) being on accidentally.
+
+DEBUG = _env("DEBUG", "0").lower() in {"1", "true", "yes", "on"}
+PORT = int(_env("PORT", "5000"))
+HOST = _env("HOST", "127.0.0.1")  # bind to loopback by default
+
+# ─── Output Folders (relative to backend/) ─────────────────────────────────
+
 OUTPUT_FOLDER = "output/screenshots"
 HTML_FOLDER = "output/html"
 
-# Screenshot Settings
+# ─── Screenshot Settings ───────────────────────────────────────────────────
+
 DEFAULT_VIEWPORT_WIDTH = 1920
 DEFAULT_VIEWPORT_HEIGHT = 1080
 DEFAULT_ZOOM = 2.1
 DEFAULT_OVERLAP = 15
 MAX_SCREENSHOTS_LIMIT = 50
 
-# AI Settings
+# Cap on how many pages we'll rasterize from a PDF in /extract-from-image.
+PDF_MAX_PAGES = int(_env("PDF_MAX_PAGES", "100"))
+
+# ─── AI Settings ───────────────────────────────────────────────────────────
+
 MAX_TOKENS = 16384
 TEMPERATURE = 0.2
 
-# PowerPoint Automation Settings
-POWERPOINT_ENABLED = True  # Enable/disable PowerPoint features
-POWERPOINT_TEMPLATE_PATH = "templates/powerpoint/default.pptm"  # Default template
-POWERPOINT_OUTPUT_FOLDER = "output/presentations"  # Where to save presentations
-POWERPOINT_VIDEO_FOLDER = "output/videos"  # Where to save videos
+# ─── PowerPoint Automation Settings (Windows only) ─────────────────────────
 
-# Slide Settings
-DEFAULT_SLIDE_DURATION = 3.0  # Seconds per slide
-DEFAULT_TRANSITION_TYPE = "fade"  # fade, push, wipe, none
-DEFAULT_TRANSITION_DURATION = 0.5  # Seconds for transition
+POWERPOINT_ENABLED = True
+POWERPOINT_TEMPLATE_PATH = "templates/powerpoint/default.pptm"
+POWERPOINT_OUTPUT_FOLDER = "output/presentations"
+POWERPOINT_VIDEO_FOLDER = "output/videos"
 
-# Video Export Settings
-VIDEO_RESOLUTION_WIDTH = 3840  # 4K width
-VIDEO_RESOLUTION_HEIGHT = 2160  # 4K height
-VIDEO_FPS = 30  # Frames per second
-VIDEO_QUALITY = 5  # 1-5, where 5 is highest quality
-VIDEO_FORMAT = "mp4"  # Output format
+# ─── Slide Settings ────────────────────────────────────────────────────────
 
-# Image Insertion Settings
-IMAGE_FIT_MODE = "contain"  # contain, cover, fill
-IMAGE_POSITION = "center"  # center, top, bottom
+DEFAULT_SLIDE_DURATION = 5.0          # seconds per slide
+DEFAULT_TRANSITION_TYPE = "fade"      # fade | push | wipe | none
+DEFAULT_TRANSITION_DURATION = 0.5     # seconds for transition
+
+# ─── Video Export Settings ─────────────────────────────────────────────────
+
+VIDEO_RESOLUTION_WIDTH = 1920
+VIDEO_RESOLUTION_HEIGHT = 1080
+VIDEO_FPS = 30
+VIDEO_QUALITY = 5               # 1-5, where 5 is highest
+VIDEO_FORMAT = "mp4"
+
+# ─── Image Insertion Settings ──────────────────────────────────────────────
+
+IMAGE_FIT_MODE = "contain"      # contain | cover | fill
+IMAGE_POSITION = "center"       # center | top | bottom
 PRESERVE_ASPECT_RATIO = True

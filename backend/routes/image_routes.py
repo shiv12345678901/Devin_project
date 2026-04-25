@@ -60,7 +60,7 @@ def extract_from_image():
         else:
             image_paths_to_process = [temp_path]
 
-        from src.core.vision_client import extract_text_from_multiple_images
+        from core.vision_client import extract_text_from_multiple_images
         result = extract_text_from_multiple_images(image_paths_to_process, instructions)
 
         # Cleanup
@@ -146,7 +146,7 @@ def image_to_screenshots_sse():
 
                 try:
                     if is_pdf and len(image_paths_to_process) > 1:
-                        from src.core.vision_client import extract_text_from_image
+                        from core.vision_client import extract_text_from_image
                         all_pages_text = []
                         total_pages = len(image_paths_to_process)
                         for i, img_path in enumerate(image_paths_to_process):
@@ -164,7 +164,7 @@ def image_to_screenshots_sse():
                         else:
                             extraction_result = None
                     else:
-                        from src.core.vision_client import extract_text_from_multiple_images
+                        from core.vision_client import extract_text_from_multiple_images
                         extraction_result = extract_text_from_multiple_images(image_paths_to_process, instructions)
                 except Exception as vision_err:
                     extraction_result = None
@@ -209,6 +209,8 @@ def image_to_screenshots_sse():
                 html_filename, _ = save_html(html_content, prefix="html_from_image")
 
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai_complete', 'message': 'HTML generated successfully', 'progress': 60})}\n\n"
+                # Let the UI preview the generated HTML before screenshots finish.
+                yield f"data: {json.dumps({'type': 'html_generated', 'html_filename': html_filename, 'html_content': html_content})}\n\n"
 
                 # STAGE 3: Screenshots (DRY #12)
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshots', 'message': 'Generating screenshots from HTML...', 'progress': 65})}\n\n"
@@ -240,14 +242,13 @@ def image_to_screenshots_sse():
 
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshots_complete', 'message': 'Screenshots captured successfully', 'progress': 90})}\n\n"
 
-                result_data = {
-                    'raw_text': raw_text,
-                    'html_filename': html_filename,
-                    'screenshot_files': [f"batch {batch_id}/{name}" for name in screenshot_names],
-                    'screenshot_folder': f"batch {batch_id}"
-                }
-                yield f"data: {json.dumps({'type': 'complete', 'stage': 'complete', 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'progress': 100, 'result': result_data})}\n\n"
+                yield f"data: {json.dumps({'type': 'complete', 'stage': 'complete', 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'progress': 100, 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': [f'batch {batch_id}/{name}' for name in screenshot_names], 'screenshot_count': len(screenshot_files), 'screenshot_folder': f'batch {batch_id}', 'operation_id': operation_id, 'raw_text': raw_text})}\n\n"
 
+            except CancelledError:
+                # Must be caught before the generic Exception handler, otherwise
+                # a user-initiated cancel surfaces as an error toast instead of
+                # the clean 'cancelled' state.
+                yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Operation cancelled'})}\n\n"
             except Exception as e:
                 import traceback
                 traceback.print_exc()

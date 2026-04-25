@@ -4,6 +4,43 @@ import re
 import glob
 import json
 import time
+import threading
+
+# Process-wide in-memory lock that serializes history read-modify-write.
+# SSE runs execute on separate Flask worker threads and can finish at the same
+# time; without serializing the JSON file RMW, concurrent writes would clobber
+# each other and silently drop entries (classic TOCTOU).
+_HISTORY_LOCK = threading.Lock()
+
+# Cross-process advisory file lock. Only engaged on POSIX (fcntl). Windows
+# uses msvcrt.locking — we detect at import time.
+try:  # pragma: no cover — platform-dependent
+    import fcntl  # type: ignore
+
+    def _file_lock(fh):
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+
+    def _file_unlock(fh):
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+except ImportError:  # Windows
+    try:
+        import msvcrt  # type: ignore
+
+        def _file_lock(fh):
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+
+        def _file_unlock(fh):
+            try:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+    except ImportError:  # neither available — degrade to thread-only lock
+        def _file_lock(_fh):
+            return None
+
+        def _file_unlock(_fh):
+            return None
 
 from screenshot_engines.playwright_engine import take_screenshot_playwright
 
@@ -19,37 +56,71 @@ for _folder in [OUTPUT_FOLDER, HTML_FOLDER]:
 
 # ─── Batch ID ─────────────────────────────────────────────────────────────
 
+# Serializes both the disk scan AND the os.makedirs that reserves the next
+# numeric folder. Without this, two concurrent runs would scan, both compute
+# N+1, and both try to write to the same "batch N+1" directory.
+_BATCH_ID_LOCK = threading.Lock()
+
+
 def get_next_batch_id():
-    """Scan OUTPUT_FOLDER to find the highest batch N and return N+1 as string."""
-    try:
-        if not os.path.exists(OUTPUT_FOLDER):
-            return "1"
-        max_id = 0
-        for item in os.listdir(OUTPUT_FOLDER):
-            if item.startswith("batch ") and os.path.isdir(os.path.join(OUTPUT_FOLDER, item)):
+    """Pick the next free batch ID and atomically reserve its folder.
+
+    Walks ``OUTPUT_FOLDER`` once for both ``batch N/`` directories and any
+    top-level ``N(M).png`` files (so legacy non-batched runs still bump the
+    counter), then ``mkdir`` s ``batch <N+1>/`` while the lock is held. The
+    mkdir doubles as the reservation: if a second concurrent caller picks
+    the same N (shouldn't happen under the lock, but belt-and-braces) it
+    would race on ``EEXIST`` and we'd retry.
+    """
+    with _BATCH_ID_LOCK:
+        try:
+            if not os.path.exists(OUTPUT_FOLDER):
+                os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+            for _attempt in range(10):
+                max_id = 0
+                for item in os.listdir(OUTPUT_FOLDER):
+                    if item.startswith("batch ") and os.path.isdir(
+                        os.path.join(OUTPUT_FOLDER, item)
+                    ):
+                        try:
+                            num = int(item.split(" ")[1])
+                            max_id = max(max_id, num)
+                        except ValueError:
+                            pass
+                    # Also account for legacy top-level files like 5(1).png
+                    match = re.match(r'^(\d+)\(\d+\)\.png$', item)
+                    if match:
+                        max_id = max(max_id, int(match.group(1)))
+                next_id = max_id + 1
+                target = os.path.join(OUTPUT_FOLDER, f"batch {next_id}")
                 try:
-                    num = int(item.split(" ")[1])
-                    max_id = max(max_id, num)
-                except ValueError:
-                    pass
-            # Also check top-level files like 5(1).png
-            match = re.match(r'^(\d+)\(\d+\)\.png$', item)
-            if match:
-                max_id = max(max_id, int(match.group(1)))
-        return str(max_id + 1)
-    except Exception as e:
-        print(f"Error finding next batch ID: {e}")
-        return str(int(time.time()))
+                    os.makedirs(target, exist_ok=False)
+                    return str(next_id)
+                except FileExistsError:
+                    # Lost a race (or stale dir from a previous run with no
+                    # children). Try the next ID.
+                    continue
+            # Fall back to a timestamp if we somehow couldn't reserve a slot.
+            return str(int(time.time()))
+        except Exception as e:
+            print(f"Error finding next batch ID: {e}")
+            return str(int(time.time()))
 
 
 # ─── Sanitization ─────────────────────────────────────────────────────────
 
 def sanitize_folder_path(folder_path, default):
-    """Validate folder path is safe (under output/) to prevent path traversal."""
+    """Validate folder path is safe (under output/) to prevent path traversal.
+
+    The check must be strict-boundary: accept the literal "output" or anything
+    under "output/…". Rejects "outputevil", "output_backup", etc. which would
+    otherwise pass a naive `startswith('output')` check.
+    """
     if not folder_path:
         return default
     normalized = os.path.normpath(folder_path)
-    if os.path.isabs(normalized) or normalized.startswith('..') or not normalized.startswith('output'):
+    under_output = normalized == 'output' or normalized.startswith('output' + os.sep)
+    if os.path.isabs(normalized) or normalized.startswith('..') or not under_output:
         print(f"⚠️ Blocked unsafe folder path: {folder_path}, using default: {default}")
         return default
     return normalized
@@ -81,7 +152,7 @@ def take_screenshots(html_content, screenshot_name, screenshot_folder=None,
     folder = screenshot_folder or OUTPUT_FOLDER
     os.makedirs(folder, exist_ok=True)
 
-    screenshot_filename = f"{screenshot_name}(1).png"
+    screenshot_filename = f"{screenshot_name}.png"
     screenshot_path = os.path.join(folder, screenshot_filename)
 
     # Delete old screenshots to prevent leftovers
@@ -131,28 +202,54 @@ def save_html(html_content, prefix="html_notes", folder=None):
 def log_generation(entry):
     """
     Append a generation entry to the history log.
-    
-    entry should be a dict with keys like:
-      tool, input_preview, html_file, screenshot_folder, screenshot_count,
-      settings, timestamp
+
+    Uses a process-wide threading.Lock plus an advisory file lock so the
+    read-modify-write cycle on HISTORY_FILE can't be raced by concurrent
+    SSE workers (two runs completing at once would otherwise silently drop
+    one entry).
     """
-    try:
-        history = []
-        if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                history = json.load(f)
+    entry.setdefault('timestamp', time.time())
+    entry.setdefault('datetime', time.strftime('%Y-%m-%d %H:%M:%S'))
 
-        entry.setdefault('timestamp', time.time())
-        entry.setdefault('datetime', time.strftime('%Y-%m-%d %H:%M:%S'))
-        history.append(entry)
+    with _HISTORY_LOCK:
+        try:
+            # Ensure file exists so we can grab an advisory lock on it.
+            if not os.path.exists(HISTORY_FILE):
+                os.makedirs(os.path.dirname(HISTORY_FILE) or '.', exist_ok=True)
+                with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+                    f.write('[]')
 
-        # Keep last 200 entries
-        history = history[-200:]
+            with open(HISTORY_FILE, 'r+', encoding='utf-8') as f:
+                _file_lock(f)
+                try:
+                    raw = f.read()
+                    try:
+                        history = json.loads(raw) if raw.strip() else []
+                    except json.JSONDecodeError:
+                        # Corrupted file — start fresh. Do NOT os.replace the
+                        # file while we still hold `f` open: on POSIX that
+                        # just renames the inode and leaves our write stream
+                        # pointing at the .corrupt path, so the fresh entry
+                        # would vanish with the renamed file. Instead save
+                        # a forensic copy via read-and-write, then truncate
+                        # the original in place below.
+                        try:
+                            with open(HISTORY_FILE + '.corrupt', 'w', encoding='utf-8') as forensic:
+                                forensic.write(raw)
+                        except OSError:
+                            pass
+                        history = []
 
-        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(history, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"Warning: Failed to log generation history: {e}")
+                    history.append(entry)
+                    history = history[-200:]
+
+                    f.seek(0)
+                    f.truncate()
+                    json.dump(history, f, indent=2, ensure_ascii=False)
+                finally:
+                    _file_unlock(f)
+        except Exception as e:
+            print(f"Warning: Failed to log generation history: {e}")
 
 
 def get_history():

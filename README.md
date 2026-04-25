@@ -1,162 +1,165 @@
-# TextBro — Text to Video Studio
+# TextBro — Text → Video Studio
 
-A React + Vite + TypeScript + Tailwind frontend, plus the Flask backend
-(formerly [`shiv12345678901/yt-project`](https://github.com/shiv12345678901/yt-project))
-that turns text, HTML, or images into screenshots and video presentations
-using AI. The two services live side-by-side in this repo:
+Turn text, raw HTML, images, or PDFs into video-ready screenshots using AI.
+
+- **Backend**: Flask + Playwright (Python) — originally
+  [Screenshot Studio](https://github.com/shiv12345678901/yt-project).
+- **Frontend**: React + Vite + TypeScript + Tailwind CSS.
+- **Features**: live SSE progress, cancel, screenshot gallery, ZIP download,
+  history, cache inspection. On Windows, the backend can also stitch
+  screenshots into a PowerPoint-driven video.
 
 ```
-.
-├── src/                  # React frontend (Vite)
-├── backend/              # Flask backend (see backend/README.md)
-└── ...
+Devin_project/
+├── backend/          # Flask app, routes, Playwright screenshot engine
+│   ├── app.py
+│   ├── start.py
+│   ├── requirements.txt
+│   ├── config/
+│   ├── routes/
+│   └── src/
+└── frontend/         # React SPA
+    ├── src/
+    ├── package.json
+    └── vite.config.ts
 ```
-
-## Features
-
-- **Text → Video** — paste text, AI generates HTML, renders to screenshots
-  with live SSE progress and cancel support.
-- **HTML → Video** — paste or upload raw HTML, render directly. Includes
-  beautify / minify helpers.
-- **Image / PDF → Video** — upload an image or PDF, vision AI extracts text,
-  generates HTML, and captures screenshots.
-- **Resources** — browse generated screenshots, HTML files, history, cache
-  stats; delete files; clear cache; download all as ZIP.
 
 ## Requirements
 
-- Node.js 20.19+ (or 22.13+)
-- Python 3.10+ for the backend (see [backend/README.md](backend/README.md)
-  for full instructions).
+- **Python** 3.10+ (3.11 recommended)
+- **Node.js** 20.19+ or 22.13+
+- **Playwright's Chromium** (installed via `playwright install chromium`)
+- An API key for an OpenAI-compatible LLM endpoint (Groq, Together, OpenAI,
+  a local `llama.cpp` server, etc.) — the backend uses chat completions.
+- **Optional (Windows only)** Microsoft PowerPoint, for the
+  screenshot → video pipeline.
 
-## Quick start
+## First-time setup
 
 ```bash
-# 1. Install frontend dependencies
-npm install
+# 1) Clone
+git clone https://github.com/shiv12345678901/Devin_project.git
+cd Devin_project
+```
 
-# 2. Start the Flask backend (in a separate terminal)
+### Backend
+
+```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
+
+# (Optional but recommended) create a virtualenv
+python -m venv .venv
+# Windows:     .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+
 pip install -r requirements.txt
 playwright install chromium
-cp config/config.example.py config/config.py   # add API_KEY/API_URL/MODEL
-cp .env.example .env                           # security knobs (optional)
-python start.py    # binds to 127.0.0.1:5000 by default
 
-# 3. Start the React dev server (back at repo root)
-npm run dev        # opens http://localhost:5173
+# Fill in your API credentials
+cp config/config.example.py config/config.py
+# Edit config/config.py:
+#   API_KEY   = "sk-..."                 # your LLM API key
+#   API_URL   = "https://api.groq.com/openai/v1"   # or wherever
+#   MODEL     = "llama-3.1-70b-versatile"
 ```
 
-The backend now binds to **127.0.0.1** by default and exposes a `/healthz`
-liveness probe. See [`backend/README.md`](backend/README.md) for the full
-security configuration (CORS allowlist, optional `X-API-Key` shared secret,
-per-IP rate limits, debug-mode gating).
-
-The Vite dev server proxies all Flask API paths (`/generate-sse`,
-`/generate-html`, `/screenshots/*`, etc.) to `http://localhost:5000`, so
-you can develop without touching CORS.
-
-### Changing the backend URL
-
-By default the dev proxy points to `http://localhost:5000`. Override with an
-environment variable:
+### Frontend
 
 ```bash
-VITE_BACKEND_URL=http://192.168.1.10:5000 npm run dev
+cd ../frontend
+npm install
 ```
 
-For production builds, set `VITE_BACKEND_URL` at build time — the API client
-will call that URL directly instead of relying on the proxy.
+## Running it
 
-## Production deployment
+You have two options.
 
-You have two options, depending on how you want to serve the app.
-
-### Option A — Serve React from Flask (no CORS needed)
-
-Build the React app, then point Flask's static/template folders at the
-output directory:
+### Option A — dev mode (two terminals, hot reload everywhere)
 
 ```bash
-npm run build
-# dist/ contains index.html + assets. Copy into yt-project/static/app/
+# Terminal 1
+cd backend && python start.py         # http://localhost:5000
+
+# Terminal 2
+cd frontend && npm run dev            # http://localhost:5173
 ```
 
-Then either replace `yt-project/templates/index.html` with the built file,
-or add a new Flask route that serves `dist/index.html`.
+Open http://localhost:5173 — the Vite dev server proxies every API path to
+the Flask backend so CORS isn't an issue. Changes to React are hot-reloaded.
 
-### Option B — Separate deployment with CORS enabled
-
-`flask-cors` is already wired in (`backend/app.py`) — set the allowlist via
-the `ALLOWED_ORIGINS` env var instead of editing code:
+### Option B — single server (Flask serves the built React app)
 
 ```bash
-# backend/.env
-ALLOWED_ORIGINS=https://your-frontend-domain
-API_KEY=<generate a long random string>
-FLASK_HOST=127.0.0.1   # keep loopback; put nginx/caddy/cloudflared in front
+cd frontend && npm run build          # produces frontend/dist/
+cd ../backend && python start.py      # http://localhost:5000
 ```
 
-Run with a real WSGI server:
+Now Flask serves the UI and the API from one port, so this is also the
+setup you'd use when pointing a tunnel (ngrok, Cloudflare Tunnel) at it.
 
-```bash
-gunicorn -w 4 -b 127.0.0.1:5000 wsgi:app   # Linux/Mac
-waitress-serve --listen=127.0.0.1:5000 wsgi:app   # Windows
-```
+## What's wired to what
 
-Then build the frontend with `VITE_BACKEND_URL=https://your-backend-domain
-npm run build` and deploy `dist/` to any static host (Netlify, Vercel,
-Cloudflare Pages, S3 + CloudFront, etc.). Make sure the frontend forwards
-`X-API-Key` on every request — the API key is required on every non-public
-route once it's set.
+| Frontend page     | Backend endpoint                    | Notes                               |
+| ----------------- | ----------------------------------- | ----------------------------------- |
+| Text → Video      | `POST /generate-sse`                | SSE progress, cancel via `/cancel/<op>` |
+| HTML → Video      | `POST /generate-html`, `/beautify`, `/minify` | Synchronous                 |
+| Image/PDF → Video | `POST /image-to-screenshots-sse`    | SSE progress, OCR + AI + screenshots |
+| Resources         | `GET /list`, `/history`, `/cache/stats`, `DELETE /delete/<type>/<name>`, `POST /cache/clear` | — |
+| Gallery           | `GET /screenshots/<path>`           | Served by Flask                     |
+| ZIP download      | `POST /download-zip`                | Streams a ZIP of selected files     |
+
+The full API client is in
+[`frontend/src/api/client.ts`](frontend/src/api/client.ts) and the SSE
+state machine in
+[`frontend/src/hooks/useGenerate.ts`](frontend/src/hooks/useGenerate.ts).
+
+## Configuration reference
+
+Key values in `backend/config/config.py` (see
+`backend/config/config.example.py` for the full list):
+
+| Setting                        | What it controls                             |
+| ------------------------------ | -------------------------------------------- |
+| `API_KEY`, `API_URL`, `MODEL`  | Which LLM the backend talks to (chat completions) |
+| `PORT`, `HOST`                 | Flask listen address                         |
+| `DEFAULT_VIEWPORT_WIDTH/HEIGHT`| Screenshot viewport                          |
+| `DEFAULT_ZOOM`, `DEFAULT_OVERLAP` | Capture scaling and slide overlap         |
+| `MAX_SCREENSHOTS_LIMIT`        | Hard cap on screenshots per run              |
+| `POWERPOINT_*`                 | Windows-only PowerPoint/video export         |
+| `VIDEO_*`                      | Resolution / FPS / quality for PPT → video   |
 
 ## Scripts
 
+**Frontend** (inside `frontend/`)
+
 | Command           | Description                              |
 | ----------------- | ---------------------------------------- |
-| `npm run dev`     | Start the Vite dev server with API proxy |
-| `npm run build`   | Type-check + production build to `dist/` |
+| `npm run dev`     | Start Vite dev server with API proxy     |
+| `npm run build`   | TypeScript + production build to `dist/` |
 | `npm run preview` | Preview the production build locally     |
 | `npm run lint`    | Run ESLint                               |
 
-## Project structure
+**Backend** (inside `backend/`)
 
-```
-src/
-├── api/
-│   ├── client.ts       # fetch wrappers + POST SSE streaming
-│   └── types.ts
-├── components/
-│   ├── Layout.tsx      # sidebar + responsive nav
-│   ├── ProgressBar.tsx
-│   ├── ScreenshotGallery.tsx
-│   └── SettingsPanel.tsx
-├── hooks/
-│   └── useGenerate.ts  # SSE-driven generation state machine
-├── pages/
-│   ├── TextToVideo.tsx
-│   ├── HtmlToVideo.tsx
-│   ├── ImageToVideo.tsx
-│   └── Resources.tsx
-├── App.tsx             # routes
-├── main.tsx
-└── index.css           # Tailwind + component classes
-```
+| Command               | Description                                          |
+| --------------------- | ---------------------------------------------------- |
+| `python start.py`     | Launch the Flask app with env checks                 |
+| `python app.py`       | Launch the Flask app directly (skip env checks)      |
 
-## Backend endpoints used
+## Troubleshooting
 
-| Path                         | Method | Purpose                          |
-| ---------------------------- | ------ | -------------------------------- |
-| `/generate-sse`              | POST   | Text → HTML → screenshots (SSE)  |
-| `/generate-html`             | POST   | HTML → screenshots               |
-| `/image-to-screenshots-sse`  | POST   | Image/PDF → screenshots (SSE)    |
-| `/cancel/<operation_id>`     | POST   | Cancel an in-progress generation |
-| `/beautify`, `/minify`       | POST   | HTML helpers                     |
-| `/screenshots/<filename>`    | GET    | Serve screenshot PNG             |
-| `/html/<filename>`           | GET    | Serve HTML                       |
-| `/download-zip`              | POST   | Bundle files into a ZIP          |
-| `/list`                      | GET    | List generated files             |
-| `/delete/<type>/<filename>`  | DELETE | Delete a file                    |
-| `/history`                   | GET    | Generation history               |
-| `/cache/stats`, `/cache/clear` | GET/POST | AI response cache           |
+- **`Configuration file not found`** when starting the backend — you didn't
+  copy `config/config.example.py` to `config/config.py`.
+- **Generation returns 500 / `Failed to get AI response`** — the API key or
+  base URL in `config.py` is wrong, or the model isn't available from that
+  endpoint.
+- **Screenshots are blank** — run `playwright install chromium` again.
+- **`/assets/...` 404 on Option B** — rebuild the frontend after code
+  changes (`cd frontend && npm run build`).
+- **Video export fails on macOS/Linux** — the PowerPoint exporter is
+  Windows-only. Screenshots still work on all platforms.
+
+## Credits
+
+Based on [Screenshot Studio](https://github.com/shiv12345678901/yt-project)
+by Educated Nepal. Original stack: Flask + Playwright + Llama 3.1 70B.

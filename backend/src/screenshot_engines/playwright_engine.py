@@ -1,4 +1,5 @@
 """Screenshot capture using Playwright with browser pooling."""
+import atexit
 from playwright.sync_api import sync_playwright
 from PIL import Image
 import tempfile
@@ -9,22 +10,41 @@ import threading
 
 
 class BrowserPool:
-    """Thread-safe browser pool that keeps a Chromium instance per thread."""
-    
+    """Thread-safe browser pool that keeps a Chromium instance per thread.
+
+    Each Flask worker thread gets its own Playwright + Chromium pair via
+    ``threading.local``. To support clean process shutdown we additionally
+    keep a global registry (thread-id -> (playwright, browser)) so an
+    ``atexit`` hook can close every Chromium even on threads that aren't
+    currently executing — without it, ``shutdown()`` only ever cleaned up
+    the thread that called it and we leaked Chromium processes.
+    """
+
     def __init__(self):
         self._local = threading.local()
         self._lock = threading.Lock()
-    
+        # tid -> {"playwright": pw, "browser": br}
+        self._registry: dict = {}
+
     def _ensure_browser(self):
         """Launch browser if not already running in this thread."""
+        tid = threading.get_ident()
         if not hasattr(self._local, 'playwright') or self._local.playwright is None:
             self._local.playwright = sync_playwright().start()
             self._local.browser = self._local.playwright.chromium.launch(headless=True)
+            self._registry[tid] = {
+                'playwright': self._local.playwright,
+                'browser': self._local.browser,
+            }
             print(f"🌐 Browser launched for thread {threading.current_thread().name}")
         elif not self._local.browser.is_connected():
             self._local.browser = self._local.playwright.chromium.launch(headless=True)
+            self._registry[tid] = {
+                'playwright': self._local.playwright,
+                'browser': self._local.browser,
+            }
             print(f"🌐 Browser reconnected for thread {threading.current_thread().name}")
-    
+
     def get_page(self, logical_width, logical_height, zoom):
         """Get a new page from the thread-local browser."""
         with self._lock:
@@ -34,10 +54,11 @@ class BrowserPool:
                 device_scale_factor=zoom,
             )
             return page
-    
+
     def shutdown(self):
         """Clean up browser and playwright resources for current thread."""
         with self._lock:
+            tid = threading.get_ident()
             if hasattr(self._local, 'browser') and self._local.browser:
                 try:
                     self._local.browser.close()
@@ -50,11 +71,49 @@ class BrowserPool:
                 except Exception:
                     pass
                 self._local.playwright = None
-            print(f"🌐 Browser pool shut down for thread {threading.current_thread().name}", flush=True)
+            self._registry.pop(tid, None)
+            print(
+                f"🌐 Browser pool shut down for thread "
+                f"{threading.current_thread().name}",
+                flush=True,
+            )
+
+    def shutdown_all(self):
+        """Close every Chromium instance we ever launched, regardless of thread.
+
+        Called from an ``atexit`` hook on process exit. Closing a Playwright
+        object created on another thread is technically off-pattern, but in
+        practice the Playwright sync API tolerates it on shutdown and this
+        prevents zombie Chromium processes.
+        """
+        with self._lock:
+            for tid, refs in list(self._registry.items()):
+                try:
+                    if refs.get('browser') is not None:
+                        refs['browser'].close()
+                except Exception:
+                    pass
+                try:
+                    if refs.get('playwright') is not None:
+                        refs['playwright'].stop()
+                except Exception:
+                    pass
+                self._registry.pop(tid, None)
+            print("🌐 BrowserPool.shutdown_all: all Chromium instances closed.", flush=True)
 
 
 # Module-level browser pool instance
 _browser_pool = BrowserPool()
+
+
+# Best-effort cleanup on process exit. Without this, hot-reload + Ctrl+C
+# leak headless Chromium processes (one per worker thread that ever ran).
+@atexit.register
+def _shutdown_browser_pool():
+    try:
+        _browser_pool.shutdown_all()
+    except Exception:
+        pass
 
 
 def get_browser_pool():
@@ -110,6 +169,19 @@ def take_screenshot_playwright(
         logical_width = int(viewport_width / zoom)
         logical_height = int(viewport_height / zoom)
 
+        # Clamp overlap below the logical viewport so (viewport_h - overlap)
+        # in the num_est division is always positive. Without this, a user
+        # sending overlap >= viewport_h causes ZeroDivisionError or negative
+        # step-size crashes in the capture loop.
+        max_overlap = max(0, logical_height - 1)
+        if overlap > max_overlap:
+            print(
+                f"⚠️ overlap={overlap} exceeds logical viewport height "
+                f"{logical_height}; clamping to {max_overlap}",
+                flush=True,
+            )
+            overlap = max_overlap
+
         # Use pooled browser
         page = _browser_pool.get_page(logical_width, logical_height, zoom)
 
@@ -132,6 +204,10 @@ def take_screenshot_playwright(
         print(f"🔍 Zoom: {zoom}x → logical {logical_width}×{logical_height} → "
               f"output {viewport_width}×{viewport_height}", flush=True)
 
+        # Re-clamp against the real clientHeight (may differ from logical_height
+        # when scrollbars take space) so the divisor below is always >= 1.
+        if overlap >= viewport_h:
+            overlap = max(0, viewport_h - 1)
         num_est = max(1, -(-total_height // (viewport_h - overlap)))
         print(f"📸 Estimated {num_est} screenshot(s) (overlap={overlap}px)", flush=True)
 

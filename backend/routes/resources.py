@@ -1,10 +1,15 @@
 """Resources Blueprint — file listing, serving, deletion, ZIP download (#7), history (#8), regeneration."""
 import os
 import io
+import re
+import uuid
 import zipfile
 import time
 
 from flask import Blueprint, request, jsonify, send_file
+
+THUMBNAILS_FOLDER = 'output/thumbnails'
+os.makedirs(THUMBNAILS_FOLDER, exist_ok=True)
 
 from core.ai_client import cache
 from utils.performance_metrics import metrics_tracker
@@ -20,26 +25,92 @@ resources_bp = Blueprint('resources', __name__)
 
 # ─── File Serving ──────────────────────────────────────────────────────────
 
+def _safe_child(base_folder, user_path):
+    """Resolve user_path relative to base_folder, rejecting traversal.
+
+    Returns the absolute path inside base_folder, or None if the request
+    would escape the folder.
+    """
+    abs_base = os.path.abspath(base_folder)
+    candidate = os.path.abspath(os.path.join(base_folder, user_path))
+    if candidate == abs_base or candidate.startswith(abs_base + os.sep):
+        return candidate
+    return None
+
+
 @resources_bp.route('/screenshots/<path:filename>')
 def get_screenshot(filename):
     """Serve screenshot file."""
-    file_path = os.path.join(OUTPUT_FOLDER, filename)
-    if os.path.exists(file_path):
-        return send_file(file_path, mimetype='image/png')
-    # Walk output for batch subfolders
-    for root, dirs, files in os.walk('output'):
-        if filename in files:
-            return send_file(os.path.join(root, filename), mimetype='image/png')
+    safe = _safe_child(OUTPUT_FOLDER, filename)
+    if safe is None:
+        return jsonify({'error': 'Invalid file path'}), 403
+    if os.path.exists(safe):
+        return send_file(safe, mimetype='image/png')
+
+    # Fall back to walking output/screenshots/ for batch subfolders — must
+    # stay rooted at OUTPUT_FOLDER, not `output/`, otherwise a basename match
+    # would serve internal files like `output/cache/ai_responses.json` or
+    # `output/history.json` under the screenshots endpoint.
+    abs_screens = os.path.abspath(OUTPUT_FOLDER)
+    basename = os.path.basename(filename)
+    for root, _dirs, files in os.walk(abs_screens):
+        if basename in files:
+            candidate = os.path.abspath(os.path.join(root, basename))
+            if candidate.startswith(abs_screens + os.sep):
+                return send_file(candidate, mimetype='image/png')
     return jsonify({'error': 'File not found'}), 404
 
 
-@resources_bp.route('/html/<filename>')
+@resources_bp.route('/html/<path:filename>')
 def get_html(filename):
     """Serve HTML file."""
-    file_path = os.path.join(HTML_FOLDER, filename)
-    if os.path.exists(file_path):
-        return send_file(file_path, mimetype='text/html')
+    safe = _safe_child(HTML_FOLDER, filename)
+    if safe is None:
+        return jsonify({'error': 'Invalid file path'}), 403
+    if os.path.exists(safe):
+        return send_file(safe, mimetype='text/html')
     return jsonify({'error': 'File not found'}), 404
+
+
+@resources_bp.route('/thumbnails/<path:filename>')
+def get_thumbnail(filename):
+    """Serve a previously-uploaded thumbnail image."""
+    safe = _safe_child(THUMBNAILS_FOLDER, filename)
+    if safe is None:
+        return jsonify({'error': 'Invalid file path'}), 403
+    if os.path.exists(safe):
+        return send_file(safe)
+    return jsonify({'error': 'File not found'}), 404
+
+
+@resources_bp.route('/upload-thumbnail', methods=['POST'])
+def upload_thumbnail():
+    """Accept a thumbnail image upload and return its stable path.
+
+    Saves into THUMBNAILS_FOLDER with a sanitized `<uuid>_<original>` name
+    so subsequent /generate-sse requests can reference it by filename.
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file in request (expected form field "file")'}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({'error': 'Empty filename'}), 400
+
+    # Limit to common image types
+    ext = os.path.splitext(f.filename)[1].lower()
+    if ext not in ('.png', '.jpg', '.jpeg', '.webp', '.bmp'):
+        return jsonify({'error': f'Unsupported image type: {ext}'}), 400
+
+    safe_base = re.sub(r'[^A-Za-z0-9._-]+', '_', os.path.splitext(f.filename)[0])[:60]
+    stored_name = f'{uuid.uuid4().hex[:8]}_{safe_base}{ext}'
+    full_path = os.path.join(THUMBNAILS_FOLDER, stored_name)
+    f.save(full_path)
+    return jsonify({
+        'success': True,
+        'filename': stored_name,
+        'url': f'/thumbnails/{stored_name}',
+        'size_bytes': os.path.getsize(full_path),
+    })
 
 
 @resources_bp.route('/download/<path:filepath>')
@@ -55,9 +126,10 @@ def download_file(filepath):
             if os.path.exists(check) and os.path.isfile(check):
                 return send_file(check, as_attachment=True)
 
-    if safe_path.startswith('output') and os.path.exists(safe_path):
-        return send_file(safe_path, as_attachment=True)
-
+    # Strict-boundary check: only serve files that live directly under the
+    # whitelisted output subfolders already tried above. The earlier fallback
+    # `safe_path.startswith('output')` was too loose — matched `outputevil/…`
+    # and also handed out internal files like `output/cache/ai_responses.json`.
     return jsonify({'error': 'File not found'}), 404
 
 
@@ -89,7 +161,7 @@ def list_files():
 
 # ─── Delete ────────────────────────────────────────────────────────────────
 
-@resources_bp.route('/delete/<file_type>/<filename>', methods=['DELETE'])
+@resources_bp.route('/delete/<file_type>/<path:filename>', methods=['DELETE'])
 def delete_file_route(file_type, filename):
     """Delete a screenshot or HTML file."""
     try:
@@ -104,7 +176,7 @@ def delete_file_route(file_type, filename):
         abs_folder = os.path.abspath(folder)
         abs_file = os.path.abspath(file_path)
 
-        if not abs_file.startswith(abs_folder):
+        if not abs_file.startswith(abs_folder + os.sep):
             return jsonify({'error': 'Invalid file path'}), 403
 
         if not os.path.exists(file_path):
@@ -133,7 +205,9 @@ def regenerate():
         if not html_filename:
             return jsonify({'error': 'No HTML filename provided'}), 400
 
-        html_path = os.path.join(HTML_FOLDER, html_filename)
+        html_path = _safe_child(HTML_FOLDER, html_filename)
+        if html_path is None:
+            return jsonify({'error': 'Invalid file path'}), 403
         if not os.path.exists(html_path):
             return jsonify({'error': 'HTML file not found'}), 404
 
@@ -209,8 +283,11 @@ def download_zip():
                         full_path = candidate
                         break
 
-                # Also try direct path if under output/
-                if not full_path and safe.startswith('output') and os.path.exists(safe):
+                # Also try direct path if strictly under `output/` (not
+                # `outputevil/…` and not arbitrary other siblings).
+                if not full_path and (
+                    safe == 'output' or safe.startswith('output' + os.sep)
+                ) and os.path.isfile(safe):
                     full_path = safe
 
                 if full_path:
