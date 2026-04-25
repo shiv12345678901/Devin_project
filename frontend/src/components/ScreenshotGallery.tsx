@@ -1,7 +1,8 @@
 import { Download, Eye, Package } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api } from '../api/client'
 import { useToast } from '../store/toast'
+import HtmlPreviewModal from './HtmlPreviewModal'
 
 interface Props {
   /**
@@ -20,16 +21,6 @@ export default function ScreenshotGallery(props: Props) {
   const [preview, setPreview] = useState<string | null>(null)
   const [zipping, setZipping] = useState(false)
   const toast = useToast()
-
-  // Esc closes the lightbox preview.
-  useEffect(() => {
-    if (!preview) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setPreview(null)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [preview])
 
   if (files.length === 0) {
     return (
@@ -126,18 +117,12 @@ export default function ScreenshotGallery(props: Props) {
       </div>
 
       {preview && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setPreview(null)}
-        >
-          <img
-            src={preview}
-            alt="Preview"
-            className="max-h-full max-w-full rounded-md shadow-2xl"
-          />
-        </div>
+        <HtmlPreviewModal
+          kind="image"
+          src={preview}
+          title={preview.split('/').pop() ?? 'Screenshot'}
+          onClose={() => setPreview(null)}
+        />
       )}
     </div>
   )

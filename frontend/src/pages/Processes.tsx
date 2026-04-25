@@ -20,6 +20,7 @@ import { formatRelative, formatRuntime, useRuns } from '../store/runs'
 import type { Run, RunStatus, RunTool } from '../store/runs'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
+import HtmlPreviewModal from '../components/HtmlPreviewModal'
 
 type ToolLike = RunTool | 'regenerate' | 'text-to-image' | 'html-to-image' | 'image-to-screenshots' | string | undefined
 
@@ -93,6 +94,7 @@ function RunRow({
   // Derive `open` from (user click || highlight prop) so we don't need to
   // setState from an effect just because the prop flipped.
   const open = userOpen || highlight
+  const [preview, setPreview] = useState<string | null>(null)
   const scrolled = useRef(false)
   const rowRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
@@ -231,19 +233,28 @@ function RunRow({
                   // the wrong batch.
                   const url = api.screenshotUrl(f)
                   return (
-                    <a
+                    <button
                       key={f}
-                      href={url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block aspect-video overflow-hidden rounded-md border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/[0.03]"
+                      type="button"
+                      onClick={() => setPreview(url)}
+                      className="block aspect-video overflow-hidden rounded-md border border-slate-200 bg-slate-50 text-left transition-shadow hover:shadow-glass-lg dark:border-white/10 dark:bg-white/[0.03]"
+                      title={`Preview ${f.split('/').pop() ?? f}`}
                     >
                       <img src={url} alt={f} loading="lazy" className="h-full w-full object-cover" />
-                    </a>
+                    </button>
                   )
                 })}
               </div>
             </div>
+          )}
+
+          {preview && (
+            <HtmlPreviewModal
+              kind="image"
+              src={preview}
+              title={preview.split('/').pop() ?? 'Screenshot'}
+              onClose={() => setPreview(null)}
+            />
           )}
 
           {onRemove && (

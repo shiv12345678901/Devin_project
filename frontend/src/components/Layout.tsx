@@ -6,6 +6,7 @@ import {
   Home as HomeIcon,
   Library,
   LayoutGrid,
+  Loader2,
   Menu,
   Settings as SettingsIcon,
   X,
@@ -13,6 +14,7 @@ import {
 import clsx from 'clsx'
 
 import { api } from '../api/client'
+import { useRuns } from '../store/runs'
 
 type NavItem = {
   to: string
@@ -149,6 +151,11 @@ function Brand() {
 }
 
 function SidebarNav() {
+  const { runs } = useRuns()
+  // A run is "live" if at least one tracked entry is still in the running
+  // state. Shown next to the Processes link so the user never loses sight
+  // of an in-flight job when they navigate to Library / Settings / etc.
+  const runningCount = runs.filter((r) => r.status === 'running').length
   return (
     <nav className="flex-1 overflow-y-auto px-3 pb-4 pt-3">
       {NAV_GROUPS.map((group) => (
@@ -157,7 +164,9 @@ function SidebarNav() {
             {group.label}
           </div>
           <div className="space-y-0.5">
-            {group.items.map((item) => (
+            {group.items.map((item) => {
+              const showRunningBadge = item.to === '/processes' && runningCount > 0
+              return (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -192,11 +201,22 @@ function SidebarNav() {
                         isActive ? 'text-brand-600 dark:text-brand-300' : 'text-faint group-hover:text-[rgb(var(--text-muted))]',
                       )}
                     />
-                    {item.label}
+                    <span className="flex-1">{item.label}</span>
+                    {showRunningBadge && (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full bg-brand-500/15 px-1.5 py-0.5 text-[10px] font-medium text-brand-700 dark:text-brand-200"
+                        title={`${runningCount} run${runningCount === 1 ? '' : 's'} in progress`}
+                        aria-label={`${runningCount} run${runningCount === 1 ? '' : 's'} in progress`}
+                      >
+                        <Loader2 size={10} className="animate-spin" />
+                        {runningCount}
+                      </span>
+                    )}
                   </>
                 )}
               </NavLink>
-            ))}
+              )
+            })}
           </div>
         </div>
       ))}
