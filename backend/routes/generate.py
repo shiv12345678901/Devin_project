@@ -317,13 +317,54 @@ def generate_sse():
             
             ai_operation_id = f"{operation_id}_ai"
             metrics_tracker.start(ai_operation_id)
-            ai_content = get_ai_response(
-                input_text,
-                use_cache=use_cache,
-                cancel_event=cancel_event,
-                model_choice=model_choice,
-                system_prompt=system_prompt or None,
-            )
+
+            ai_q: "queue.Queue[dict]" = queue.Queue()
+            ai_holder: dict = {'content': None, 'error': None}
+
+            def _ai_worker():
+                try:
+                    ai_holder['content'] = get_ai_response(
+                        input_text,
+                        use_cache=use_cache,
+                        cancel_event=cancel_event,
+                        model_choice=model_choice,
+                        system_prompt=system_prompt or None,
+                    )
+                except Exception as exc:  # pragma: no cover — surfaced in UI
+                    ai_holder['error'] = str(exc)
+                finally:
+                    ai_q.put({'kind': '_done'})
+
+            ai_started = time.time()
+            ai_thread = threading.Thread(target=_ai_worker, daemon=True)
+            ai_thread.start()
+
+            while True:
+                try:
+                    msg = ai_q.get(timeout=2)
+                except queue.Empty:
+                    if cancel_event.is_set():
+                        ai_thread.join(timeout=10)
+                        metrics_tracker.end(ai_operation_id, success=False)
+                        metrics_tracker.end(operation_id, success=False)
+                        yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
+                        return
+                    elapsed = int(time.time() - ai_started)
+                    progress = min(28, 5 + max(1, elapsed // 3))
+                    yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai', 'message': f'AI is generating HTML... {elapsed}s elapsed', 'progress': progress})}\n\n"
+                    continue
+
+                if msg.get('kind') == '_done':
+                    break
+
+            ai_thread.join(timeout=10)
+            if ai_holder['error']:
+                metrics_tracker.end(ai_operation_id, success=False)
+                metrics_tracker.end(operation_id, success=False)
+                yield f"data: {json.dumps({'type': 'error', 'message': ai_holder['error']})}\n\n"
+                return
+
+            ai_content = ai_holder['content']
             metrics_tracker.end(ai_operation_id, success=bool(ai_content))
 
             if cancel_event.is_set():
@@ -434,6 +475,8 @@ def generate_sse():
             worker.start()
 
             yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshot', 'message': 'Launching browser…', 'progress': 37})}\n\n"
+            screenshot_started = time.time()
+            last_screenshot_progress = 37
 
             # Drain progress events until the worker signals completion.
             # The inner callback reports 10–90 within the screenshot phase;
@@ -452,7 +495,10 @@ def generate_sse():
                         metrics_tracker.end(operation_id, success=False)
                         yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
                         return
-                    yield ": heartbeat\n\n"
+                    elapsed = int(time.time() - screenshot_started)
+                    warmup_progress = min(45, last_screenshot_progress + 1)
+                    last_screenshot_progress = warmup_progress
+                    yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshot', 'message': f'Browser is rendering screenshots... {elapsed}s elapsed', 'progress': warmup_progress})}\n\n"
                     continue
 
                 if msg.get('kind') == '_done':
@@ -461,6 +507,7 @@ def generate_sse():
                 inner = msg.get('progress', 0)
                 outer = 35 + int(inner * 0.60)
                 outer = max(35, min(outer, 95))
+                last_screenshot_progress = max(last_screenshot_progress, outer)
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshot', 'message': msg.get('message', ''), 'progress': outer})}\n\n"
 
             worker.join(timeout=10)

@@ -6,12 +6,12 @@
  *   - Shows a live ETA countdown (not the static server-reported estimate).
  *   - Adds a moving shimmer while actively working so the UI doesn't look
  *     frozen when the server is mid-step and not emitting progress events.
- *   - Detects stalls: if the reported progress hasn't changed for a while,
- *     the bar switches into a warning state and surfaces a hint to check
- *     the backend (the #1 reason runs look "stuck at 0%").
+ *   - Detects quiet periods: if no progress, stage, or message update arrives
+ *     for a while, it shows a calm "still working" hint instead of looking
+ *     broken.
  */
 import { useEffect, useState } from 'react'
-import { AlertTriangle } from 'lucide-react'
+import { LoaderCircle } from 'lucide-react'
 
 interface Props {
   progress: number
@@ -36,6 +36,7 @@ const STAGE_LABELS: Record<string, string> = {
   ai_done: 'AI response finalized',
   html_saved: 'HTML saved',
   screenshot: 'Capturing screenshots',
+  export: 'Exporting video',
   screenshots_done: 'Screenshots ready',
   complete: 'Complete',
 }
@@ -75,21 +76,26 @@ export default function ProgressBar({
   const clamped = Math.max(0, Math.min(100, progress))
   const [mountedAt] = useState<number>(() => Date.now())
 
-  // `lastProgress` tracks the most recent server-reported value and when
-  // we saw it. `lastProgress.value` is compared against the incoming
-  // `clamped` to decide whether to reset the stall timer.
-  const [lastProgress, setLastProgress] = useState<{ value: number; at: number }>(
-    () => ({ value: clamped, at: Date.now() }),
+  // Track the last meaningful server update. A long step can keep the same
+  // percentage but still update its message, and that should count as alive.
+  const [lastUpdate, setLastUpdate] = useState<{
+    progress: number
+    stage?: string
+    message?: string
+    at: number
+  }>(
+    () => ({ progress: clamped, stage, message, at: Date.now() }),
   )
-  // Track when the server-reported progress last *actually* changed. The
-  // lint rule against setState-in-effect doesn't fit this case (derive
-  // timing of external-prop changes), so disable it for the setState call.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLastProgress((prev) =>
-      Math.abs(clamped - prev.value) > 0.1 ? { value: clamped, at: Date.now() } : prev,
+    setLastUpdate((prev) =>
+      Math.abs(clamped - prev.progress) > 0.1 ||
+      stage !== prev.stage ||
+      message !== prev.message
+        ? { progress: clamped, stage, message, at: Date.now() }
+        : prev,
     )
-  }, [clamped])
+  }, [clamped, stage, message])
 
   // Rebase the ETA countdown on each new server estimate so the "remaining"
   // label starts at the server value and counts down locally.
@@ -108,8 +114,8 @@ export default function ProgressBar({
 
   const now = useNow(active)
 
-  const elapsedSinceChange = Math.max(0, (now - lastProgress.at) / 1000)
-  const stalled = active && clamped < 99 && elapsedSinceChange > stallAfterSec
+  const elapsedSinceUpdate = Math.max(0, (now - lastUpdate.at) / 1000)
+  const quiet = active && clamped < 99 && elapsedSinceUpdate > stallAfterSec
   const elapsedTotalSec = Math.max(0, (now - mountedAt) / 1000)
 
   const remainingSec = etaBase
@@ -129,7 +135,7 @@ export default function ProgressBar({
       <div
         className={
           'relative h-2 w-full overflow-hidden rounded-full ' +
-          (stalled
+          (quiet
             ? 'bg-amber-100 dark:bg-amber-500/10'
             : 'bg-slate-100 dark:bg-white/[0.06]')
         }
@@ -137,7 +143,7 @@ export default function ProgressBar({
         <div
           className={
             'h-full rounded-full transition-[width] duration-500 ease-out ' +
-            (stalled
+            (quiet
               ? 'bg-amber-500'
               : clamped >= 100
               ? 'bg-emerald-500'
@@ -145,7 +151,7 @@ export default function ProgressBar({
           }
           style={{ width: `${Math.max(clamped, active ? 2 : 0)}%` }}
         />
-        {active && !stalled && clamped < 99 && (
+        {active && !quiet && clamped < 99 && (
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-y-0 left-0 animate-[shimmer_1.6s_linear_infinite] bg-gradient-to-r from-transparent via-white/40 to-transparent"
@@ -163,18 +169,17 @@ export default function ProgressBar({
             : `${formatDuration(elapsedTotalSec)} elapsed`}
         </div>
       </div>
-      {stalled && (
+      {quiet && (
         <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <LoaderCircle size={14} className="mt-0.5 shrink-0 animate-spin" />
           <div>
             <div className="font-semibold">
-              No progress for {formatDuration(elapsedSinceChange)}.
+              Still working for {formatDuration(elapsedSinceUpdate)} without a new update.
             </div>
             <div className="mt-0.5 opacity-90">
-              The backend may be blocked on a slow AI response, an unreachable
-              model endpoint, or a missing / invalid <code>API_KEY</code>. Check
-              <code> /preflight</code>, the backend terminal, and
-              <code> backend/config/config.py</code>.
+              Long AI responses, browser rendering, and PowerPoint export can
+              pause between updates. The run is still active unless an error
+              message appears.
             </div>
           </div>
         </div>
