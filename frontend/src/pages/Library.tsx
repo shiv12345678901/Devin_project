@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
 import {
-  AlertCircle,
   Archive,
   Download,
   Eye,
@@ -15,6 +15,7 @@ import {
 
 import { api } from '../api/client'
 import HtmlPreviewModal from '../components/HtmlPreviewModal'
+import ErrorCard from '../components/ErrorCard'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
 
@@ -175,42 +176,26 @@ export default function Library() {
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 dark:border-white/10">
-        {(
-          [
-            { id: 'screenshot' as const, label: 'Screenshots', icon: ImageIcon, count: screenshots.length },
-            { id: 'html' as const, label: 'HTML files', icon: FileText, count: htmlFiles.length },
-          ]
-        ).map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => switchKind(t.id)}
-            className={
-              'flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors ' +
-              (kind === t.id
-                ? 'border-brand-500 text-brand-700 dark:text-brand-200'
-                : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100')
-            }
-          >
-            <t.icon size={14} />
-            {t.label}
-            <span className="ml-1 rounded-full bg-slate-100 px-1.5 text-[11px] font-medium text-slate-600 dark:bg-white/[0.05] dark:text-slate-300">
-              {t.count}
-            </span>
-          </button>
-        ))}
-      </div>
+      {/* Tabs — keyboard navigable per WAI-ARIA tablist pattern. */}
+      <LibraryTabs
+        kind={kind}
+        screenshots={screenshots.length}
+        htmlFiles={htmlFiles.length}
+        onSwitch={switchKind}
+      />
 
       {/* Controls row */}
       <div className="card flex flex-wrap items-center gap-3">
         <div className="relative min-w-[220px] flex-1">
+          <label htmlFor="library-search" className="sr-only">
+            Search {kind === 'screenshot' ? 'screenshots' : 'HTML files'}
+          </label>
           <Search
             size={14}
             className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
           />
           <input
+            id="library-search"
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -218,7 +203,11 @@ export default function Library() {
             className="input !pl-9"
           />
         </div>
+        <label htmlFor="library-sort" className="sr-only">
+          Sort order
+        </label>
         <select
+          id="library-sort"
           value={sort}
           onChange={(e) => setSort(e.target.value as SortKey)}
           className="select max-w-[220px]"
@@ -259,15 +248,15 @@ export default function Library() {
         </div>
       </div>
 
-      {/* Grid / list */}
+      {/* Grid / list — rendered as the tabpanel for the selected kind. */}
+      <div
+        role="tabpanel"
+        id={`library-panel-${kind}`}
+        aria-labelledby={`library-tab-${kind}`}
+        tabIndex={0}
+      >
       {error ? (
-        <div className="card flex items-start gap-3 border-rose-200 bg-rose-50 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
-          <AlertCircle size={16} className="mt-0.5" />
-          <div>
-            <div className="font-medium">Couldn't load library</div>
-            <div className="mt-0.5 opacity-80">{error}</div>
-          </div>
-        </div>
+        <ErrorCard title="Couldn't load library" message={error} onRetry={load} />
       ) : loading ? (
         <div className="card flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
           <Loader2 size={16} className="animate-spin" /> Loading…
@@ -306,6 +295,7 @@ export default function Library() {
           ))}
         </div>
       )}
+      </div>
 
       {preview && (
         <HtmlPreviewModal
@@ -436,6 +426,96 @@ function HtmlRow({
       >
         <Download size={14} />
       </button>
+    </div>
+  )
+}
+
+// ─── Tabs ────────────────────────────────────────────────────────────────
+// WAI-ARIA tablist pattern with roving-tabindex + arrow-key navigation, so
+// Left/Right, Home/End walk between "Screenshots" and "HTML files" and the
+// active tab is the one in the document tab order.
+function LibraryTabs({
+  kind,
+  screenshots,
+  htmlFiles,
+  onSwitch,
+}: {
+  kind: AssetKind
+  screenshots: number
+  htmlFiles: number
+  onSwitch: (next: AssetKind) => void
+}) {
+  const tabs: { id: AssetKind; label: string; icon: typeof FileText; count: number }[] = [
+    { id: 'screenshot', label: 'Screenshots', icon: ImageIcon, count: screenshots },
+    { id: 'html', label: 'HTML files', icon: FileText, count: htmlFiles },
+  ]
+  const refs = useRef<Array<HTMLButtonElement | null>>([])
+
+  const focusAt = (idx: number) => {
+    const n = tabs.length
+    const target = ((idx % n) + n) % n
+    refs.current[target]?.focus()
+    onSwitch(tabs[target].id)
+  }
+
+  const onKey = (e: React.KeyboardEvent, idx: number) => {
+    switch (e.key) {
+      case 'ArrowRight':
+        e.preventDefault()
+        focusAt(idx + 1)
+        break
+      case 'ArrowLeft':
+        e.preventDefault()
+        focusAt(idx - 1)
+        break
+      case 'Home':
+        e.preventDefault()
+        focusAt(0)
+        break
+      case 'End':
+        e.preventDefault()
+        focusAt(tabs.length - 1)
+        break
+    }
+  }
+
+  return (
+    <div
+      role="tablist"
+      aria-label="Library kind"
+      className="flex flex-wrap items-center gap-2 border-b border-slate-200 dark:border-white/10"
+    >
+      {tabs.map((t, i) => {
+        const active = kind === t.id
+        return (
+          <button
+            key={t.id}
+            ref={(el) => {
+              refs.current[i] = el
+            }}
+            type="button"
+            role="tab"
+            id={`library-tab-${t.id}`}
+            aria-selected={active}
+            aria-controls={`library-panel-${t.id}`}
+            tabIndex={active ? 0 : -1}
+            onClick={() => onSwitch(t.id)}
+            onKeyDown={(e) => onKey(e, i)}
+            className={
+              'flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors ' +
+              (active
+                ? 'border-brand-500 text-brand-700 dark:text-brand-200'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100')
+            }
+          >
+            <t.icon size={14} />
+            {t.label}
+            <span className="ml-1 rounded-full bg-slate-100 px-1.5 text-[11px] font-medium text-slate-600 dark:bg-white/[0.05] dark:text-slate-300">
+              {t.count}
+            </span>
+          </button>
+        )
+      })}
     </div>
   )
 }

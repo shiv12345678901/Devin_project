@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Activity,
-  AlertCircle,
   ArrowRight,
   ArrowUpRight,
   CheckCircle2,
@@ -14,6 +13,7 @@ import {
 } from 'lucide-react'
 
 import { api } from '../api/client'
+import ErrorCard from '../components/ErrorCard'
 import { useRuns, formatRelative } from '../store/runs'
 import type { PreflightResponse } from '../api/types'
 
@@ -43,20 +43,32 @@ export default function Home() {
   const [preflight, setPreflight] = useState<PreflightResponse | null>(null)
   const [preflightErr, setPreflightErr] = useState<string | null>(null)
 
+  const [reloadToken, setReloadToken] = useState(0)
+  const loadPreflight = useCallback(() => setReloadToken((n) => n + 1), [])
+
   useEffect(() => {
     let cancelled = false
-    api
-      .preflight()
-      .then((r) => {
-        if (!cancelled) setPreflight(r)
-      })
-      .catch((e) => {
-        if (!cancelled) setPreflightErr(e instanceof Error ? e.message : String(e))
-      })
+    // Defer the "clear previous result" setState past the effect body so
+    // the react-hooks/set-state-in-effect rule stays happy. The timeout
+    // guarantees React has flushed this pass before we mutate state.
+    const t = setTimeout(() => {
+      if (cancelled) return
+      setPreflightErr(null)
+      setPreflight(null)
+      api
+        .preflight()
+        .then((r) => {
+          if (!cancelled) setPreflight(r)
+        })
+        .catch((e) => {
+          if (!cancelled) setPreflightErr(e instanceof Error ? e.message : String(e))
+        })
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(t)
     }
-  }, [])
+  }, [reloadToken])
 
   const stats = useMemo(() => {
     const running = runs.filter((r) => r.status === 'running').length
@@ -84,8 +96,9 @@ export default function Home() {
           </h1>
           <p className="mt-4 max-w-2xl text-[15px] leading-relaxed text-muted">
             Paste a chapter, a transcript, or raw HTML. TextBro renders it
-            with a real browser engine and exports screenshots, PowerPoint,
-            or MP4 — all from a single, scriptable backend.
+            with a real browser engine and exports crisp screenshots or HTML
+            — all from a single, scriptable backend. PowerPoint and MP4 exports
+            are available on Windows hosts.
           </p>
           <div className="mt-7 flex flex-wrap items-center gap-2">
             <Link to="/workspace/text" className="btn-primary btn-lg">
@@ -149,12 +162,13 @@ export default function Home() {
               )
             : preflightErr
             ? (
-                <div className="card col-span-full flex items-start gap-2.5 border-rose-200 bg-rose-50 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-                  <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                  <div>
-                    <div className="font-semibold">Couldn't reach /preflight</div>
-                    <div className="mt-0.5 text-xs opacity-80">{preflightErr}</div>
-                  </div>
+                <div className="col-span-full">
+                  <ErrorCard
+                    title="Couldn't reach /preflight"
+                    message={preflightErr}
+                    code="GET /preflight"
+                    onRetry={loadPreflight}
+                  />
                 </div>
               )
             : [0, 1, 2, 3].map((i) => (

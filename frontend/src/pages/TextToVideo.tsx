@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -327,7 +327,13 @@ export default function TextToVideo() {
         stepValid={stepValid}
       />
 
-      <div className="card space-y-6">
+      <div
+        role="tabpanel"
+        id={`wizard-panel-${activeStepId}`}
+        aria-labelledby={`wizard-tab-${activeStepId}`}
+        tabIndex={0}
+        className="card space-y-6"
+      >
         {activeStepId === 'project' && (
           <ProjectStep
             settings={settings}
@@ -473,17 +479,61 @@ function Tabs({
   stepValid: (id: StepId) => boolean
 }) {
   const currentIndex = steps.findIndex((s) => s.id === currentId)
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
+
+  // Roving-tabindex + arrow-key navigation per WAI-ARIA Authoring Practices
+  // tablist pattern. Only the active tab is in the tab order; arrows walk
+  // siblings, Home/End jump to the ends, Enter/Space activates.
+  const focusTab = (idx: number) => {
+    const n = steps.length
+    const target = ((idx % n) + n) % n
+    tabRefs.current[target]?.focus()
+  }
+
+  const onKey = (e: React.KeyboardEvent, idx: number) => {
+    switch (e.key) {
+      case 'ArrowRight':
+        e.preventDefault()
+        focusTab(idx + 1)
+        break
+      case 'ArrowLeft':
+        e.preventDefault()
+        focusTab(idx - 1)
+        break
+      case 'Home':
+        e.preventDefault()
+        focusTab(0)
+        break
+      case 'End':
+        e.preventDefault()
+        focusTab(steps.length - 1)
+        break
+      // Enter / Space fall through to the native button click — no special
+      // handling needed, onClick fires either way.
+    }
+  }
+
   return (
-    <ol className="flex w-full flex-wrap items-center gap-1">
+    <ol role="tablist" aria-label="Wizard steps" className="flex w-full flex-wrap items-center gap-1">
       {steps.map((s, i) => {
         const active = s.id === currentId
         const isDone = i < currentIndex && stepValid(s.id)
         const reachable = canNavigateTo(s.id)
         return (
-          <li key={s.id} className="flex min-w-0 flex-1 items-center gap-1">
+          <li key={s.id} role="presentation" className="flex min-w-0 flex-1 items-center gap-1">
             <button
+              ref={(el) => {
+                tabRefs.current[i] = el
+              }}
               type="button"
+              role="tab"
+              id={`wizard-tab-${s.id}`}
+              aria-selected={active}
+              aria-controls={`wizard-panel-${s.id}`}
+              aria-disabled={!reachable || undefined}
+              tabIndex={active ? 0 : -1}
               onClick={() => onPick(s.id)}
+              onKeyDown={(e) => onKey(e, i)}
               title={!reachable ? 'Fill earlier steps first' : s.label}
               className={
                 'flex min-w-0 flex-1 items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors ' +

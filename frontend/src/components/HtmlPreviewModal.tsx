@@ -1,7 +1,8 @@
-import { ExternalLink, X } from 'lucide-react'
-import { useEffect } from 'react'
+import { Check, Copy, ExternalLink, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useToast } from '../store/toast'
 
 interface Props {
   /** What kind of asset to preview — controls the rendered body. */
@@ -17,6 +18,9 @@ interface Props {
 
 export default function HtmlPreviewModal({ kind, src, title, subtitle, onClose }: Props) {
   const dialogRef = useFocusTrap<HTMLDivElement>(true)
+  const [copyState, setCopyState] = useState<'idle' | 'copying' | 'ok'>('idle')
+  const toast = useToast()
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -30,6 +34,31 @@ export default function HtmlPreviewModal({ kind, src, title, subtitle, onClose }
       document.body.style.overflow = prev
     }
   }, [onClose])
+
+  // "Copy HTML" fetches the underlying document (cross-origin to the
+  // backend, but served same-origin in dev via the Vite proxy) and writes
+  // it to the clipboard. On failure we surface a toast — clipboard denial
+  // from insecure contexts is the most common reason.
+  const onCopyHtml = async () => {
+    if (kind !== 'html') return
+    setCopyState('copying')
+    try {
+      const res = await fetch(src)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const text = await res.text()
+      await navigator.clipboard.writeText(text)
+      setCopyState('ok')
+      toast.push({ variant: 'success', message: 'HTML copied to clipboard.' })
+      setTimeout(() => setCopyState('idle'), 1500)
+    } catch (e) {
+      setCopyState('idle')
+      toast.push({
+        variant: 'error',
+        title: 'Copy failed',
+        message: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -58,6 +87,18 @@ export default function HtmlPreviewModal({ kind, src, title, subtitle, onClose }
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {kind === 'html' && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={onCopyHtml}
+                disabled={copyState === 'copying'}
+                title="Copy the document body to the clipboard"
+              >
+                {copyState === 'ok' ? <Check size={14} /> : <Copy size={14} />}
+                {copyState === 'ok' ? 'Copied' : copyState === 'copying' ? 'Copying…' : 'Copy HTML'}
+              </button>
+            )}
             <a
               href={src}
               target="_blank"
