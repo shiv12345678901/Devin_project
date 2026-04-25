@@ -159,7 +159,7 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
-  brandId: 'sage',
+  brandId: 'indigo',
   defaultOutputFormat: 'images',
   backendUrl: '',
 }

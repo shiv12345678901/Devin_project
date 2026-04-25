@@ -2,23 +2,52 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ─── Theme tokens ────────────────────────────────────────────────────────
-   The brand palette is stored as space-separated RGB triplets so Tailwind's
+/* ─── Theme tokens ─────────────────────────────────────────────────────────
+   Palette is stored as space-separated RGB triplets so Tailwind's
    `rgb(var(--brand-500) / <alpha-value>)` pattern works. The Settings page
-   overrides these at runtime with `document.documentElement.style.setProperty`
-   to re-skin the whole app without touching any component. */
+   overrides these at runtime to re-skin the whole app.
+
+   The remaining tokens (surface / line / text) are also exposed as CSS vars
+   so we can tune the system once and have every surface react. Light and
+   dark are both intentionally near-monochrome — the brand color does the
+   accenting; surfaces stay quiet.                                         */
 :root {
-  /* Default: sage-green (#4f9862 scale) */
-  --brand-50: 243 250 244;
-  --brand-100: 228 243 231;
-  --brand-200: 200 230 207;
-  --brand-300: 160 209 172;
-  --brand-400: 115 181 131;
-  --brand-500: 79 152 98;
-  --brand-600: 61 124 78;
-  --brand-700: 49 99 64;
-  --brand-800: 40 79 52;
-  --brand-900: 32 64 43;
+  /* Default brand: refined indigo (#4f46e5 scale). Settings can override. */
+  --brand-50: 238 242 255;
+  --brand-100: 224 231 255;
+  --brand-200: 199 210 254;
+  --brand-300: 165 180 252;
+  --brand-400: 129 140 248;
+  --brand-500: 99 102 241;
+  --brand-600: 79 70 229;
+  --brand-700: 67 56 202;
+  --brand-800: 55 48 163;
+  --brand-900: 49 46 129;
+
+  /* Neutral surfaces (light). */
+  --bg-app: 250 250 252;          /* page background                       */
+  --bg-surface: 255 255 255;      /* cards, sidebar, inputs                */
+  --bg-muted: 246 247 250;        /* hover, subtle backgrounds             */
+  --bg-strong: 244 244 248;       /* selected rows, kbd                    */
+  --line: 226 230 238;            /* primary border                        */
+  --line-soft: 235 238 245;       /* hairline / divider                    */
+  --text-strong: 15 23 42;        /* headings                              */
+  --text: 30 41 59;               /* body                                  */
+  --text-muted: 100 116 139;      /* secondary                             */
+  --text-faint: 148 163 184;      /* tertiary                              */
+}
+
+.dark {
+  --bg-app: 9 11 17;
+  --bg-surface: 17 20 27;
+  --bg-muted: 22 26 34;
+  --bg-strong: 28 33 43;
+  --line: 39 45 58;
+  --line-soft: 30 36 48;
+  --text-strong: 248 250 252;
+  --text: 226 232 240;
+  --text-muted: 148 163 184;
+  --text-faint: 100 116 139;
 }
 
 @layer base {
@@ -29,114 +58,232 @@
   }
 
   html {
-    font-feature-settings: 'ss01', 'cv11';
+    /* Inter ships with stylistic alternates — `cv11` gives a single-storey
+       `a`, `ss01` evens out punctuation. Both are part of why Linear, Vercel,
+       Stripe, Resend etc. all look the same: it's the Inter feature stack. */
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
   }
 
-  /* Minimal: a single near-white canvas with the faintest warm tint.
-     No radial or linear gradients — the UI does the work, not the bg. */
   body {
-    @apply font-sans text-slate-800 antialiased;
-    background-color: #fafbf8;
+    @apply font-sans antialiased;
+    color: rgb(var(--text));
+    background-color: rgb(var(--bg-app));
   }
 
-  .dark body {
-    @apply text-slate-100;
-    background-color: #0b1210;
-  }
-
-  /* Display / title typography defaults to Gotham-family. */
+  /* Headings get tighter tracking + a hair more weight than the body. */
   h1, h2, h3, h4, h5, h6 {
     @apply font-display tracking-tight;
+    color: rgb(var(--text-strong));
+  }
+
+  /* Numbers should align in stat tiles, table cells, durations, etc. */
+  .tabular,
+  [data-slot='number'] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Selection uses the brand color at low alpha. */
+  ::selection {
+    background-color: rgb(var(--brand-500) / 0.18);
+    color: rgb(var(--text-strong));
+  }
+
+  /* App scrollbars: thin, near-invisible, lifts on hover. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--line));
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--text-faint));
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
   }
 }
 
 @layer components {
   /* ─── Surfaces ──────────────────────────────────────────────────────────
-     Very minimal: white cards, single hairline border, barely-there shadow.
-     Kept the .glass name so every page that already uses it just inherits
-     the new, quieter look. */
+     `.glass` is kept as the primary card surface for backwards compat with
+     every page that already uses the name. The new look is: white surface,
+     1px hairline, almost-invisible shadow. No glassmorphism — just a quiet,
+     flat card.                                                            */
+
+  .surface {
+    background-color: rgb(var(--bg-surface));
+    border: 1px solid rgb(var(--line));
+    @apply rounded-xl;
+  }
 
   .glass {
-    @apply rounded-xl border border-slate-200/80 bg-white shadow-glass
-           dark:border-white/10 dark:bg-white/[0.03];
+    @apply surface shadow-glass;
   }
 
   .glass-strong {
-    @apply rounded-xl border border-slate-200 bg-white shadow-glass
-           dark:border-white/10 dark:bg-white/[0.04];
+    @apply surface shadow-glass-lg;
   }
 
-  .card {
-    @apply glass p-6;
+  .card     { @apply glass p-6; }
+  .card-sm  { @apply glass p-4; }
+
+  .divider {
+    height: 1px;
+    background-color: rgb(var(--line-soft));
   }
 
-  .card-sm {
-    @apply glass p-4;
+  /* ─── Typography helpers ─────────────────────────────────────────────── */
+
+  .eyebrow {
+    @apply inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em];
+    color: rgb(var(--text-muted));
   }
 
-  /* ─── Buttons ─────────────────────────────────────────────────────────── */
+  .h-page {
+    @apply font-display text-2xl font-semibold tracking-tight md:text-3xl;
+    color: rgb(var(--text-strong));
+  }
+
+  .h-section {
+    @apply font-display text-base font-semibold tracking-tight;
+    color: rgb(var(--text-strong));
+  }
+
+  .text-muted { color: rgb(var(--text-muted)); }
+  .text-faint { color: rgb(var(--text-faint)); }
+
+  /* ─── Buttons ─────────────────────────────────────────────────────────
+     A single `.btn` base, then variants. Every variant has a visible focus
+     ring (a11y), a subtle hover, and an `active:` press state.            */
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium
-           transition-colors duration-150 ease-out
-           disabled:cursor-not-allowed disabled:opacity-50;
+    @apply relative inline-flex select-none items-center justify-center gap-2
+           rounded-lg px-3.5 py-2 text-sm font-medium leading-none
+           transition duration-150 ease-out
+           disabled:cursor-not-allowed disabled:opacity-50
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400/60
+           focus-visible:ring-offset-2 focus-visible:ring-offset-[rgb(var(--bg-app))];
   }
 
   .btn-primary {
-    @apply btn border border-brand-600 bg-brand-500 text-white
-           hover:bg-brand-600
-           focus:outline-none focus:ring-2 focus:ring-brand-300 focus:ring-offset-1 focus:ring-offset-white
-           dark:focus:ring-offset-slate-900;
+    @apply btn bg-brand-600 text-white shadow-sm
+           hover:bg-brand-500
+           active:bg-brand-700;
   }
 
   .btn-secondary {
-    @apply btn border border-slate-200 bg-white text-slate-800
-           hover:bg-slate-50
-           dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-100 dark:hover:bg-white/[0.08];
+    @apply btn text-slate-800 dark:text-slate-100;
+    background-color: rgb(var(--bg-surface));
+    border: 1px solid rgb(var(--line));
+  }
+  .btn-secondary:hover {
+    background-color: rgb(var(--bg-muted));
+  }
+  .btn-secondary:active {
+    background-color: rgb(var(--bg-strong));
   }
 
   .btn-ghost {
-    @apply btn border border-transparent bg-transparent text-slate-600
-           hover:bg-slate-100
-           dark:text-slate-300 dark:hover:bg-white/[0.05];
+    @apply btn bg-transparent;
+    color: rgb(var(--text-muted));
+  }
+  .btn-ghost:hover {
+    color: rgb(var(--text-strong));
+    background-color: rgb(var(--bg-muted));
   }
 
   .btn-danger {
-    @apply btn border border-red-500 bg-red-500 text-white
-           hover:bg-red-600
-           focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-1 focus:ring-offset-white;
+    @apply btn bg-rose-600 text-white shadow-sm
+           hover:bg-rose-500
+           active:bg-rose-700
+           focus-visible:ring-rose-400/60;
   }
+
+  .btn-sm { @apply px-2.5 py-1.5 text-xs; }
+  .btn-lg { @apply px-5 py-2.5 text-[15px]; }
 
   /* ─── Form controls ─────────────────────────────────────────────────── */
 
   .input,
   .textarea,
   .select {
-    @apply w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm
-           text-slate-900
-           placeholder:text-slate-400
-           focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200
-           dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-100
-           dark:placeholder:text-slate-500 dark:focus:border-brand-400;
+    @apply w-full rounded-lg px-3.5 py-2.5 text-sm leading-snug
+           transition-colors duration-150
+           placeholder:text-[rgb(var(--text-faint))]
+           focus:outline-none;
+    background-color: rgb(var(--bg-surface));
+    border: 1px solid rgb(var(--line));
+    color: rgb(var(--text-strong));
+  }
+  .input:hover,
+  .textarea:hover,
+  .select:hover {
+    border-color: rgb(var(--text-faint) / 0.7);
+  }
+  .input:focus,
+  .textarea:focus,
+  .select:focus {
+    @apply ring-2 ring-brand-400/40;
+    border-color: rgb(var(--brand-500));
   }
 
   .label {
-    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400;
+    @apply mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.12em];
+    color: rgb(var(--text-muted));
   }
 
   /* ─── Badges / pills ─────────────────────────────────────────────────── */
 
   .badge {
-    @apply inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50
-           px-2.5 py-0.5 text-xs font-medium text-slate-600
-           dark:border-white/10 dark:bg-white/[0.05] dark:text-slate-200;
+    @apply inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium leading-none;
+    border: 1px solid rgb(var(--line));
+    background-color: rgb(var(--bg-muted));
+    color: rgb(var(--text-muted));
+    height: 22px;
   }
 
-  .badge-success { @apply badge border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-200; }
-  .badge-running { @apply badge border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200; }
-  .badge-error   { @apply badge border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200; }
+  .badge-success { @apply badge border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300; }
+  .badge-running { @apply badge border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300; }
+  .badge-error   { @apply badge border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300; }
   .badge-neutral { @apply badge; }
+
+  /* ─── Misc ──────────────────────────────────────────────────────────── */
+
+  .kbd {
+    @apply inline-flex h-5 items-center rounded border px-1.5 font-mono text-[10px] font-medium;
+    background-color: rgb(var(--bg-strong));
+    border-color: rgb(var(--line));
+    color: rgb(var(--text-muted));
+  }
+
+  /* Subtle dotted background used behind hero / empty states. */
+  .dot-grid {
+    background-image: radial-gradient(rgb(var(--line)) 1px, transparent 1px);
+    background-size: 22px 22px;
+    background-position: -1px -1px;
+  }
+}
+
+@layer utilities {
+  /* Centered max-width container used by every page. */
+  .container-page {
+    @apply mx-auto w-full max-w-6xl;
+  }
+
+  /* Subtle entrance animation for the main column. */
+  @keyframes app-fade-in {
+    from { opacity: 0; transform: translateY(2px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .animate-app-fade-in {
+    animation: app-fade-in 240ms ease-out both;
+  }
 }
