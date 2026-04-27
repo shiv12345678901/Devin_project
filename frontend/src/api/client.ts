@@ -145,6 +145,7 @@ export const api = {
    * button does too.
    */
   preflight: (opts?: { fresh?: boolean }): Promise<PreflightResponse> => {
+    // Cached path — reuse a recent response without hitting the network.
     if (!opts?.fresh) {
       const now = Date.now()
       if (
@@ -153,9 +154,16 @@ export const api = {
       ) {
         return Promise.resolve(_preflightCache.value)
       }
-      // Coalesce concurrent in-flight calls into a single request.
-      if (_preflightCache.inFlight) return _preflightCache.inFlight
     }
+    // Always coalesce concurrent callers onto the same in-flight request,
+    // even when one of them passed `fresh: true`. A fresh probe is still
+    // a newer-than-cache result, so a cached waiter is perfectly happy
+    // with it — we just had to stop the previous "fresh bypasses the
+    // in-flight check" branch, which could issue 4 parallel
+    // POWERPNT-spawning probes if four components mounted together asked
+    // for fresh data at once.
+    if (_preflightCache.inFlight) return _preflightCache.inFlight
+
     const p = getJson<PreflightResponse>(opts?.fresh ? '/preflight?fresh=1' : '/preflight')
       .then((r) => {
         _preflightCache = { value: r, fetchedAt: Date.now(), inFlight: null }

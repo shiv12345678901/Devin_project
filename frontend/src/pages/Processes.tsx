@@ -35,6 +35,7 @@ import EmptyState from '../components/EmptyState'
 import ProgressBar from '../components/ProgressBar'
 import { useGenerationQueue } from '../hooks/useTrackedGenerate'
 import type { QueueItem } from '../hooks/useTrackedGenerate'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 type ToolLike = RunTool | 'regenerate' | 'text-to-image' | 'html-to-image' | 'image-to-screenshots' | string | undefined
 
@@ -69,7 +70,7 @@ function StatusBadge({ status }: { status: RunStatus | 'completed' }) {
   }
   if (status === 'cancelled') {
     return (
-      <span className="badge-neutral">
+      <span className="badge-warning">
         <XCircle size={12} /> Cancelled
       </span>
     )
@@ -483,10 +484,14 @@ function AssetPreviewModal({
     }
   }, [onClose, onNext, onPrevious])
 
+  const dialogRef = useFocusTrap<HTMLDivElement>(true)
+
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-sm" onClick={onClose} aria-hidden />
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={title}

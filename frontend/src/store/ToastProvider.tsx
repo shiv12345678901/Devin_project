@@ -68,38 +68,52 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     [toasts, push, dismiss, clear],
   )
 
+  // Split toasts into two live regions: errors go to an `assertive`
+  // region so screen readers announce them immediately, everything else
+  // goes to a `polite` region. Announcing through the live region means
+  // we don't need `role="alert" / role="status"` on each toast — that
+  // would cause nested live regions and double announcements on JAWS.
+  const polite = toasts.filter((t) => t.variant !== 'error')
+  const assertive = toasts.filter((t) => t.variant === 'error')
+
+  const renderToast = (t: Toast) => {
+    const Icon = ICONS[t.variant]
+    return (
+      <div
+        key={t.id}
+        className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-lg border p-3 shadow-lg backdrop-blur-md ${COLORS[t.variant]}`}
+      >
+        <Icon size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+        <div className="min-w-0 flex-1 text-sm">
+          {t.title && <div className="font-medium">{t.title}</div>}
+          <div className="mt-0.5 break-words">{t.message}</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => dismiss(t.id)}
+          className="-mr-1 -mt-1 rounded p-1 text-current/70 hover:text-current focus:outline-none focus:ring-2 focus:ring-current"
+          aria-label="Dismiss notification"
+        >
+          <X size={14} aria-hidden="true" />
+        </button>
+      </div>
+    )
+  }
+
   return (
     <ToastContext.Provider value={value}>
       {children}
       <div
-        aria-live="polite"
-        aria-atomic="false"
+        role="region"
+        aria-label="Notifications"
         className="pointer-events-none fixed inset-x-0 top-4 z-[60] flex flex-col items-center gap-2 px-4 sm:right-4 sm:left-auto sm:items-end"
       >
-        {toasts.map((t) => {
-          const Icon = ICONS[t.variant]
-          return (
-            <div
-              key={t.id}
-              role={t.variant === 'error' ? 'alert' : 'status'}
-              className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-lg border p-3 shadow-lg backdrop-blur-md ${COLORS[t.variant]}`}
-            >
-              <Icon size={16} className="mt-0.5 shrink-0" />
-              <div className="min-w-0 flex-1 text-sm">
-                {t.title && <div className="font-medium">{t.title}</div>}
-                <div className="mt-0.5 break-words">{t.message}</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => dismiss(t.id)}
-                className="-mr-1 -mt-1 rounded p-1 text-current/70 hover:text-current focus:outline-none focus:ring-2 focus:ring-current"
-                aria-label="Dismiss notification"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          )
-        })}
+        <div aria-live="polite" aria-atomic="false" className="flex flex-col items-stretch gap-2">
+          {polite.map(renderToast)}
+        </div>
+        <div aria-live="assertive" aria-atomic="false" className="flex flex-col items-stretch gap-2">
+          {assertive.map(renderToast)}
+        </div>
       </div>
     </ToastContext.Provider>
   )

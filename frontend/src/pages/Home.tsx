@@ -502,6 +502,8 @@ function StatusBadge({ status }: { status: string }) {
   if (status === 'running') return <span className="badge-running">Running</span>
   if (status === 'success') return <span className="badge-success">Success</span>
   if (status === 'error') return <span className="badge-error">Failed</span>
-  if (status === 'cancelled') return <span className="badge-neutral">Cancelled</span>
+  if (status === 'cancelled') return <span className="badge-warning">Cancelled</span>
+  if (status === 'queued') return <span className="badge-info">Queued</span>
+  if (status === 'paused') return <span className="badge-info">Paused</span>
   return <span className="badge-neutral">{status}</span>
 }
