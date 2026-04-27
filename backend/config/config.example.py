@@ -40,7 +40,16 @@ DEFAULT_MAX_TOKENS = int(_env("MAX_TOKENS", "32768"))
 # to point them at any model your provider exposes. Each entry MUST define
 # `model`, `temperature`, `top_p`, `max_tokens`, and `api_key`.
 
+# The keys here are what the UI ships as `model_choice`. Each one maps
+# to a build.nvidia.com model slug that is callable through
+# `https://integrate.api.nvidia.com/v1`. See
+# https://build.nvidia.com/models for the live catalog — "Free Endpoint"
+# models are always callable with a developer API key, "Downloadable"
+# entries require self-hosting.
+
 MODELS_CONFIG = {
+    # Default — Qwen 3.5 122B MoE (10B active). Large + capable; user
+    # pick from the UI's "Default" slot.
     "default": {
         "model": _env("MODEL_DEFAULT", "qwen/qwen3.5-122b-a10b"),
         "temperature": 0.2,
@@ -48,55 +57,49 @@ MODELS_CONFIG = {
         "max_tokens": int(_env("MAX_TOKENS_DEFAULT", str(DEFAULT_MAX_TOKENS))),
         "api_key": API_KEY,
     },
+    # Fast — DeepSeek V4 Flash (284B MoE, 1M ctx), tuned for throughput.
     "fast": {
-        "model": _env("MODEL_FAST", "meta/llama-3.1-8b-instruct"),
+        "model": _env("MODEL_FAST", "deepseek-ai/deepseek-v4-flash"),
         "temperature": 0.3,
         "top_p": 0.9,
         "max_tokens": int(_env("MAX_TOKENS_FAST", str(DEFAULT_MAX_TOKENS))),
         "api_key": API_KEY,
     },
+    # Short & fastest — Llama 3.1 8B Instruct for very low latency runs.
+    "short": {
+        "model": _env("MODEL_SHORT", "meta/llama-3.1-8b-instruct"),
+        "temperature": 0.3,
+        "top_p": 0.9,
+        "max_tokens": int(_env("MAX_TOKENS_SHORT", str(DEFAULT_MAX_TOKENS))),
+        "api_key": API_KEY,
+    },
+    # Balanced — GLM-4.7 (358B, 131K ctx). Solid middle ground for
+    # coding / HTML generation + tool calling.
+    "balanced": {
+        "model": _env("MODEL_BALANCED", "z-ai/glm-4.7"),
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "max_tokens": int(_env("MAX_TOKENS_BALANCED", str(DEFAULT_MAX_TOKENS))),
+        "api_key": API_KEY,
+    },
+    # Quality — DeepSeek V3.2 (685B), long-context reasoning.
     "quality": {
-        "model": _env("MODEL_QUALITY", "deepseek-ai/deepseek-v4-pro"),
+        "model": _env("MODEL_QUALITY", "deepseek-ai/deepseek-v3.2"),
         "temperature": 0.1,
         "top_p": 0.9,
         "max_tokens": int(_env("MAX_TOKENS_QUALITY", str(DEFAULT_MAX_TOKENS))),
         "api_key": API_KEY,
     },
-    "qwen_122b": {
-        "model": _env("MODEL_QWEN_122B", "qwen/qwen3.5-122b-a10b"),
-        "temperature": 0.2,
+    # Long context — DeepSeek V4 Pro (1.6T MoE, 49B active, 1M ctx).
+    "long": {
+        "model": _env("MODEL_LONG", "deepseek-ai/deepseek-v4-pro"),
+        "temperature": 0.1,
         "top_p": 0.9,
-        "max_tokens": int(_env("MAX_TOKENS_QWEN_122B", str(DEFAULT_MAX_TOKENS))),
+        "max_tokens": int(_env("MAX_TOKENS_LONG", str(DEFAULT_MAX_TOKENS))),
         "api_key": API_KEY,
     },
-    "glm_5_1": {
-        "model": _env("MODEL_GLM_5_1", "z-ai/glm-5.1"),
-        "temperature": 0.2,
-        "top_p": 0.9,
-        "max_tokens": int(_env("MAX_TOKENS_GLM_5_1", str(DEFAULT_MAX_TOKENS))),
-        "api_key": API_KEY,
-    },
-    "deepseek_v4_pro": {
-        "model": _env("MODEL_DEEPSEEK_V4_PRO", "deepseek-ai/deepseek-v4-pro"),
-        "temperature": 0.2,
-        "top_p": 0.9,
-        "max_tokens": int(_env("MAX_TOKENS_DEEPSEEK_V4_PRO", str(DEFAULT_MAX_TOKENS))),
-        "api_key": API_KEY,
-    },
-    "kimi_2_5": {
-        "model": _env("MODEL_KIMI_2_5", "moonshotai/kimi-k2.5"),
-        "temperature": 0.2,
-        "top_p": 0.9,
-        "max_tokens": int(_env("MAX_TOKENS_KIMI_2_5", str(DEFAULT_MAX_TOKENS))),
-        "api_key": API_KEY,
-    },
-    "nemotron": {
-        "model": _env("MODEL_NEMOTRON", "nvidia/nemotron-3-super-120b-a12b"),
-        "temperature": 0.2,
-        "top_p": 0.9,
-        "max_tokens": int(_env("MAX_TOKENS_NEMOTRON", str(DEFAULT_MAX_TOKENS))),
-        "api_key": API_KEY,
-    },
+    # Llama 3.3 70B kept for back-compat with old stored runs that set
+    # `model_choice: "llama"`. New UI does not expose it separately.
     "llama": {
         "model": _env("MODEL_LLAMA", "meta/llama-3.3-70b-instruct"),
         "temperature": 0.2,
