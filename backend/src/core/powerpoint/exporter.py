@@ -424,6 +424,8 @@ class PowerPointExporter:
         4. Duplicate slide 3 for each screenshot
         5. Insert screenshots behind the existing slide design/watermark
         6. Optionally insert intro/outro thumbnails into slide 2 / 2nd-last
+           (when no outro thumbnail is provided, the 2nd-last slide is
+           deleted before export)
         7. Save As to output_path
         
         Args:
@@ -598,6 +600,25 @@ class PowerPointExporter:
                 )
                 self._set_slide_duration(outro_slide, outro_thumbnail_duration)
                 logger.info(f"Inserted outro thumbnail on slide {outro_slide_index}")
+            else:
+                current_count = self.presentation.Slides.Count
+                outro_slide_index = current_count - 1
+                if outro_slide_index > base_slide_index:
+                    try:
+                        self.presentation.Slides(outro_slide_index).Delete()
+                        logger.info(
+                            f"Deleted 2nd-last slide at index {outro_slide_index} "
+                            "because no outro thumbnail was provided"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not delete 2nd-last slide {outro_slide_index}: {e}"
+                        )
+                else:
+                    logger.info(
+                        "Skipped 2nd-last slide deletion: "
+                        f"only {current_count} slides present"
+                    )
             
             # Step 4: Save As to output path
             # ppSaveAsDefault = 11, ppSaveAsOpenXMLPresentation = 24
