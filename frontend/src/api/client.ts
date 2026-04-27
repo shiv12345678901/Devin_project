@@ -45,7 +45,21 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  const data = await parseJson<T & { error?: string }>(res)
+  const text = await res.text()
+  if (!res.ok && res.status === 409) {
+    const rejected = tryParseRejection(text)
+    if (rejected) throw rejected
+  }
+  if (!text) {
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    return {} as T
+  }
+  let data: T & { error?: string }
+  try {
+    data = JSON.parse(text) as T & { error?: string }
+  } catch {
+    throw new Error(`Invalid JSON response (${res.status}): ${text.slice(0, 200)}`)
+  }
   if (!res.ok || data.error) {
     throw new Error(data.error || `${res.status} ${res.statusText}`)
   }
@@ -203,6 +217,40 @@ export interface SseStreamOptions {
   onEvent: (ev: SseEvent) => void
 }
 
+/**
+ * Thrown when the backend rejects a run because another one is in flight or
+ * the same payload was just submitted within the dedup window. The 409 body
+ * shape comes from `src/utils/run_guard.py::RunRejected`.
+ */
+export class RunRejectedError extends Error {
+  reason: 'in_flight' | 'duplicate' | 'unknown'
+  operationId: string | null
+  constructor(reason: 'in_flight' | 'duplicate' | 'unknown', message: string, operationId: string | null = null) {
+    super(message)
+    this.name = 'RunRejectedError'
+    this.reason = reason
+    this.operationId = operationId
+  }
+}
+
+function tryParseRejection(text: string): RunRejectedError | null {
+  try {
+    const data = JSON.parse(text) as {
+      reason?: string
+      error?: string
+      message?: string
+      operation_id?: string
+    }
+    const reasonRaw = (data.reason ?? '').toLowerCase()
+    const reason: RunRejectedError['reason'] =
+      reasonRaw === 'in_flight' || reasonRaw === 'duplicate' ? reasonRaw : 'unknown'
+    const message = data.error || data.message || 'Run rejected by backend'
+    return new RunRejectedError(reason, message, data.operation_id ?? null)
+  } catch {
+    return null
+  }
+}
+
 export async function streamSse(path: string, opts: SseStreamOptions): Promise<void> {
   const res = await fetch(buildUrl(path), {
     method: 'POST',
@@ -212,6 +260,10 @@ export async function streamSse(path: string, opts: SseStreamOptions): Promise<v
   })
   if (!res.ok || !res.body) {
     const text = !res.ok ? await res.text().catch(() => '') : ''
+    if (res.status === 409) {
+      const rejected = tryParseRejection(text)
+      if (rejected) throw rejected
+    }
     throw new Error(`SSE request failed: ${res.status} ${res.statusText} ${text.slice(0, 200)}`)
   }
 

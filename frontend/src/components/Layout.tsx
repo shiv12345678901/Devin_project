@@ -242,12 +242,28 @@ function SidebarNav() {
 
 function SidebarFooter() {
   const status = useBackendStatus()
+  const label =
+    status === 'online'
+      ? 'Backend online'
+      : status === 'offline'
+      ? 'Backend offline'
+      : 'Checking backend…'
+  // Status row links to /settings — when offline the user gets a one-click
+  // path to the "Ping backend" panel instead of a dead-end indicator.
   return (
-    <div
-      className="mt-auto flex items-center gap-2 px-4 py-3 text-[11px]"
+    <NavLink
+      to="/settings"
+      title={
+        status === 'offline'
+          ? 'Backend not reachable — open Settings to ping or change the URL'
+          : 'Open Settings'
+      }
+      aria-label={`${label} — open settings`}
+      className="mt-auto flex items-center gap-2 px-4 py-3 text-[11px] transition-colors hover:bg-[rgb(var(--bg-muted))]"
       style={{ borderTop: '1px solid rgb(var(--line-soft))' }}
     >
       <span
+        aria-hidden="true"
         className={clsx(
           'h-1.5 w-1.5 shrink-0 rounded-full',
           status === 'online'
@@ -258,11 +274,11 @@ function SidebarFooter() {
         )}
         style={status === 'online' ? { boxShadow: '0 0 0 3px rgba(16,185,129,0.18)' } : undefined}
       />
-      <span className="text-muted">
-        {status === 'online' ? 'Backend online' : status === 'offline' ? 'Backend offline' : 'Checking backend…'}
+      <span className={clsx(status === 'offline' ? 'text-rose-600 dark:text-rose-300' : 'text-muted')}>
+        {label}
       </span>
       <span className="ml-auto font-mono text-[10px] text-faint">v1.0</span>
-    </div>
+    </NavLink>
   )
 }
 

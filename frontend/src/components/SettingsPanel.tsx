@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Image as ImageIcon, Settings, Video } from 'lucide-react'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import type { GenerateSettings } from '../api/types'
 import Toggle from './Toggle'
 
@@ -248,11 +248,16 @@ function Section({
   children: React.ReactNode
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  const headerId = useId()
+  const panelId = `${headerId}-panel`
   return (
     <div className="card !p-0">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls={panelId}
+        id={headerId}
         className="flex w-full items-center justify-between px-5 py-4 text-left"
       >
         <span className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
@@ -260,7 +265,16 @@ function Section({
         </span>
         {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
       </button>
-      {open && <div className="border-t border-slate-200 px-5 py-4 dark:border-white/10">{children}</div>}
+      {open && (
+        <div
+          id={panelId}
+          role="region"
+          aria-labelledby={headerId}
+          className="border-t border-slate-200 px-5 py-4 dark:border-white/10"
+        >
+          {children}
+        </div>
+      )}
     </div>
   )
 }

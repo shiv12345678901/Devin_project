@@ -151,7 +151,10 @@ export default function ProgressBar({
   }, [etaSeconds])
 
   const now = useNow(active)
-  const engagementTick = Math.floor((now - mountedAt) / 3500)
+  // Engagement messages now rotate every ~6s (was 3.5s) so they don't
+  // distract the eye when the server is silent. The server-provided
+  // `message` always wins below — see `displayMessage`.
+  const engagementTick = Math.floor((now - mountedAt) / 6000)
   const fallbackMessage = useMemo(
     () => engagementMessage(stage, engagementTick),
     [stage, engagementTick],
@@ -189,10 +192,14 @@ export default function ProgressBar({
   const remainingSec = etaBase
     ? Math.max(0, etaBase.eta - (now - etaBase.at) / 1000)
     : null
-  const displayMessage =
-    active && clamped < 100 && (quiet || stage === 'queued' || !message)
-      ? fallbackMessage
-      : message || fallbackMessage
+  // Prefer the server's message whenever it's present and we're actively
+  // running. Only fall back to the engagement copy when the server is
+  // silent (no message yet, queued, or stalled past `stallAfterSec`).
+  const displayMessage = !active
+    ? message || fallbackMessage
+    : message && !quiet && stage !== 'queued'
+    ? message
+    : fallbackMessage
 
   return (
     <div className="card">

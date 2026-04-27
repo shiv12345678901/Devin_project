@@ -92,6 +92,23 @@ export default function Home() {
 
   const recent = useMemo(() => runs.slice(0, 5), [runs])
 
+  // Carousel: most-recent screenshots from successful runs. We surface up
+  // to 12 thumbnails so the hero shows real output instead of a generic
+  // "preview" illustration on a fresh install. The list is rebuilt
+  // whenever `runs` changes.
+  const recentScreenshots = useMemo(() => {
+    const out: { url: string; runId: string; filename: string }[] = []
+    for (const r of runs) {
+      if (r.status !== 'success' || !r.screenshotFiles?.length) continue
+      for (const f of r.screenshotFiles) {
+        out.push({ url: api.screenshotUrl(f), runId: r.id, filename: f })
+        if (out.length >= 12) break
+      }
+      if (out.length >= 12) break
+    }
+    return out
+  }, [runs])
+
   return (
     <div className="container-page space-y-12">
       {/* ─── Hero ────────────────────────────────────────────────────────── */}
@@ -129,6 +146,46 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      {recentScreenshots.length > 0 && (
+        <section aria-label="Recent screenshots">
+          <SectionHeader
+            eyebrow="Latest output"
+            title="Fresh from your last runs"
+            hint="Click a thumbnail to jump back to the run."
+            action={
+              <Link
+                to="/library"
+                className="inline-flex items-center gap-1 text-[13px] font-medium text-muted transition-colors hover:text-[rgb(var(--text-strong))]"
+              >
+                Open library <ArrowRight size={13} />
+              </Link>
+            }
+          />
+          <div
+            className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2"
+            role="list"
+          >
+            {recentScreenshots.map((s) => (
+              <Link
+                key={`${s.runId}-${s.filename}`}
+                to={`/processes?op=${encodeURIComponent(s.runId)}`}
+                role="listitem"
+                title={s.filename}
+                className="group relative aspect-video w-56 shrink-0 snap-start overflow-hidden rounded-md border border-slate-200 bg-slate-50 shadow-sm transition-shadow hover:shadow-md dark:border-white/10 dark:bg-white/[0.03]"
+              >
+                <img
+                  src={s.url}
+                  alt={s.filename}
+                  loading="lazy"
+                  className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-[1.02]"
+                />
+                <span className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-black/5 dark:ring-white/5" />
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* ─── Stats ──────────────────────────────────────────────────────── */}
       <section>

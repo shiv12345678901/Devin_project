@@ -1,6 +1,30 @@
 import { useCallback, useRef, useState } from 'react'
-import { api, streamSse, streamSseGet } from '../api/client'
+import { api, RunRejectedError, streamSse, streamSseGet } from '../api/client'
 import type { BackendRunDetail, GenerateSettings, SseEvent } from '../api/types'
+
+/**
+ * Convert any thrown value into a user-friendly error string. The 409
+ * `RunRejectedError` is the most common non-trivial case — surface its
+ * `reason` so wizards can render "Another run is in progress…" /
+ * "Same payload was just submitted…" instead of a raw stack.
+ */
+function friendlyErrorMessage(err: unknown): string {
+  if (err instanceof RunRejectedError) {
+    if (err.reason === 'in_flight') {
+      return 'Another run is in progress on this backend. Wait for it to finish (or cancel it from Processes), then try again.'
+    }
+    if (err.reason === 'duplicate') {
+      return 'You just submitted the same content seconds ago. Wait a moment, change something, or open the existing run from Processes.'
+    }
+    return err.message
+  }
+  if (err instanceof Error) return err.message
+  return String(err)
+}
+
+function rejectionReason(err: unknown): GenerationState['rejectedReason'] | undefined {
+  return err instanceof RunRejectedError ? err.reason : undefined
+}
 
 export interface GenerationResult {
   html_filename?: string
@@ -19,6 +43,12 @@ export interface GenerationState {
   progress: number
   etaSeconds?: number
   error?: string
+  /**
+   * Set when the most recent error came from a backend 409 rejection.
+   * Wizards can use this to render an "Open Processes" call-to-action
+   * instead of a generic error toast.
+   */
+  rejectedReason?: 'in_flight' | 'duplicate' | 'unknown'
   result?: GenerationResult
   operationId?: string
 }
@@ -131,7 +161,8 @@ export function useGenerate() {
           setState((s) => ({
             ...s,
             status: 'error',
-            error: err instanceof Error ? err.message : String(err),
+            error: friendlyErrorMessage(err),
+            rejectedReason: rejectionReason(err),
           }))
         }
         return null
@@ -204,7 +235,8 @@ export function useGenerate() {
           setState((s) => ({
             ...s,
             status: 'error',
-            error: err instanceof Error ? err.message : String(err),
+            error: friendlyErrorMessage(err),
+            rejectedReason: rejectionReason(err),
           }))
         }
         return null
@@ -228,7 +260,8 @@ export function useGenerate() {
         setState({
           status: 'error',
           progress: 100,
-          error: err instanceof Error ? err.message : String(err),
+          error: friendlyErrorMessage(err),
+          rejectedReason: rejectionReason(err),
         })
         return null
       }
@@ -374,7 +407,8 @@ export function useGenerate() {
           setState((s) => ({
             ...s,
             status: 'error',
-            error: err instanceof Error ? err.message : String(err),
+            error: friendlyErrorMessage(err),
+            rejectedReason: rejectionReason(err),
           }))
         }
         return null
@@ -416,7 +450,8 @@ export function useGenerate() {
         setState({
           status: 'error',
           progress: 100,
-          error: err instanceof Error ? err.message : String(err),
+          error: friendlyErrorMessage(err),
+          rejectedReason: rejectionReason(err),
         })
         return null
       }

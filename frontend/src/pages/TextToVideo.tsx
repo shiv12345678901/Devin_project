@@ -17,6 +17,7 @@ import {
 import ProgressBar from '../components/ProgressBar'
 import ScreenshotGallery from '../components/ScreenshotGallery'
 import PreflightModal from '../components/PreflightModal'
+import BackendRejectedBanner from '../components/BackendRejectedBanner'
 import Toggle from '../components/Toggle'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import { useBackendPlatform } from '../hooks/useBackendPlatform'
@@ -723,45 +724,93 @@ function ProjectStep({
         </Field>
       </div>
 
-      <div id={fieldId('project', 'output_format')}>
-        <div className="label">Output format</div>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {OUTPUT_OPTIONS.map((o) => {
-            const Icon = o.icon
-            const active = settings.output_format === o.value
-            return (
-              <button
-                key={o.value}
-                type="button"
-                onClick={() => onChange('output_format', o.value)}
-                disabled={running}
-                className={
-                  'flex w-full items-start gap-3 rounded-md border px-3 py-3 text-left transition-colors ' +
-                  (active
-                    ? 'border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-500/10'
-                    : 'border-slate-200 bg-white hover:border-slate-300 dark:border-white/10 dark:bg-white/[0.03]')
-                }
-              >
-                <Icon
-                  size={18}
-                  className={active ? 'mt-0.5 text-brand-600' : 'mt-0.5 text-slate-400'}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-slate-900 dark:text-slate-50">
-                    {o.label}
-                  </div>
-                  <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                    {o.desc}
-                  </div>
-                </div>
-              </button>
-            )
-          })}
-        </div>
-        {errors.output_format && <FieldError message={errors.output_format} />}
-        <WindowsOnlyWarning outputFormat={settings.output_format ?? 'images'} />
-      </div>
+      <OutputFormatPicker
+        value={settings.output_format ?? 'images'}
+        onChange={(v) => onChange('output_format', v)}
+        running={running}
+        error={errors.output_format}
+      />
     </>
+  )
+}
+
+/** Output-format selector with Windows-only options disabled upstream
+ *  when the backend platform isn't Windows. We still show a heads-up
+ *  for Windows hosts so users know the preflight will verify PPT. */
+function OutputFormatPicker({
+  value,
+  onChange,
+  running,
+  error,
+}: {
+  value: OutputFormat
+  onChange: (v: OutputFormat) => void
+  running: boolean
+  error?: string
+}) {
+  const platform = useBackendPlatform()
+  const isWindowsOnly = (v: OutputFormat) => v === 'pptx' || v === 'video'
+  return (
+    <div id={fieldId('project', 'output_format')}>
+      <div className="label">Output format</div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {OUTPUT_OPTIONS.map((o) => {
+          const Icon = o.icon
+          const active = value === o.value
+          // Disable pptx / video upstream when the backend reports a
+          // non-Windows host. We keep the option visible (with a "Windows
+          // only" hint) so users understand why it's greyed out instead
+          // of wondering where the option went.
+          const disabledByPlatform =
+            isWindowsOnly(o.value) && platform === 'non-windows'
+          const disabled = running || disabledByPlatform
+          const tooltip = disabledByPlatform
+            ? `${o.label} requires a Windows host with PowerPoint installed — this backend reports a non-Windows OS.`
+            : undefined
+          return (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => !disabled && onChange(o.value)}
+              disabled={disabled}
+              aria-disabled={disabled}
+              title={tooltip}
+              className={
+                'flex w-full items-start gap-3 rounded-md border px-3 py-3 text-left transition-colors ' +
+                (active
+                  ? 'border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-500/10'
+                  : 'border-slate-200 bg-white hover:border-slate-300 dark:border-white/10 dark:bg-white/[0.03]') +
+                (disabledByPlatform ? ' cursor-not-allowed opacity-60 hover:border-slate-200' : '')
+              }
+            >
+              <Icon
+                size={18}
+                className={active ? 'mt-0.5 text-brand-600' : 'mt-0.5 text-slate-400'}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
+                    {o.label}
+                  </span>
+                  {isWindowsOnly(o.value) && (
+                    <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-slate-500 dark:bg-white/10 dark:text-slate-300">
+                      Windows
+                    </span>
+                  )}
+                </div>
+                <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                  {disabledByPlatform
+                    ? 'Unavailable — backend isn’t Windows.'
+                    : o.desc}
+                </div>
+              </div>
+            </button>
+          )
+        })}
+      </div>
+      {error && <FieldError message={error} />}
+      <WindowsOnlyWarning outputFormat={value} />
+    </div>
   )
 }
 
@@ -1239,13 +1288,19 @@ function AdvancedStep({
             Fix the outstanding step errors — click Start Process to jump to the first one.
           </span>
         )}
-        {state.status === 'error' && (
+        {state.status === 'error' && !state.rejectedReason && (
           <span className="text-sm text-red-600 dark:text-red-400">{state.error}</span>
         )}
         {state.status === 'cancelled' && (
           <span className="text-sm text-amber-600 dark:text-amber-400">Cancelled</span>
         )}
       </div>
+      {state.status === 'error' && state.rejectedReason && (
+        <BackendRejectedBanner
+          reason={state.rejectedReason}
+          message={state.error ?? 'Backend rejected the run.'}
+        />
+      )}
     </>
   )
 }

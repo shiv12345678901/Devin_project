@@ -10,12 +10,12 @@ import {
   RefreshCw,
   Search,
   Trash2,
-  X,
 } from 'lucide-react'
 
 import { api } from '../api/client'
 import HtmlPreviewModal from '../components/HtmlPreviewModal'
 import ErrorCard from '../components/ErrorCard'
+import EmptyState from '../components/EmptyState'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
 
@@ -262,12 +262,25 @@ export default function Library() {
           <Loader2 size={16} className="animate-spin" /> Loading…
         </div>
       ) : filtered.length === 0 ? (
-        <div className="card flex flex-col items-center gap-2 py-12 text-center">
-          <X className="text-slate-300 dark:text-slate-600" size={24} />
-          <div className="text-sm text-slate-500 dark:text-slate-400">
-            {raw.length === 0 ? 'No files yet.' : 'No matches for your search.'}
-          </div>
-        </div>
+        raw.length === 0 ? (
+          <EmptyState
+            icon={kind === 'screenshot' ? <ImageIcon size={20} /> : <FileText size={20} />}
+            title={kind === 'screenshot' ? 'No screenshots yet' : 'No HTML files yet'}
+            description={
+              <>
+                Run a Text→Video, HTML→Video, or Image→Video job and the
+                outputs will land here automatically.
+              </>
+            }
+          />
+        ) : (
+          <EmptyState
+            variant="muted"
+            icon={<Search size={20} />}
+            title="No matches for your search"
+            description="Try a shorter query, clear the filter, or switch tabs."
+          />
+        )
       ) : kind === 'screenshot' ? (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filtered.map((name) => (
