@@ -58,8 +58,17 @@ export interface EnqueueResult {
 interface TrackedGenerationContextValue {
   state: GenerationState
   queue: QueueItem[]
+  /**
+   * True when the queue stopped auto-dispatching after a backend
+   * rejection. `resumeQueue()` (or any new `enqueueX` call) clears it.
+   */
+  paused: boolean
+  /** Reason the queue is currently paused, when applicable. */
+  pausedReason: 'in_flight' | 'duplicate' | 'unknown' | null
   cancel: () => void
   cancelQueued: (queueId: string) => void
+  /** Manually resume auto-dispatch after a 409-induced pause. */
+  resumeQueue: () => void
   reset: () => void
   enqueueText: (tool: RunTool, text: string, settings: GenerateSettings) => EnqueueResult
   enqueueHtml: (tool: RunTool, html: string, settings: GenerateSettings) => EnqueueResult
@@ -89,10 +98,25 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   // happens inside the terminal-state effect and we don't want re-renders
   // to re-trigger it.
   const activeQueueIdRef = useRef<string | null>(null)
+  // Set to true in `dispatch()` once we've actually fired the underlying
+  // generate call, cleared once the run terminates. Without this flag the
+  // auto-dequeue effect can race with `pushOrStart` and pop the just-claimed
+  // item before the worker even started.
+  const activeStartedRef = useRef(false)
+  // When the backend rejects the active run with 409 the next item in the
+  // queue would 409 too — pause auto-dispatch and surface a banner so the
+  // user can decide. Cleared on `resumeQueue()` or the next manual enqueue.
+  const [paused, setPaused] = useState(false)
+  const [pausedReason, setPausedReason] = useState<
+    'in_flight' | 'duplicate' | 'unknown' | null
+  >(null)
 
   // Connect generation events → runs store. Lifts the "run row" into
   // existence as soon as the SSE stream reports `running`, finishes it on
-  // terminal events.
+  // terminal events. We also create the row on a *terminal* state when
+  // `pendingRef` is still set — this catches the rare case where the POST
+  // 409s before the SSE ever flips to running, so the run still appears
+  // in Processes instead of vanishing silently.
   useEffect(() => {
     const s = gen.state
 
@@ -100,6 +124,13 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       runIdRef.current = runs.start(pendingRef.current)
       pendingRef.current = null
       return
+    }
+
+    const terminal =
+      s.status === 'success' || s.status === 'error' || s.status === 'cancelled'
+    if (terminal && pendingRef.current && !runIdRef.current) {
+      runIdRef.current = runs.start(pendingRef.current)
+      pendingRef.current = null
     }
 
     if (!runIdRef.current) return
@@ -129,6 +160,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   const dispatch = useCallback(
     (item: QueueItem) => {
       activeQueueIdRef.current = item.id
+      activeStartedRef.current = true
       if (item.kind === 'text' && item.text !== undefined && item.settings) {
         pendingRef.current = {
           tool: item.tool,
@@ -164,20 +196,39 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   // "success"/"error" state before we flip back to "running" for the next
   // item — otherwise the UI never flashes the completion state for a run
   // whose successor is queued behind it.
+  //
+  // Two important guards:
+  //   1. `activeStartedRef` — we only act on terminal states that follow a
+  //      run we actually dispatched. Without this, a `pushOrStart` claim
+  //      committed in the same tick as a previous run's terminal state
+  //      (e.g. user submits #2 the instant #1 finishes) gets removed from
+  //      the queue here before its dispatch microtask fires.
+  //   2. Pause-on-rejection — when the run errored with a backend 409 we
+  //      don't auto-fire the next item; doing so would cascade-fail every
+  //      queued item with the same reason.
   useEffect(() => {
     const s = gen.state
     if (s.status !== 'success' && s.status !== 'error' && s.status !== 'cancelled') {
       return
     }
+    if (!activeStartedRef.current) return
     if (!activeQueueIdRef.current && queue.length === 0) return
 
+    const rejected = s.status === 'error' && s.rejectedReason
+    const rejectedReason = s.rejectedReason ?? null
+
     const timer = window.setTimeout(() => {
+      activeStartedRef.current = false
+      if (rejected) {
+        setPaused(true)
+        setPausedReason(rejectedReason ?? 'unknown')
+      }
       setQueue((prev) => {
         const finishedId = activeQueueIdRef.current
         const remaining = finishedId ? prev.filter((q) => q.id !== finishedId) : prev
         const next = remaining[0]
         activeQueueIdRef.current = next?.id ?? null
-        if (next) {
+        if (next && !rejected) {
           window.setTimeout(() => dispatch(next), 0)
         }
         return remaining
@@ -188,6 +239,12 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
 
   const pushOrStart = useCallback(
     (item: QueueItem): EnqueueResult => {
+      // Any new manual submission resumes a paused queue — we assume the
+      // user has waited out / handled whatever caused the previous 409.
+      if (paused) {
+        setPaused(false)
+        setPausedReason(null)
+      }
       const idleNow =
         gen.state.status === 'idle' ||
         gen.state.status === 'success' ||
@@ -206,7 +263,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       setQueue((prev) => [...prev, item])
       return { queueId: item.id, startedImmediately: false }
     },
-    [dispatch, gen.state.status],
+    [dispatch, gen.state.status, paused],
   )
 
   const enqueueText = useCallback(
@@ -263,18 +320,49 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     setQueue((prev) => prev.filter((q) => q.id !== queueId || q.id === activeQueueIdRef.current))
   }, [])
 
+  const resumeQueue = useCallback(() => {
+    setPaused(false)
+    setPausedReason(null)
+    // Pull the next queued item (if any) and fire it. We re-use the
+    // dispatch path so all the pendingRef / runIdRef bookkeeping is
+    // identical to a fresh submission.
+    setQueue((prev) => {
+      if (activeQueueIdRef.current) return prev
+      const next = prev[0]
+      if (!next) return prev
+      activeQueueIdRef.current = next.id
+      window.setTimeout(() => dispatch(next), 0)
+      return prev
+    })
+  }, [dispatch])
+
   const value = useMemo<TrackedGenerationContextValue>(
     () => ({
       state: gen.state,
       queue,
+      paused,
+      pausedReason,
       cancel: gen.cancel,
       cancelQueued,
+      resumeQueue,
       reset: gen.reset,
       enqueueText,
       enqueueHtml,
       enqueueImage,
     }),
-    [gen.state, gen.cancel, gen.reset, queue, cancelQueued, enqueueText, enqueueHtml, enqueueImage],
+    [
+      gen.state,
+      gen.cancel,
+      gen.reset,
+      queue,
+      paused,
+      pausedReason,
+      cancelQueued,
+      resumeQueue,
+      enqueueText,
+      enqueueHtml,
+      enqueueImage,
+    ],
   )
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
@@ -318,5 +406,8 @@ export function useGenerationQueue() {
     cancelQueued: ctx.cancelQueued,
     cancel: ctx.cancel,
     state: ctx.state,
+    paused: ctx.paused,
+    pausedReason: ctx.pausedReason,
+    resumeQueue: ctx.resumeQueue,
   }
 }
