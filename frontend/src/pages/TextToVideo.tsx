@@ -28,6 +28,8 @@ import type { GenerateSettings, OutputFormat } from '../api/types'
 
 const DEFAULT_SETTINGS: GenerateSettings = {
   output_format: 'images',
+  class_name: 'Class 10',
+  subject: 'Nepali',
   model_choice: 'default',
   zoom: 2.1,
   overlap: 15,
@@ -48,6 +50,46 @@ const DEFAULT_SETTINGS: GenerateSettings = {
   intro_thumbnail_duration_sec: 5,
   outro_thumbnail_enabled: false,
   outro_thumbnail_duration_sec: 5,
+}
+
+const PROJECT_DETAILS_STORAGE_KEY = 'textbro:text-to-video:project-details:v1'
+const CLASS_OPTIONS = ['Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12']
+const SUBJECT_OPTIONS = ['Nepali', 'English', 'Science', 'Math', 'Social', 'Model Question']
+
+type ProjectDetails = Pick<GenerateSettings, 'class_name' | 'subject' | 'title' | 'output_format'>
+
+function readLastProjectDetails(): ProjectDetails | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(PROJECT_DETAILS_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as ProjectDetails
+    if (!parsed || typeof parsed !== 'object') return null
+    return {
+      class_name: typeof parsed.class_name === 'string' ? parsed.class_name : undefined,
+      subject: typeof parsed.subject === 'string' ? parsed.subject : undefined,
+      title: typeof parsed.title === 'string' ? parsed.title : undefined,
+      output_format: parsed.output_format,
+    }
+  } catch {
+    return null
+  }
+}
+
+function saveLastProjectDetails(settings: GenerateSettings): ProjectDetails | null {
+  if (typeof window === 'undefined') return null
+  const details: ProjectDetails = {
+    class_name: settings.class_name,
+    subject: settings.subject,
+    title: settings.title,
+    output_format: settings.output_format,
+  }
+  try {
+    window.localStorage.setItem(PROJECT_DETAILS_STORAGE_KEY, JSON.stringify(details))
+  } catch {
+    /* ignore storage failures */
+  }
+  return details
 }
 
 type StepId = 'project' | 'content' | 'screenshot' | 'video' | 'thumbnail' | 'advanced'
@@ -191,6 +233,9 @@ export default function TextToVideo() {
     ...DEFAULT_SETTINGS,
     output_format: appSettings.defaultOutputFormat,
   })
+  const [lastProjectDetails, setLastProjectDetails] = useState<ProjectDetails | null>(() =>
+    readLastProjectDetails(),
+  )
   const [stepId, setStepId] = useState<StepId>('project')
   const [showPreflight, setShowPreflight] = useState(false)
   const preflightProceedingRef = useRef(false)
@@ -271,6 +316,15 @@ export default function TextToVideo() {
     setShowPreflight(true)
   }
 
+  const reuseLastProjectDetails = () => {
+    if (!lastProjectDetails) return
+    setSettings((prev) => ({
+      ...prev,
+      ...lastProjectDetails,
+      output_format: lastProjectDetails.output_format ?? prev.output_format,
+    }))
+  }
+
   const onPreflightProceed = async () => {
     if (preflightProceedingRef.current) return
     preflightProceedingRef.current = true
@@ -279,6 +333,7 @@ export default function TextToVideo() {
     payload.class_name = (payload.class_name ?? '').trim() || undefined
     payload.subject = (payload.subject ?? '').trim() || undefined
     payload.title = (payload.title ?? '').trim() || undefined
+    setLastProjectDetails(saveLastProjectDetails(payload))
     // Enqueues and (if idle) kicks off immediately. Navigate right away so
     // the user sees either the running run or the queue entry without
     // staying on the wizard.
@@ -350,6 +405,8 @@ export default function TextToVideo() {
           <ProjectStep
             settings={settings}
             onChange={set}
+            lastProjectDetails={lastProjectDetails}
+            onReuseLast={reuseLastProjectDetails}
             running={running}
             errors={showCurrentErrors ? currentErrors : {}}
           />
@@ -601,43 +658,70 @@ function StepHeader({ title, subtitle }: { title: string; subtitle?: string }) {
 function ProjectStep({
   settings,
   onChange,
+  lastProjectDetails,
+  onReuseLast,
   running,
   errors,
 }: {
   settings: GenerateSettings
   onChange: Setter
+  lastProjectDetails: ProjectDetails | null
+  onReuseLast: () => void
   running: boolean
   errors: FieldErrors
 }) {
+  const canReuse = Boolean(lastProjectDetails?.class_name || lastProjectDetails?.subject || lastProjectDetails?.title)
   return (
     <>
-      <StepHeader
-        title="Project info"
-        subtitle="Metadata for this run — used as the output folder/file prefix and shown in Processes."
-      />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <StepHeader
+          title="Project info"
+          subtitle="Metadata for this run — used as the output folder/file prefix and shown in Processes."
+        />
+        {canReuse && (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={onReuseLast}
+            disabled={running}
+          >
+            Reuse previous details
+          </button>
+        )}
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Class name" required error={errors.class_name}>
-          <input
+        <Field label="Class" required error={errors.class_name}>
+          <select
             id={fieldId('project', 'class_name')}
             className={inputCls(errors.class_name)}
-            placeholder="Class 8"
-            value={settings.class_name ?? ''}
+            value={settings.class_name ?? 'Class 10'}
             onChange={(e) => onChange('class_name', e.target.value)}
             disabled={running}
-          />
+          >
+            {CLASS_OPTIONS.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
         </Field>
         <Field label="Subject" required error={errors.subject}>
-          <input
+          <select
             id={fieldId('project', 'subject')}
             className={inputCls(errors.subject)}
-            placeholder="Nepali"
-            value={settings.subject ?? ''}
+            value={settings.subject ?? 'Nepali'}
             onChange={(e) => onChange('subject', e.target.value)}
             disabled={running}
-          />
+          >
+            {SUBJECT_OPTIONS.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
         </Field>
-        <Field label="Title" required className="sm:col-span-2" error={errors.title}>
+        <Field label="Chapter" required className="sm:col-span-2" error={errors.title}>
           <input
             id={fieldId('project', 'title')}
             className={inputCls(errors.title)}

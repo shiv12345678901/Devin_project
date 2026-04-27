@@ -10,7 +10,7 @@
  *     for a while, it shows a calm "still working" hint instead of looking
  *     broken.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { LoaderCircle } from 'lucide-react'
 
 interface Props {
@@ -28,6 +28,8 @@ interface Props {
 }
 
 const STAGE_LABELS: Record<string, string> = {
+  queued: 'Queued',
+  running: 'Starting process',
   init: 'Warming up',
   ai: 'Generating HTML with AI',
   ai_verify: 'Verifying completeness',
@@ -39,6 +41,42 @@ const STAGE_LABELS: Record<string, string> = {
   export: 'Exporting video',
   screenshots_done: 'Screenshots ready',
   complete: 'Complete',
+}
+
+const ENGAGEMENT_MESSAGES: Record<string, string[]> = {
+  queued: ['Waiting for the backend slot...', 'Preparing the run...', 'Keeping your job in line...'],
+  running: ['Starting the backend process...', 'Opening the workflow...', 'Preparing the workspace...'],
+  init: ['Sending request...', 'Checking settings...', 'Preparing files...'],
+  ai: ['Sending request to AI...', 'Analyzing your text...', 'Writing the HTML...', 'Checking content structure...'],
+  ai_verify: ['Checking AI output...', 'Looking for missing content...', 'Verifying the lesson flow...'],
+  ai_revision: ['Revising the content...', 'Filling missing parts...', 'Polishing the generated HTML...'],
+  html_saved: ['Saving generated HTML...', 'Preparing browser render...', 'Moving to screenshots...'],
+  screenshot: ['Launching browser...', 'Rendering pages...', 'Capturing screenshots...', 'Checking screenshot output...'],
+  screenshots_done: ['Screenshots found...', 'Preparing export...', 'Collecting generated files...'],
+  export: ['Opening PowerPoint...', 'Building slides...', 'Exporting video...', 'Waiting for MP4 file...'],
+  powerpoint_cleanup: ['Closing old PowerPoint sessions...', 'Clearing export conflicts...', 'Preparing PowerPoint...'],
+  powerpoint: ['Building presentation...', 'Applying slide timing...', 'Exporting video...', 'Waiting for MP4 file...'],
+}
+
+function progressCeiling(progress: number, stage: string | undefined): number {
+  if (progress >= 100) return 100
+  if (!stage) return 96
+  if (stage === 'queued') return Math.max(progress, 12)
+  if (stage === 'ai' || stage.startsWith('ai_')) return Math.max(progress, 34)
+  if (stage === 'html_saved') return Math.max(progress, 42)
+  if (stage === 'screenshot') return Math.max(progress, 88)
+  if (stage === 'screenshots_done') return Math.max(progress, 94)
+  if (stage === 'export' || stage.startsWith('powerpoint')) return 99
+  return 98
+}
+
+function engagementMessage(stage: string | undefined, tick: number): string {
+  const messages = ENGAGEMENT_MESSAGES[stage ?? ''] ?? [
+    'Working on it...',
+    'Checking progress...',
+    'Waiting for backend update...',
+  ]
+  return messages[tick % messages.length]
 }
 
 function prettyStage(stage: string | undefined): string {
@@ -113,6 +151,36 @@ export default function ProgressBar({
   }, [etaSeconds])
 
   const now = useNow(active)
+  const engagementTick = Math.floor((now - mountedAt) / 3500)
+  const fallbackMessage = useMemo(
+    () => engagementMessage(stage, engagementTick),
+    [stage, engagementTick],
+  )
+
+  // Keep the bar visibly alive between backend events. This is cosmetic only:
+  // it is capped per stage and never reaches 100 until the server does.
+  const [displayProgress, setDisplayProgress] = useState<number>(() => clamped)
+  useEffect(() => {
+    setDisplayProgress((prev) => {
+      if (!active || clamped >= 100) return clamped
+      if (clamped + 8 < prev) return clamped
+      if (clamped > prev) return clamped
+      return prev
+    })
+  }, [active, clamped])
+  useEffect(() => {
+    if (!active || clamped >= 100) return
+    const id = window.setInterval(() => {
+      setDisplayProgress((prev) => {
+        const floor = Math.max(prev, clamped)
+        const ceiling = progressCeiling(clamped, stage)
+        if (floor >= ceiling) return floor
+        return Math.min(ceiling, floor + 1)
+      })
+    }, 1200)
+    return () => window.clearInterval(id)
+  }, [active, clamped, stage])
+  const shownProgress = Math.max(clamped, Math.min(displayProgress, clamped >= 100 ? 100 : progressCeiling(clamped, stage)))
 
   const elapsedSinceUpdate = Math.max(0, (now - lastUpdate.at) / 1000)
   const quiet = active && clamped < 99 && elapsedSinceUpdate > stallAfterSec
@@ -121,6 +189,10 @@ export default function ProgressBar({
   const remainingSec = etaBase
     ? Math.max(0, etaBase.eta - (now - etaBase.at) / 1000)
     : null
+  const displayMessage =
+    active && clamped < 100 && (quiet || stage === 'queued' || !message)
+      ? fallbackMessage
+      : message || fallbackMessage
 
   return (
     <div className="card">
@@ -129,7 +201,7 @@ export default function ProgressBar({
           {prettyStage(stage)}
         </div>
         <div className="shrink-0 text-sm tabular-nums text-slate-500">
-          {Math.round(clamped)}%
+          {Math.round(shownProgress)}%
         </div>
       </div>
       <div
@@ -149,19 +221,19 @@ export default function ProgressBar({
               ? 'bg-emerald-500'
               : 'bg-brand-500')
           }
-          style={{ width: `${Math.max(clamped, active ? 2 : 0)}%` }}
+          style={{ width: `${Math.max(shownProgress, active ? 2 : 0)}%` }}
         />
         {active && !quiet && clamped < 99 && (
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-y-0 left-0 animate-[shimmer_1.6s_linear_infinite] bg-gradient-to-r from-transparent via-white/40 to-transparent"
-            style={{ width: `${Math.max(clamped, 2)}%` }}
+            style={{ width: `${Math.max(shownProgress, 2)}%` }}
           />
         )}
       </div>
       <div className="mt-2 flex flex-wrap items-baseline justify-between gap-2 text-xs">
         <div className="min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300">
-          {message ?? ' '}
+          {displayMessage}
         </div>
         <div className="shrink-0 tabular-nums text-slate-500">
           {remainingSec !== null && remainingSec > 0

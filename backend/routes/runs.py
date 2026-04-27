@@ -5,9 +5,10 @@ import hashlib
 import json
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
-from queue import Empty
+from queue import Empty, Queue
 
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
@@ -225,13 +226,43 @@ def start_text_to_video():
         try:
             ctx.progress("ai", 5, f"Generating HTML with model {model_choice}...")
             ai_started = time.time()
-            html_content = get_ai_response(
-                text,
-                use_cache=use_cache,
-                cancel_event=ctx.cancel_event,
-                model_choice=model_choice,
-                system_prompt=system_prompt or None,
-            )
+            ai_q: Queue[dict] = Queue()
+            ai_holder: dict = {"content": None, "error": None}
+
+            def _ai_worker() -> None:
+                try:
+                    ai_holder["content"] = get_ai_response(
+                        text,
+                        use_cache=use_cache,
+                        cancel_event=ctx.cancel_event,
+                        model_choice=model_choice,
+                        system_prompt=system_prompt or None,
+                    )
+                except Exception as exc:
+                    ai_holder["error"] = exc
+                finally:
+                    ai_q.put({"kind": "_done"})
+
+            ai_thread = threading.Thread(target=_ai_worker, daemon=True, name=f"{operation_id}-ai")
+            ai_thread.start()
+            while True:
+                try:
+                    msg = ai_q.get(timeout=1)
+                except Empty:
+                    if ctx.cancel_event.is_set():
+                        ai_thread.join(timeout=10)
+                        ctx.check_cancelled()
+                    elapsed = int(time.time() - ai_started)
+                    progress = min(28, 5 + max(1, elapsed // 3))
+                    ctx.progress("ai", progress, f"AI is generating HTML... {elapsed}s elapsed")
+                    continue
+                if msg.get("kind") == "_done":
+                    break
+
+            ai_thread.join(timeout=10)
+            if ai_holder["error"]:
+                raise ai_holder["error"]
+            html_content = ai_holder["content"]
             ctx.check_cancelled()
             if not html_content:
                 ctx.fail("Failed to generate HTML", progress=10)

@@ -7,6 +7,7 @@ import type {
   PreflightResponse,
   SseEvent,
   BackendRunStartResponse,
+  BackendRunDetail,
 } from './types'
 
 // Base URL for the Flask backend. Starts from the build-time env var, but can
@@ -81,6 +82,9 @@ export const api = {
 
   startTextToVideoRun: (text: string, settings: GenerateSettings = {}) =>
     postJson<BackendRunStartResponse>('/runs/text-to-video', { text, ...settings }),
+
+  getRun: (runId: string) =>
+    getJson<BackendRunDetail>(`/runs/${encodeURIComponent(runId)}`),
 
   generateHtml: (html: string, settings: GenerateSettings = {}) =>
     postJson<GenerateResponse>('/generate-html', { html, ...settings }),

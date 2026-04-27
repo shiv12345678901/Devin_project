@@ -81,6 +81,30 @@ export interface BackendRunStartResponse {
   error?: string
 }
 
+export interface BackendRunDetail {
+  success: boolean
+  run: {
+    run_id: string
+    operation_id?: string
+    status?: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | string
+    stage?: string
+    message?: string
+    progress?: number
+    queue_position?: number
+    outputs?: {
+      html_filename?: string
+      html_file?: string
+      screenshot_files?: string[]
+      screenshot_folder?: string
+      presentation_file?: string
+      presentation_path?: string
+      video_file?: string
+      video_path?: string
+    }
+  }
+  error?: string
+}
+
 export type SseEvent =
   | {
       type: 'started'

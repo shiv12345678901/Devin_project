@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { api, streamSse, streamSseGet } from '../api/client'
-import type { GenerateSettings, SseEvent } from '../api/types'
+import type { BackendRunDetail, GenerateSettings, SseEvent } from '../api/types'
 
 export interface GenerationResult {
   html_filename?: string
@@ -24,6 +24,18 @@ export interface GenerationState {
 }
 
 const initialState: GenerationState = { status: 'idle', progress: 0 }
+
+function resultFromRun(run: BackendRunDetail['run'], fallbackOperationId: string): GenerationResult {
+  const outputs = run.outputs ?? {}
+  return {
+    html_filename: outputs.html_filename ?? outputs.html_file,
+    screenshot_files: outputs.screenshot_files ?? [],
+    screenshot_folder: outputs.screenshot_folder,
+    presentation_file: outputs.presentation_file ?? outputs.presentation_path,
+    video_file: outputs.video_file ?? outputs.video_path,
+    operation_id: run.operation_id ?? fallbackOperationId,
+  }
+}
 
 export function useGenerate() {
   const [state, setState] = useState<GenerationState>(initialState)
@@ -225,20 +237,68 @@ export function useGenerate() {
       const opId = started.operation_id
       opIdRef.current = opId
       const result: GenerationResult = { screenshot_files: [], operation_id: opId }
+      const firstPosition = started.queue_position ?? 1
       setState({
         status: 'running',
         progress: 0,
-        stage: 'queued',
-        message: started.queue_position ? `Queued at position ${started.queue_position}` : 'Queued',
+        stage: firstPosition > 1 ? 'queued' : 'running',
+        message: firstPosition > 1 ? `Queued at position ${firstPosition}` : 'Starting backend process...',
         operationId: opId,
       })
 
+      let terminal = false
+      const applyRunSnapshot = (run: BackendRunDetail['run']) => {
+        if (terminal) return
+        const backendStatus = String(run.status ?? '')
+        const progress = typeof run.progress === 'number' ? run.progress : undefined
+        const queuePosition = run.queue_position
+        if (backendStatus === 'completed') {
+          terminal = true
+          const completed = resultFromRun(run, opId)
+          Object.assign(result, completed)
+          setState({
+            status: 'success',
+            progress: 100,
+            stage: 'complete',
+            message: run.message ?? `Generated ${completed.screenshot_files.length} screenshot(s)`,
+            result: completed,
+            operationId: completed.operation_id,
+          })
+          return
+        }
+        if (backendStatus === 'failed') {
+          terminal = true
+          setState({ status: 'error', progress: 100, error: run.message ?? 'Process failed', operationId: opId })
+          return
+        }
+        if (backendStatus === 'cancelled') {
+          terminal = true
+          setState({ status: 'cancelled', progress: 100, message: run.message ?? 'Cancelled', operationId: opId })
+          return
+        }
+        setState((s) => ({
+          ...s,
+          stage:
+            backendStatus === 'queued' && (!queuePosition || queuePosition <= 1)
+              ? 'running'
+              : run.stage ?? s.stage,
+          message:
+            backendStatus === 'queued' && (!queuePosition || queuePosition <= 1)
+              ? 'Starting backend process...'
+              : run.message ?? s.message,
+          progress: progress ?? s.progress,
+          operationId: run.operation_id ?? s.operationId,
+        }))
+      }
+
       const handle = (ev: SseEvent) => {
+        if (terminal) return
         if (ev.type === 'queued') {
+          const position = ev.queue_position ?? 1
           setState((s) => ({
             ...s,
-            stage: 'queued',
-            message: ev.message,
+            stage: position > 1 ? 'queued' : 'running',
+            message: position > 1 ? ev.message : 'Starting backend process...',
             progress: ev.progress ?? s.progress,
             operationId: ev.operation_id ?? s.operationId,
           }))
@@ -270,6 +330,7 @@ export function useGenerate() {
           result.presentation_file = ev.presentation_file ?? data.presentation_file ?? data.presentation_path
           result.video_file = ev.video_file ?? data.video_file ?? data.video_path
           result.operation_id = ev.operation_id ?? opId
+          terminal = true
           setState({
             status: 'success',
             progress: 100,
@@ -279,17 +340,35 @@ export function useGenerate() {
             operationId: result.operation_id,
           })
         } else if (ev.type === 'error') {
+          terminal = true
           setState({ status: 'error', progress: 100, error: ev.message, operationId: opId })
         } else if (ev.type === 'cancelled') {
+          terminal = true
           setState({ status: 'cancelled', progress: 100, message: ev.message, operationId: opId })
         }
       }
 
+      const pollRun = async () => {
+        while (!ctl.signal.aborted && !terminal) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1500))
+          if (ctl.signal.aborted || terminal) break
+          try {
+            const detail = await api.getRun(runId)
+            if (detail.run) applyRunSnapshot(detail.run)
+          } catch {
+            // SSE remains the primary channel; polling is only a fallback.
+          }
+        }
+      }
+
       try {
-        await streamSseGet(`/runs/${encodeURIComponent(runId)}/events`, {
-          signal: ctl.signal,
-          onEvent: handle,
-        })
+        await Promise.race([
+          streamSseGet(`/runs/${encodeURIComponent(runId)}/events`, {
+            signal: ctl.signal,
+            onEvent: handle,
+          }),
+          pollRun(),
+        ])
       } catch (err) {
         if ((err as { name?: string }).name !== 'AbortError') {
           setState((s) => ({
