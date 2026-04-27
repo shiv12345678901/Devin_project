@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -226,7 +226,8 @@ const fieldId = (step: StepId, name: string) => `field-${step}-${name}`
 export default function TextToVideo() {
   const nav = useNavigate()
   const { state, generate, cancel } = useTrackedGenerate('text-to-video')
-  const running = state.status === 'running'
+  const liveRunning = state.status === 'running'
+  const running = false
   const [text, setText] = useState('')
   const { settings: appSettings } = useSettings()
   const [settings, setSettings] = useState<GenerateSettings>({
@@ -288,17 +289,6 @@ export default function TextToVideo() {
     }
     return true
   }
-
-  // Redirect to Processes as soon as the backend accepts a live request so
-  // the user watches progress there rather than the wizard. For *queued*
-  // submissions we also auto-navigate on submit (see onPreflightProceed
-  // below) so the user sees the queue entry without waiting for it to
-  // reach the head and flip to `running`.
-  useEffect(() => {
-    if (state.status === 'running' && state.operationId) {
-      nav(`/processes?op=${encodeURIComponent(state.operationId)}`, { replace: true })
-    }
-  }, [state.status, state.operationId, nav])
 
   // Only the *visible* steps participate in the final validation.
   const allValid = visibleSteps.every((s) => stepValid(s.id))
@@ -505,7 +495,7 @@ export default function TextToVideo() {
         </div>
       )}
 
-      {(running || state.status === 'success') && (
+      {(liveRunning || state.status === 'success') && (
         <ProgressBar
           progress={state.progress}
           stage={state.stage}

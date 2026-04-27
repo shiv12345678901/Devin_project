@@ -174,15 +174,17 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     const timer = window.setTimeout(() => {
       setQueue((prev) => {
         const finishedId = activeQueueIdRef.current
-        activeQueueIdRef.current = null
-        if (finishedId) {
-          return prev.filter((q) => q.id !== finishedId)
+        const remaining = finishedId ? prev.filter((q) => q.id !== finishedId) : prev
+        const next = remaining[0]
+        activeQueueIdRef.current = next?.id ?? null
+        if (next) {
+          window.setTimeout(() => dispatch(next), 0)
         }
-        return prev
+        return remaining
       })
     }, 250)
     return () => window.clearTimeout(timer)
-  }, [gen.state, queue.length])
+  }, [dispatch, gen.state, queue.length])
 
   const pushOrStart = useCallback(
     (item: QueueItem): EnqueueResult => {
@@ -197,10 +199,11 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         // race to dispatch. The real work still defers one tick so React
         // has time to commit the new queue state.
         activeQueueIdRef.current = item.id
+        setQueue((prev) => [...prev, item])
         window.setTimeout(() => dispatch(item), 0)
         return { queueId: item.id, startedImmediately: true }
       }
-      console.warn('A generation is already running; ignoring duplicate start request.')
+      setQueue((prev) => [...prev, item])
       return { queueId: item.id, startedImmediately: false }
     },
     [dispatch, gen.state.status],
