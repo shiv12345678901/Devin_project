@@ -14,8 +14,6 @@ import {
   Upload,
 } from 'lucide-react'
 
-import ProgressBar from '../components/ProgressBar'
-import ScreenshotGallery from '../components/ScreenshotGallery'
 import PreflightModal from '../components/PreflightModal'
 import BackendRejectedBanner from '../components/BackendRejectedBanner'
 import Toggle from '../components/Toggle'
@@ -260,7 +258,6 @@ const fieldId = (step: StepId, name: string) => `field-${step}-${name}`
 export default function TextToVideo() {
   const nav = useNavigate()
   const { state, generate, cancel } = useTrackedGenerate('text-to-video')
-  const liveRunning = state.status === 'running'
   const running = false
   const [text, setText] = useState('')
   const { settings: appSettings } = useSettings()
@@ -272,7 +269,6 @@ export default function TextToVideo() {
     readLastRunSnapshot(),
   )
   const [replaceTargets, setReplaceTargets] = useState<ReplacementTargets | null>(null)
-  const [redirectQueueId, setRedirectQueueId] = useState<string | null>(null)
   const [stepId, setStepId] = useState<StepId>('project')
   const [showPreflight, setShowPreflight] = useState(false)
   const preflightProceedingRef = useRef(false)
@@ -289,13 +285,6 @@ export default function TextToVideo() {
     setStepId('project')
     setErroredSteps(new Set())
   }, [])
-
-  useEffect(() => {
-    if (!redirectQueueId) return
-    if (state.status === 'running' || state.status === 'success' || state.status === 'error') {
-      nav(`/processes?queue=${encodeURIComponent(redirectQueueId)}`, { replace: true })
-    }
-  }, [nav, redirectQueueId, state.status])
 
   const set = <K extends keyof GenerateSettings>(key: K, v: GenerateSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: v }))
@@ -389,13 +378,9 @@ export default function TextToVideo() {
     // the user sees either the running run or the queue entry without
     // staying on the wizard.
     const targets = replaceTargets
-    const predictedQueueId = `submitted-${Date.now().toString(36)}`
-    setRedirectQueueId(predictedQueueId)
-    nav(`/processes?queue=${encodeURIComponent(predictedQueueId)}`)
     const { queueId } = generate(text, payload, targets ? { replaceTargets: targets } : undefined)
-    setRedirectQueueId(queueId)
     setReplaceTargets(null)
-    nav(`/processes?queue=${encodeURIComponent(queueId)}`, { replace: true })
+    nav(`/processes?queue=${encodeURIComponent(queueId)}`)
   }
 
   const goNext = () => {
@@ -560,22 +545,6 @@ export default function TextToVideo() {
             <ArrowLeft size={14} /> Back
           </button>
         </div>
-      )}
-
-      {(liveRunning || state.status === 'success') && (
-        <ProgressBar
-          progress={state.progress}
-          stage={state.stage}
-          message={state.message}
-          etaSeconds={state.etaSeconds}
-        />
-      )}
-
-      {state.result && (
-        <ScreenshotGallery
-          files={state.result.screenshot_files}
-          screenshotFolder={state.result.screenshot_folder}
-        />
       )}
 
       {showPreflight && (
@@ -1325,7 +1294,7 @@ function AdvancedStep({
         />
         <Toggle
           label="Auto timing for screenshot slides"
-          description="Distribute total seconds across inserted screenshot slides."
+          description="Distribute at least 500 seconds across inserted screenshot slides for video exports."
           checked={autoTiming}
           onChange={(v) => onChange('auto_timing_screenshot_slides', v)}
         />

@@ -468,7 +468,7 @@ export default function ProgressBar({
   const shownProgress = Math.max(clamped, Math.min(displayProgress, clamped >= 100 ? 100 : progressCeiling(clamped, stage)))
 
   const elapsedSinceUpdate = Math.max(0, (now - lastUpdate.at) / 1000)
-  const quiet = active && clamped < 99 && elapsedSinceUpdate > stallAfterSec
+  const quiet = active && !exportStage && clamped < 99 && elapsedSinceUpdate > stallAfterSec
   const elapsedTotalSec = Math.max(0, (now - mountedAt) / 1000)
   const activeStepIndex = steps.length ? Math.floor(elapsedTotalSec / 4) % steps.length : -1
   const activeStepLabel = activeStepIndex >= 0 ? steps[activeStepIndex] : ''

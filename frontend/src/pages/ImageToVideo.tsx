@@ -2,8 +2,6 @@ import { Play, StopCircle, Upload } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type React from 'react'
-import ProgressBar from '../components/ProgressBar'
-import ScreenshotGallery from '../components/ScreenshotGallery'
 import SettingsPanel from '../components/SettingsPanel'
 import BackendRejectedBanner from '../components/BackendRejectedBanner'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
@@ -183,21 +181,6 @@ export default function ImageToVideo() {
         )}
       </form>
 
-      {(running || state.status === 'success') && (
-        <ProgressBar
-          progress={state.progress}
-          stage={state.stage}
-          message={state.message}
-          etaSeconds={state.etaSeconds}
-        />
-      )}
-
-      {state.result && (
-        <ScreenshotGallery
-          files={state.result.screenshot_files}
-          screenshotFolder={state.result.screenshot_folder}
-        />
-      )}
     </div>
   )
 }

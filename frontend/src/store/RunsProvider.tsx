@@ -18,9 +18,9 @@ function migrateRun(value: unknown): Run | null {
   if (!['running', 'success', 'error', 'cancelled'].includes(r.status as string)) {
     r.status = 'error'
   }
-  // Mark anything still flagged "running" on first load as cancelled — the
-  // SSE stream that owned it died with the previous tab.
-  if (r.status === 'running') {
+  // Backend-owned text runs can be reattached from Processes by operation id.
+  // Only local/SSE-only running rows become cancelled after a tab reload.
+  if (r.status === 'running' && !r.operationId) {
     r.status = 'cancelled'
     r.endedAt = r.endedAt ?? Date.now()
   }

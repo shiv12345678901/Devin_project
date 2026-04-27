@@ -41,6 +41,7 @@ from utils.eta_tracker import eta_tracker
 
 
 runs_bp = Blueprint("runs", __name__)
+MIN_VIDEO_SECONDS = 500.0
 
 
 def _emit(evt: dict) -> str:
@@ -456,11 +457,29 @@ def start_text_to_video():
 
                     pptx_path = _run_output_path(POWERPOINT_OUTPUT_FOLDER, output_name, operation_id, ".pptx")
                     video_path = _run_output_path(POWERPOINT_VIDEO_FOLDER, output_name, operation_id, ".mp4")
-                    screenshot_slide_duration = (
-                        round(480.0 / max(len(screenshot_files), 1), 3)
-                        if auto_timing_screenshot_slides
-                        else fixed_seconds_per_screenshot_slide
-                    )
+                    screenshot_count = max(len(screenshot_files), 1)
+                    if output_format == "video":
+                        auto_duration = round(MIN_VIDEO_SECONDS / screenshot_count, 3)
+                        fixed_total = fixed_seconds_per_screenshot_slide * screenshot_count
+                        if auto_timing_screenshot_slides or fixed_total < MIN_VIDEO_SECONDS:
+                            screenshot_slide_duration = auto_duration
+                            if not auto_timing_screenshot_slides:
+                                ctx.progress(
+                                    "powerpoint",
+                                    89,
+                                    (
+                                        "Fixed timing was shorter than 500 seconds; "
+                                        f"using {auto_duration}s per screenshot slide."
+                                    ),
+                                )
+                        else:
+                            screenshot_slide_duration = fixed_seconds_per_screenshot_slide
+                    else:
+                        screenshot_slide_duration = (
+                            round(MIN_VIDEO_SECONDS / screenshot_count, 3)
+                            if auto_timing_screenshot_slides
+                            else fixed_seconds_per_screenshot_slide
+                        )
                     intro_thumbnail_path = (
                         _thumbnail_path(intro_thumbnail_filename)
                         if intro_thumbnail_enabled

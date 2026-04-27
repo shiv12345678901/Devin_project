@@ -69,6 +69,9 @@ export interface RunsContextValue {
         | 'videoFile'
         | 'operationId'
         | 'error'
+        | 'stage'
+        | 'message'
+        | 'progress'
       >
     >,
   ) => void

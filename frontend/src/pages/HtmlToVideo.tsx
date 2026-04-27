@@ -1,8 +1,6 @@
 import { Play, Sparkles, Minimize2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import ProgressBar from '../components/ProgressBar'
-import ScreenshotGallery from '../components/ScreenshotGallery'
 import SettingsPanel from '../components/SettingsPanel'
 import BackendRejectedBanner from '../components/BackendRejectedBanner'
 import { api } from '../api/client'
@@ -24,7 +22,6 @@ export default function HtmlToVideo() {
   const [html, setHtml] = useState('')
   const [settings, setSettings] = useState<GenerateSettings>(defaultSettings)
   const [replaceTargets, setReplaceTargets] = useState<ReplacementTargets | null>(null)
-  const [redirectQueueId, setRedirectQueueId] = useState<string | null>(null)
   const { state, generateFromHtml } = useTrackedGenerate('html-to-video')
   const toast = useToast()
   const nav = useNavigate()
@@ -38,24 +35,13 @@ export default function HtmlToVideo() {
     setReplaceTargets(draft.replaceTargets)
   }, [])
 
-  useEffect(() => {
-    if (!redirectQueueId) return
-    if (state.status === 'running' || state.status === 'success' || state.status === 'error') {
-      nav(`/processes?queue=${encodeURIComponent(redirectQueueId)}`, { replace: true })
-    }
-  }, [nav, redirectQueueId, state.status])
-
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!html.trim()) return
     const targets = replaceTargets
-    const predictedQueueId = `submitted-${Date.now().toString(36)}`
-    setRedirectQueueId(predictedQueueId)
-    nav(`/processes?queue=${encodeURIComponent(predictedQueueId)}`)
     const { queueId } = generateFromHtml(html, settings, targets ? { replaceTargets: targets } : undefined)
-    setRedirectQueueId(queueId)
     setReplaceTargets(null)
-    nav(`/processes?queue=${encodeURIComponent(queueId)}`, { replace: true })
+    nav(`/processes?queue=${encodeURIComponent(queueId)}`)
   }
 
   const beautify = async () => {
@@ -166,20 +152,6 @@ export default function HtmlToVideo() {
         )}
       </form>
 
-      {(running || state.status === 'success') && (
-        <ProgressBar
-          progress={state.progress}
-          stage={state.stage}
-          message={state.message}
-        />
-      )}
-
-      {state.result && (
-        <ScreenshotGallery
-          files={state.result.screenshot_files}
-          screenshotFolder={state.result.screenshot_folder}
-        />
-      )}
     </div>
   )
 }

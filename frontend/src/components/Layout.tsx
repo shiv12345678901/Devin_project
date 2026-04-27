@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Activity,
   ChevronRight,
@@ -61,6 +61,20 @@ const ROUTE_TITLES: Record<string, string> = {
 export default function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const location = useLocation()
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    const syncRouteWithoutReload = () => {
+      const actual = `${window.location.pathname}${window.location.search}${window.location.hash}`
+      const rendered = `${location.pathname}${location.search}${location.hash}`
+      if (actual !== rendered) {
+        navigate(actual, { replace: true })
+      }
+    }
+    syncRouteWithoutReload()
+    const id = window.setInterval(syncRouteWithoutReload, 500)
+    return () => window.clearInterval(id)
+  }, [location.hash, location.pathname, location.search, navigate])
 
   // Close the mobile drawer whenever the route changes. Deferring with a
   // 0ms timeout keeps `react-hooks/set-state-in-effect` happy (same pattern
@@ -77,7 +91,7 @@ export default function Layout() {
              style={{ borderColor: 'rgb(var(--line))', backgroundColor: 'rgb(var(--bg-surface))' }}>
         <Brand />
         <SidebarNav />
-        <SidebarFooter />
+        <SidebarFooterWithProgress />
       </aside>
 
       {/* ─── Mobile drawer ──────────────────────────────────────────── */}
@@ -106,7 +120,7 @@ export default function Layout() {
           </button>
         </div>
         <SidebarNav />
-        <SidebarFooter />
+        <SidebarFooterWithProgress />
       </aside>
 
       {/* ─── Main column ────────────────────────────────────────────── */}
@@ -240,7 +254,89 @@ function SidebarNav() {
   )
 }
 
-function SidebarFooter() {
+function SidebarFooterWithProgress() {
+  const status = useBackendStatus()
+  const { runs } = useRuns()
+  const { state } = useGenerationQueue()
+  const trackedRun = runs.find((r) => r.status === 'running')
+  const hasLiveState = state.status === 'running'
+  const progress = Math.max(
+    0,
+    Math.min(100, hasLiveState ? state.progress ?? 0 : trackedRun?.progress ?? 0),
+  )
+  const stage = hasLiveState ? state.stage : trackedRun?.stage
+  const message = hasLiveState ? state.message : trackedRun?.message
+  const showCurrent = hasLiveState || !!trackedRun
+  const label =
+    status === 'online'
+      ? 'Backend online'
+      : status === 'offline'
+      ? 'Backend offline'
+      : 'Checking backend...'
+
+  return (
+    <div className="mt-auto" style={{ borderTop: '1px solid rgb(var(--line-soft))' }}>
+      {showCurrent && (
+        <NavLink
+          to="/processes"
+          className="block px-4 py-3 transition-colors hover:bg-[rgb(var(--bg-muted))]"
+          title="Open current process"
+        >
+          <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px]">
+            <span className="flex min-w-0 items-center gap-1.5 font-medium text-[rgb(var(--text-strong))]">
+              <Loader2 size={12} className="shrink-0 animate-spin text-brand-500" />
+              <span className="truncate">Current process</span>
+            </span>
+            <span className="shrink-0 tabular-nums text-faint">{Math.round(progress)}%</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-white/[0.08]">
+            <div
+              className="h-full rounded-full bg-brand-500 transition-[width] duration-500"
+              style={{ width: `${Math.max(progress, 3)}%` }}
+            />
+          </div>
+          <div className="mt-1.5 truncate text-[10px] text-muted">
+            {message || formatSidebarStage(stage)}
+          </div>
+        </NavLink>
+      )}
+      <NavLink
+        to="/settings"
+        title={
+          status === 'offline'
+            ? 'Backend not reachable - open Settings to ping or change the URL'
+            : 'Open Settings'
+        }
+        aria-label={`${label} - open settings`}
+        className="flex items-center gap-2 px-4 py-3 text-[11px] transition-colors hover:bg-[rgb(var(--bg-muted))]"
+      >
+        <span
+          aria-hidden="true"
+          className={clsx(
+            'h-1.5 w-1.5 shrink-0 rounded-full',
+            status === 'online'
+              ? 'bg-emerald-500'
+              : status === 'offline'
+              ? 'bg-rose-500'
+              : 'bg-slate-300 dark:bg-slate-500',
+          )}
+          style={status === 'online' ? { boxShadow: '0 0 0 3px rgba(16,185,129,0.18)' } : undefined}
+        />
+        <span className={clsx(status === 'offline' ? 'text-rose-600 dark:text-rose-300' : 'text-muted')}>
+          {label}
+        </span>
+        <span className="ml-auto font-mono text-[10px] text-faint">v1.0</span>
+      </NavLink>
+    </div>
+  )
+}
+
+function formatSidebarStage(stage: string | undefined): string {
+  if (!stage) return 'Working...'
+  return stage.replace(/_/g, ' ')
+}
+
+export function SidebarFooter() {
   const status = useBackendStatus()
   const label =
     status === 'online'

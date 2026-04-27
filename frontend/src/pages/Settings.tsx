@@ -2,10 +2,13 @@ import { useState } from 'react'
 import {
   AlertCircle,
   Check,
+  Code2,
+  FileText,
   GitBranch,
   Monitor,
   Moon,
   Paintbrush,
+  RefreshCw,
   RotateCcw,
   Server,
   Sun,
@@ -13,6 +16,7 @@ import {
 } from 'lucide-react'
 
 import { api } from '../api/client'
+import type { HistoryEntry } from '../api/types'
 import { useRuns } from '../store/runs'
 import { BRAND_SWATCHES, useSettings, type ThemeMode } from '../store/settings'
 import { useToast } from '../store/toast'
@@ -25,6 +29,10 @@ export default function Settings() {
   const toast = useToast()
   const [pingState, setPingState] = useState<'idle' | 'pinging' | 'ok' | 'error'>('idle')
   const [pingError, setPingError] = useState('')
+  const [showBackendHistory, setShowBackendHistory] = useState(false)
+  const [backendHistory, setBackendHistory] = useState<HistoryEntry[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState('')
 
   const pingBackend = async () => {
     setPingState('pinging')
@@ -35,6 +43,20 @@ export default function Settings() {
     } catch (e) {
       setPingState('error')
       setPingError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const loadBackendHistory = async () => {
+    setHistoryLoading(true)
+    setHistoryError('')
+    try {
+      const rows = await api.history()
+      setBackendHistory(Array.isArray(rows) ? rows.slice().reverse() : [])
+      setShowBackendHistory(true)
+    } catch (e) {
+      setHistoryError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setHistoryLoading(false)
     }
   }
 
@@ -247,6 +269,7 @@ export default function Settings() {
 
       {/* ─── Data ───────────────────────────────────────────────────────── */}
       <Section title="Data" icon={<Trash2 size={16} />}>
+        <div className="space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-sm text-slate-600 dark:text-slate-300">
             <div className="font-medium text-slate-800 dark:text-slate-100">
@@ -284,9 +307,121 @@ export default function Settings() {
             <Trash2 size={14} /> Clear history
           </button>
         </div>
+        <div className="border-t border-slate-100 pt-5 dark:border-white/5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-slate-600 dark:text-slate-300">
+              <div className="font-medium text-slate-800 dark:text-slate-100">
+                Backend history
+              </div>
+              <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Hidden by default. Load it only when you want to inspect backend saved runs.
+              </div>
+            </div>
+            <div className="flex gap-2">
+              {showBackendHistory && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setShowBackendHistory(false)}
+                >
+                  Hide
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={loadBackendHistory}
+                disabled={historyLoading}
+              >
+                <RefreshCw size={14} className={historyLoading ? 'animate-spin' : ''} />
+                {showBackendHistory ? 'Refresh' : 'Show backend history'}
+              </button>
+            </div>
+          </div>
+          {historyError && (
+            <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+              {historyError}
+            </div>
+          )}
+          {showBackendHistory && (
+            <div className="mt-4 space-y-2">
+              {backendHistory.length === 0 && !historyLoading ? (
+                <div className="rounded-md border border-slate-200 px-3 py-3 text-sm text-slate-500 dark:border-white/10 dark:text-slate-400">
+                  No backend history found.
+                </div>
+              ) : (
+                backendHistory.slice(0, 50).map((entry, index) => (
+                  <BackendHistoryRow
+                    key={`${entry.timestamp ?? ''}-${entry.html_file ?? ''}-${index}`}
+                    entry={entry}
+                  />
+                ))
+              )}
+            </div>
+          )}
+        </div>
+        </div>
       </Section>
     </div>
   )
+}
+
+function BackendHistoryRow({ entry }: { entry: HistoryEntry }) {
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 dark:border-white/10 dark:bg-white/[0.03]">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-200">
+        <FileText size={15} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="font-medium text-slate-800 dark:text-slate-100">
+            {historyToolLabel(entry.tool)}
+          </span>
+          {(entry.datetime || entry.timestamp) && (
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              {entry.datetime ?? formatHistoryTimestamp(entry.timestamp)}
+            </span>
+          )}
+        </div>
+        <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
+          {entry.input_preview || '(no input recorded)'}
+        </div>
+      </div>
+      {entry.html_file && (
+        <a
+          href={api.htmlUrl(entry.html_file)}
+          target="_blank"
+          rel="noreferrer"
+          className="btn-secondary btn-sm hidden shrink-0 sm:inline-flex"
+        >
+          <Code2 size={12} /> HTML
+        </a>
+      )}
+      {entry.video_file && (
+        <a href={api.downloadUrl(entry.video_file)} className="btn-secondary btn-sm hidden shrink-0 sm:inline-flex">
+          MP4
+        </a>
+      )}
+      {entry.presentation_file && (
+        <a href={api.downloadUrl(entry.presentation_file)} className="btn-secondary btn-sm hidden shrink-0 sm:inline-flex">
+          PPTX
+        </a>
+      )}
+    </div>
+  )
+}
+
+function historyToolLabel(tool: string | undefined): string {
+  if (tool === 'html-to-video' || tool === 'html-to-image') return 'HTML to Video'
+  if (tool === 'image-to-video' || tool === 'image-to-screenshots') return 'Image to Video'
+  return 'Text to Video'
+}
+
+function formatHistoryTimestamp(ts: number | string | undefined): string {
+  if (ts == null) return ''
+  const num = typeof ts === 'number' ? ts : Number(ts)
+  if (Number.isFinite(num)) return new Date(num * 1000).toLocaleString()
+  return String(ts)
 }
 
 function Section({

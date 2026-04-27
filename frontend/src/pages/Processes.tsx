@@ -29,7 +29,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { api } from '../api/client'
-import type { CacheStats, GenerateSettings, HistoryEntry } from '../api/types'
+import type { BackendRunDetail, CacheStats, GenerateSettings, HistoryEntry } from '../api/types'
 import { formatRelative, formatRuntime, useRuns } from '../store/runs'
 import type { Run, RunStatus, RunTool } from '../store/runs'
 import { useToast } from '../store/toast'
@@ -50,6 +50,21 @@ type EditableProcess = {
   text: string
   settings: GenerateSettings
   mode: 'queue' | 'regenerate'
+}
+
+function trackedOutputsFromBackendRun(
+  run: BackendRunDetail['run'],
+  fallbackOperationId: string,
+): Partial<Run> {
+  const outputs = run.outputs ?? {}
+  return {
+    htmlFilename: outputs.html_filename ?? outputs.html_file,
+    screenshotFiles: outputs.screenshot_files ?? [],
+    screenshotFolder: outputs.screenshot_folder,
+    presentationFile: outputs.presentation_file ?? outputs.presentation_path,
+    videoFile: outputs.video_file ?? outputs.video_path,
+    operationId: run.operation_id ?? fallbackOperationId,
+  }
 }
 
 const TOOL_META: Record<string, { label: string; icon: typeof FileText }> = {
@@ -493,7 +508,6 @@ function formatHistoryTimestamp(ts: number | string | undefined): string {
   if (ts == null) return ''
   const num = typeof ts === 'number' ? ts : Number(ts)
   if (Number.isFinite(num)) {
-    // Backend writes `time.time()` which is seconds since epoch; Date takes ms.
     return new Date(num * 1000).toLocaleString()
   }
   return String(ts)
@@ -578,7 +592,7 @@ function AssetPreviewModal({
   )
 }
 
-function HistoryRow({ entry }: { entry: HistoryEntry }) {
+export function HistoryRow({ entry }: { entry: HistoryEntry }) {
   const meta = toolMeta(entry.tool)
   const Icon = meta.icon
   return (
@@ -655,9 +669,24 @@ function KV({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-function LiveRunCard({ onCancel }: { onCancel: () => void }) {
-  const { state } = useGenerationQueue()
-  if (state.status !== 'running') return null
+function LiveRunCard({
+  liveState,
+  trackedRun,
+  onCancel,
+}: {
+  liveState: ReturnType<typeof useGenerationQueue>['state']
+  trackedRun?: Run
+  onCancel: () => void
+}) {
+  const hasLiveState = liveState.status === 'running'
+  const source = hasLiveState ? liveState : trackedRun
+  if (!source) return null
+  const operationId = hasLiveState ? liveState.operationId : trackedRun?.operationId
+  const progress = hasLiveState ? liveState.progress : trackedRun?.progress ?? 0
+  const stage = hasLiveState ? liveState.stage : trackedRun?.stage
+  const message = hasLiveState ? liveState.message : trackedRun?.message
+  const etaSeconds = hasLiveState ? liveState.etaSeconds : undefined
+
   return (
     <div className="card ring-2 ring-brand-400/40 dark:ring-brand-500/40">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -667,23 +696,25 @@ function LiveRunCard({ onCancel }: { onCancel: () => void }) {
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-brand-500"></span>
           </span>
           <div className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
-            Live run
+            Current process
           </div>
-          {state.operationId && (
+          {operationId && (
             <code className="text-[10px] text-slate-500 dark:text-slate-400">
-              {state.operationId}
+              {operationId}
             </code>
           )}
         </div>
-        <button type="button" className="btn-danger" onClick={onCancel}>
-          <StopCircle size={14} /> Cancel run
-        </button>
+        {hasLiveState && (
+          <button type="button" className="btn-danger" onClick={onCancel}>
+            <StopCircle size={14} /> Cancel run
+          </button>
+        )}
       </div>
       <ProgressBar
-        progress={state.progress ?? 0}
-        stage={state.stage}
-        message={state.message}
-        etaSeconds={state.etaSeconds}
+        progress={progress ?? 0}
+        stage={stage}
+        message={message}
+        etaSeconds={etaSeconds}
         active
       />
     </div>
@@ -926,7 +957,7 @@ function ProcessEditModal({
 
 export default function Processes() {
   const nav = useNavigate()
-  const { runs, clear, remove } = useRuns()
+  const { runs, clear, remove, update, finish } = useRuns()
   const {
     queue,
     cancelQueued,
@@ -944,7 +975,6 @@ export default function Processes() {
   const [searchParams] = useSearchParams()
   const highlightOp = searchParams.get('op')
   const highlightQueue = searchParams.get('queue')
-  const [history, setHistory] = useState<HistoryEntry[]>([])
   const [cache, setCache] = useState<CacheStats | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -952,13 +982,18 @@ export default function Processes() {
   const [editingProcess, setEditingProcess] = useState<EditableProcess | null>(null)
   const toast = useToast()
   const confirmDialog = useConfirm()
+  const runsRef = useRef(runs)
+  const recoveredTerminalRefs = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    runsRef.current = runs
+  }, [runs])
 
   const refresh = useCallback(async () => {
     setLoading(true)
     setErr(null)
     try {
-      const [h, c] = await Promise.all([api.history(), api.cacheStats()])
-      setHistory(Array.isArray(h) ? h : [])
+      const c = await api.cacheStats()
       setCache(c)
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -974,7 +1009,96 @@ export default function Processes() {
     return () => clearTimeout(t)
   }, [refresh])
 
-  const { runRows, historyRows } = useMemo(() => {
+  useEffect(() => {
+    let stopped = false
+
+    const syncBackendRuns = async () => {
+      const now = Date.now()
+      const candidates = runsRef.current.filter((r) => {
+        if (!r.operationId) return false
+        if (r.status === 'running') return true
+        if (recoveredTerminalRefs.current.has(r.id)) return false
+        return (
+          (r.status === 'cancelled' || r.status === 'error') &&
+          now - r.startedAt < 2 * 60 * 60_000
+        )
+      })
+      if (candidates.length === 0) return
+
+      await Promise.all(
+        candidates.map(async (localRun) => {
+          const operationId = localRun.operationId
+          if (!operationId) return
+          try {
+            const detail = await api.getRun(operationId)
+            if (stopped) return
+            const backendRun = detail.run
+            const backendStatus = String(backendRun.status ?? '')
+            const nextOperationId = backendRun.operation_id ?? operationId
+
+            if (backendStatus === 'completed') {
+              recoveredTerminalRefs.current.add(localRun.id)
+              finish(localRun.id, {
+                status: 'success',
+                ...trackedOutputsFromBackendRun(backendRun, nextOperationId),
+                stage: 'complete',
+                message: backendRun.message,
+                progress: 100,
+              })
+              return
+            }
+
+            if (backendStatus === 'failed') {
+              recoveredTerminalRefs.current.add(localRun.id)
+              finish(localRun.id, {
+                status: 'error',
+                error: backendRun.message ?? 'Process failed',
+                operationId: nextOperationId,
+                stage: backendRun.stage,
+                message: backendRun.message,
+                progress: backendRun.progress ?? 100,
+              })
+              return
+            }
+
+            if (backendStatus === 'cancelled') {
+              recoveredTerminalRefs.current.add(localRun.id)
+              finish(localRun.id, {
+                status: 'cancelled',
+                operationId: nextOperationId,
+                stage: backendRun.stage ?? 'cancelled',
+                message: backendRun.message ?? 'Cancelled',
+                progress: backendRun.progress ?? 100,
+              })
+              return
+            }
+
+            if (backendStatus === 'queued' || backendStatus === 'running') {
+              update(localRun.id, {
+                status: 'running',
+                operationId: nextOperationId,
+                stage: backendRun.stage,
+                message: backendRun.message,
+                progress: backendRun.progress,
+              })
+            }
+          } catch {
+            // The backend may briefly rotate state while a run starts/finishes.
+            // Leave the row running and try again on the next tick.
+          }
+        }),
+      )
+    }
+
+    void syncBackendRuns()
+    const id = window.setInterval(syncBackendRuns, 1500)
+    return () => {
+      stopped = true
+      window.clearInterval(id)
+    }
+  }, [finish, update])
+
+  const runRows = useMemo(() => {
     const filtered = filter === 'all' ? runs : runs.filter((r) => r.tool === filter)
     // Dedupe history entries against the tracked runs. Match on any of
     // (operation_id, html_file, or input_preview + tight time window) —
@@ -992,7 +1116,7 @@ export default function Processes() {
         endedAt: r.endedAt ?? r.startedAt,
       }))
       .filter((r) => r.preview)
-    const remainingHistory = history
+    const remainingHistory = ([] as HistoryEntry[])
       .filter((h) => {
         if (h.operation_id && runSeenOpIds.has(h.operation_id)) return false
         if (h.html_file && runSeenHtml.has(h.html_file)) return false
@@ -1023,8 +1147,9 @@ export default function Processes() {
       })
       .slice()
       .reverse()
-    return { runRows: filtered, historyRows: remainingHistory }
-  }, [runs, history, filter])
+    void remainingHistory
+    return filtered
+  }, [runs, filter])
 
   const clearCache = async () => {
     const ok = await confirmDialog({
@@ -1141,6 +1266,7 @@ export default function Processes() {
   const totalRuntime = runs
     .filter((r) => r.endedAt)
     .reduce((sum, r) => sum + (r.endedAt! - r.startedAt), 0)
+  const currentRun = runs.find((r) => r.status === 'running')
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
@@ -1184,6 +1310,12 @@ export default function Processes() {
         />
       </div>
 
+      <LiveRunCard
+        liveState={liveState}
+        trackedRun={currentRun}
+        onCancel={cancelLive}
+      />
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5">
           {filters.map((f) => (
@@ -1220,7 +1352,6 @@ export default function Processes() {
 
       {err && <div className="card text-sm text-red-600 dark:text-red-300">{err}</div>}
 
-      <LiveRunCard onCancel={cancelLive} />
       {queuePaused && (
         <div
           role="alert"
@@ -1262,7 +1393,7 @@ export default function Processes() {
         onReorderQueued={reorderQueued}
       />
 
-      {runRows.length === 0 && historyRows.length === 0 && queue.length === 0 && liveState.status !== 'running' ? (
+      {runRows.length === 0 && queue.length === 0 && liveState.status !== 'running' ? (
         <EmptyState
           icon={<Activity size={20} />}
           title="No runs yet"
@@ -1294,16 +1425,6 @@ export default function Processes() {
               }
             />
           ))}
-          {historyRows.length > 0 && (
-            <>
-              <div className="pt-4 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                From backend history
-              </div>
-              {historyRows.slice(0, 50).map((h, i) => (
-                <HistoryRow key={`${h.timestamp ?? ''}-${h.html_file ?? ''}-${i}`} entry={h} />
-              ))}
-            </>
-          )}
         </div>
       )}
       {editingProcess && (

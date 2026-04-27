@@ -2,8 +2,8 @@
     "min_samples": 10,
     "models": {
         "default": {
-            "seconds_per_char": 0.03153745625304567,
-            "samples": 2,
+            "seconds_per_char": 0.04031117190874869,
+            "samples": 6,
             "runs": [
                 {
                     "input_chars": 11155,
@@ -12,6 +12,22 @@
                 {
                     "input_chars": 11418,
                     "seconds": 367.279
+                },
+                {
+                    "input_chars": 11418,
+                    "seconds": 490.674
+                },
+                {
+                    "input_chars": 11418,
+                    "seconds": 305.996
+                },
+                {
+                    "input_chars": 1602,
+                    "seconds": 204.013
+                },
+                {
+                    "input_chars": 1602,
+                    "seconds": 247.069
                 }
             ]
         }
