@@ -75,8 +75,17 @@ export function useGenerate() {
   // state.operationId via useCallback deps, which meant a Cancel click in
   // the same render that emitted `started` would still cancel `undefined`.
   const opIdRef = useRef<string | null>(null)
+  // Set to true by `cancel()` and cleared whenever a fresh run starts.
+  // Used so the SSE catch-blocks can distinguish between "user requested
+  // cancel → AbortError on fetch" (terminal, surface as cancelled) and
+  // "generic AbortError because something else tore down the stream"
+  // (don't touch state). Without this flag the catch-block silently
+  // swallowed the AbortError and the UI stayed on "running" forever
+  // even though the backend had actually accepted the cancel request.
+  const cancelRequestedRef = useRef(false)
 
   const reset = useCallback(() => {
+    cancelRequestedRef.current = false
     abortRef.current?.abort()
     abortRef.current = null
     opIdRef.current = null
@@ -89,6 +98,7 @@ export function useGenerate() {
       payload: unknown,
     ): Promise<GenerationResult | null> => {
       abortRef.current?.abort()
+      cancelRequestedRef.current = false
       const ctl = new AbortController()
       abortRef.current = ctl
       setState({ status: 'running', progress: 0, message: 'Starting…', stage: 'init' })
@@ -157,7 +167,17 @@ export function useGenerate() {
           onEvent: handle,
         })
       } catch (err) {
-        if ((err as { name?: string }).name !== 'AbortError') {
+        if ((err as { name?: string }).name === 'AbortError') {
+          if (cancelRequestedRef.current) {
+            setState((s) => ({
+              ...s,
+              status: 'cancelled',
+              progress: 100,
+              stage: 'cancelled',
+              message: s.message ?? 'Cancelled',
+            }))
+          }
+        } else {
           setState((s) => ({
             ...s,
             status: 'error',
@@ -176,6 +196,7 @@ export function useGenerate() {
   const runSseForm = useCallback(
     async (path: '/image-to-screenshots-sse', formData: FormData): Promise<GenerationResult | null> => {
       abortRef.current?.abort()
+      cancelRequestedRef.current = false
       const ctl = new AbortController()
       abortRef.current = ctl
       setState({ status: 'running', progress: 0, message: 'Starting…', stage: 'init' })
@@ -231,7 +252,17 @@ export function useGenerate() {
           onEvent: handle,
         })
       } catch (err) {
-        if ((err as { name?: string }).name !== 'AbortError') {
+        if ((err as { name?: string }).name === 'AbortError') {
+          if (cancelRequestedRef.current) {
+            setState((s) => ({
+              ...s,
+              status: 'cancelled',
+              progress: 100,
+              stage: 'cancelled',
+              message: s.message ?? 'Cancelled',
+            }))
+          }
+        } else {
           setState((s) => ({
             ...s,
             status: 'error',
@@ -249,6 +280,7 @@ export function useGenerate() {
   const runBackendTextRun = useCallback(
     async (text: string, settings: GenerateSettings): Promise<GenerationResult | null> => {
       abortRef.current?.abort()
+      cancelRequestedRef.current = false
       const ctl = new AbortController()
       abortRef.current = ctl
       setState({ status: 'running', progress: 0, message: 'Creating backend run...', stage: 'queued' })
@@ -403,7 +435,24 @@ export function useGenerate() {
           pollRun(),
         ])
       } catch (err) {
-        if ((err as { name?: string }).name !== 'AbortError') {
+        if ((err as { name?: string }).name === 'AbortError') {
+          // User hit Cancel → the SSE fetch raised AbortError before a
+          // `cancelled` event could arrive. Backend still processes the
+          // cancel request (cancelRun above), but the UI needs to move
+          // itself off "running" — otherwise the wizard and the tracked
+          // run row stay frozen until a page reload.
+          if (cancelRequestedRef.current && !terminal) {
+            terminal = true
+            setState((s) => ({
+              ...s,
+              status: 'cancelled',
+              progress: 100,
+              stage: 'cancelled',
+              message: s.message ?? 'Cancelled',
+              operationId: opId,
+            }))
+          }
+        } else {
           setState((s) => ({
             ...s,
             status: 'error',
@@ -467,6 +516,25 @@ export function useGenerate() {
   const cancel = useCallback(async () => {
     const op = abortRef.current
     const opId = opIdRef.current
+    // Flip the UI to "cancelled" immediately. The previous implementation
+    // only aborted the SSE fetch and fired off the backend cancel, which
+    // relied on a server-sent `cancelled` event (or a polling snapshot)
+    // to flip the state — but when the abort fired first, the fetch
+    // raised AbortError and the catch-block swallowed it silently, so
+    // the wizard / Processes stayed stuck on "running" forever even
+    // though the backend had already cancelled the run.
+    setState((s) => {
+      if (s.status !== 'running') return s
+      return {
+        ...s,
+        status: 'cancelled',
+        progress: 100,
+        stage: 'cancelled',
+        message: s.message ?? 'Cancelling…',
+        operationId: s.operationId ?? opId ?? undefined,
+      }
+    })
+    cancelRequestedRef.current = true
     if (opId) {
       try {
         await api.cancelRun(opId).catch(() => api.cancel(opId))
