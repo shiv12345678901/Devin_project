@@ -924,7 +924,10 @@ export default function Processes() {
           </button>
         </div>
       )}
-      <QueueCard items={queue.slice(1)} onCancelQueued={cancelQueued} />
+      {/* `queue` now contains pending-only items (the currently-executing
+          run is tracked separately and appears as a tracked run row above),
+          so we render the full queue rather than `slice(1)`. */}
+      <QueueCard items={queue} onCancelQueued={cancelQueued} />
 
       {runRows.length === 0 && historyRows.length === 0 && queue.length === 0 && liveState.status !== 'running' ? (
         <EmptyState

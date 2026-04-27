@@ -27,6 +27,7 @@ import { useGenerate } from './useGenerate'
 import type { GenerationState } from './useGenerate'
 import { useRuns } from '../store/runs'
 import type { Run, RunTool } from '../store/runs'
+import { useToast } from '../store/toast'
 import type { GenerateSettings } from '../api/types'
 
 type PendingMeta = Omit<Run, 'id' | 'status' | 'startedAt'>
@@ -53,6 +54,14 @@ export interface EnqueueResult {
   queueId: string
   /** True when this item started executing immediately (queue was empty). */
   startedImmediately: boolean
+  /**
+   * When set, the new submission was a client-side duplicate of an already
+   * queued or currently-running item; `queueId` points at that existing
+   * item (so callers can still navigate to it) and no new work was
+   * enqueued. Wizards show a toast and jump to Processes instead of
+   * spawning a second identical run.
+   */
+  duplicateOf?: 'active' | 'queued'
 }
 
 interface TrackedGenerationContextValue {
@@ -87,17 +96,71 @@ function nextQueueId(): string {
   return `queue-${Date.now().toString(36)}-${queueCounter}`
 }
 
+/**
+ * Cheap deterministic fingerprint of a queue item's *meaningful* payload.
+ * Used to short-circuit client-side duplicates BEFORE the POST reaches the
+ * backend — the backend already blocks simultaneous duplicates via the
+ * input_fingerprint check, but once the first run finishes the backend
+ * happily accepts a second identical submission. A user who
+ * re-opens the wizard and clicks Start again (or any transient form of
+ * double-dispatch) would otherwise chain a second copy the moment the
+ * first completes.
+ *
+ * djb2 on a normalized payload string. Only needs to be stable within a
+ * single browser session, so we don't need crypto.
+ */
+function fingerprintItem(item: QueueItem): string {
+  const settings = item.settings
+    ? JSON.stringify(sortedEntries(item.settings as unknown as Record<string, unknown>))
+    : ''
+  let payload: string
+  if (item.kind === 'text') {
+    payload = `text|${item.tool}|${(item.text ?? '').trim()}|${settings}`
+  } else if (item.kind === 'html') {
+    payload = `html|${item.tool}|${(item.html ?? '').trim()}|${settings}`
+  } else {
+    const fileSig = (item.files ?? [])
+      .map((f) => `${f.name}:${f.size}:${f.lastModified}`)
+      .join(',')
+    payload = `image|${item.tool}|${fileSig}|${settings}`
+  }
+  let hash = 5381
+  for (let i = 0; i < payload.length; i += 1) {
+    hash = ((hash << 5) + hash + payload.charCodeAt(i)) | 0
+  }
+  return hash.toString(36)
+}
+
+function sortedEntries(obj: Record<string, unknown>): Array<[string, unknown]> {
+  return Object.keys(obj)
+    .sort()
+    .map((k) => [k, obj[k]] as [string, unknown])
+}
+
 export function TrackedGenerationProvider({ children }: { children: ReactNode }) {
   const gen = useGenerate()
   const runs = useRuns()
+  const toast = useToast()
   const runIdRef = useRef<string | null>(null)
   const pendingRef = useRef<PendingMeta | null>(null)
+  // Queue holds ONLY pending items (never the currently-executing one).
+  // The active item is tracked separately via `activeQueueIdRef` /
+  // `activeFingerprintRef`. Previously queue[0] was "the running one" and
+  // the completion effect filtered it out by id — that created two racing
+  // sources of truth (the ref claim in pushOrStart and the filter in the
+  // terminal-state effect) and, together with React 19's concurrent
+  // rendering, could let the same id get dispatched twice when the first
+  // run finished. Keeping the active item out of the queue entirely
+  // eliminates that class of races.
   const [queue, setQueue] = useState<QueueItem[]>([])
-  // Tracks which queue item (if any) is currently executing so we can pop
-  // it when the run terminates. A ref rather than state because the pop
-  // happens inside the terminal-state effect and we don't want re-renders
-  // to re-trigger it.
   const activeQueueIdRef = useRef<string | null>(null)
+  // Fingerprint of the currently-executing item, set by `dispatch` and
+  // cleared on terminal-state. Used by pushOrStart to client-side-dedupe
+  // "user resubmits the same content" before we ever POST.
+  const activeFingerprintRef = useRef<string | null>(null)
+  // Guards against accidentally dispatching the same queue id twice
+  // (StrictMode re-invoking effects, duplicate auto-dequeue firings, etc).
+  const dispatchedIdsRef = useRef<Set<string>>(new Set())
   // Set to true in `dispatch()` once we've actually fired the underlying
   // generate call, cleared once the run terminates. Without this flag the
   // auto-dequeue effect can race with `pushOrStart` and pop the just-claimed
@@ -156,10 +219,16 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   }, [gen.state, runs])
 
   // Dispatcher — starts a queue item's generate call. Safe to call with
-  // any item kind; chooses the right hook under the hood.
+  // any item kind; chooses the right hook under the hood. Idempotent: if
+  // called twice with the same item id we silently ignore the second call,
+  // which defends against double-dispatch from StrictMode / re-render
+  // races without changing steady-state behaviour.
   const dispatch = useCallback(
     (item: QueueItem) => {
+      if (dispatchedIdsRef.current.has(item.id)) return
+      dispatchedIdsRef.current.add(item.id)
       activeQueueIdRef.current = item.id
+      activeFingerprintRef.current = fingerprintItem(item)
       activeStartedRef.current = true
       if (item.kind === 'text' && item.text !== undefined && item.settings) {
         pendingRef.current = {
@@ -197,45 +266,48 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   // item — otherwise the UI never flashes the completion state for a run
   // whose successor is queued behind it.
   //
-  // Two important guards:
+  // Guards:
   //   1. `activeStartedRef` — we only act on terminal states that follow a
-  //      run we actually dispatched. Without this, a `pushOrStart` claim
+  //      run we actually dispatched. Without this, a fresh `pushOrStart`
   //      committed in the same tick as a previous run's terminal state
-  //      (e.g. user submits #2 the instant #1 finishes) gets removed from
-  //      the queue here before its dispatch microtask fires.
+  //      can be clobbered here.
   //   2. Pause-on-rejection — when the run errored with a backend 409 we
   //      don't auto-fire the next item; doing so would cascade-fail every
   //      queued item with the same reason.
+  //
+  // Because `queue` now only contains pending items (the running one is
+  // tracked separately via `activeQueueIdRef`), we no longer need to
+  // filter the completed id out — `queue[0]` IS the next pending item.
   useEffect(() => {
     const s = gen.state
     if (s.status !== 'success' && s.status !== 'error' && s.status !== 'cancelled') {
       return
     }
     if (!activeStartedRef.current) return
-    if (!activeQueueIdRef.current && queue.length === 0) return
 
     const rejected = s.status === 'error' && s.rejectedReason
     const rejectedReason = s.rejectedReason ?? null
 
     const timer = window.setTimeout(() => {
       activeStartedRef.current = false
+      activeQueueIdRef.current = null
+      activeFingerprintRef.current = null
       if (rejected) {
         setPaused(true)
         setPausedReason(rejectedReason ?? 'unknown')
+        return
       }
       setQueue((prev) => {
-        const finishedId = activeQueueIdRef.current
-        const remaining = finishedId ? prev.filter((q) => q.id !== finishedId) : prev
-        const next = remaining[0]
-        activeQueueIdRef.current = next?.id ?? null
-        if (next && !rejected) {
-          window.setTimeout(() => dispatch(next), 0)
-        }
-        return remaining
+        if (prev.length === 0) return prev
+        const [next, ...rest] = prev
+        activeQueueIdRef.current = next.id
+        activeFingerprintRef.current = fingerprintItem(next)
+        window.setTimeout(() => dispatch(next), 0)
+        return rest
       })
     }, 250)
     return () => window.clearTimeout(timer)
-  }, [dispatch, gen.state, queue.length])
+  }, [dispatch, gen.state])
 
   const pushOrStart = useCallback(
     (item: QueueItem): EnqueueResult => {
@@ -245,6 +317,39 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         setPaused(false)
         setPausedReason(null)
       }
+
+      // Client-side duplicate guard. Blocks the common "user resubmits the
+      // same content while it's already running/queued" path so we don't
+      // silently chain a second identical run the moment the first
+      // completes. Match against both the active fingerprint and every
+      // pending queue entry.
+      const fp = fingerprintItem(item)
+      if (activeFingerprintRef.current === fp && activeQueueIdRef.current) {
+        toast.push({
+          variant: 'info',
+          title: 'Already running',
+          message: 'This exact content is already being processed — opening its progress view.',
+        })
+        return {
+          queueId: activeQueueIdRef.current,
+          startedImmediately: false,
+          duplicateOf: 'active',
+        }
+      }
+      const existing = queue.find((q) => fingerprintItem(q) === fp)
+      if (existing) {
+        toast.push({
+          variant: 'info',
+          title: 'Already queued',
+          message: 'This exact content is already queued — opening its entry in Processes.',
+        })
+        return {
+          queueId: existing.id,
+          startedImmediately: false,
+          duplicateOf: 'queued',
+        }
+      }
+
       const idleNow =
         gen.state.status === 'idle' ||
         gen.state.status === 'success' ||
@@ -253,17 +358,17 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       if (idleNow && !activeQueueIdRef.current) {
         // Claim the active slot *synchronously* so a rapid second submission
         // in the same tick doesn't also see `activeQueueIdRef` as empty and
-        // race to dispatch. The real work still defers one tick so React
-        // has time to commit the new queue state.
+        // race to dispatch. The item is NOT appended to `queue` — queue is
+        // for pending-only items now; the running one lives in the refs.
         activeQueueIdRef.current = item.id
-        setQueue((prev) => [...prev, item])
+        activeFingerprintRef.current = fp
         window.setTimeout(() => dispatch(item), 0)
         return { queueId: item.id, startedImmediately: true }
       }
       setQueue((prev) => [...prev, item])
       return { queueId: item.id, startedImmediately: false }
     },
-    [dispatch, gen.state.status, paused],
+    [dispatch, gen.state.status, paused, queue, toast],
   )
 
   const enqueueText = useCallback(
@@ -317,7 +422,10 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   )
 
   const cancelQueued = useCallback((queueId: string) => {
-    setQueue((prev) => prev.filter((q) => q.id !== queueId || q.id === activeQueueIdRef.current))
+    // `queue` only contains pending items now, so a plain filter is safe —
+    // no risk of accidentally yanking the in-flight item out of under the
+    // dispatcher.
+    setQueue((prev) => prev.filter((q) => q.id !== queueId))
   }, [])
 
   const resumeQueue = useCallback(() => {
@@ -328,11 +436,12 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     // identical to a fresh submission.
     setQueue((prev) => {
       if (activeQueueIdRef.current) return prev
-      const next = prev[0]
-      if (!next) return prev
+      if (prev.length === 0) return prev
+      const [next, ...rest] = prev
       activeQueueIdRef.current = next.id
+      activeFingerprintRef.current = fingerprintItem(next)
       window.setTimeout(() => dispatch(next), 0)
-      return prev
+      return rest
     })
   }, [dispatch])
 
