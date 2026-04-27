@@ -10,6 +10,7 @@ $BackendDir = Join-Path $Root "backend"
 $FrontendDir = Join-Path $Root "frontend"
 $BackendUrl = "http://127.0.0.1:$BackendPort"
 $FrontendUrl = "http://127.0.0.1:$FrontendPort"
+$WindowsTerminal = Get-Command wt.exe -ErrorAction SilentlyContinue
 
 function Stop-PortListeners {
   param([int[]]$Ports)
@@ -46,6 +47,35 @@ function Wait-Http {
   throw "Timed out waiting for $Url"
 }
 
+function Start-AppTerminal {
+  param(
+    [string]$Title,
+    [string]$Command,
+    [switch]$KeepOpen
+  )
+
+  if ($WindowsTerminal) {
+    $profileCommand = if ($KeepOpen) {
+      "powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -Command `"$Command`""
+    } else {
+      "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"$Command`""
+    }
+    Start-Process -FilePath $WindowsTerminal.Source -ArgumentList @(
+      "new-tab",
+      "--title", $Title,
+      "--suppressApplicationTitle",
+      $profileCommand
+    )
+    return
+  }
+
+  $args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $Command)
+  if ($KeepOpen) {
+    $args = @("-NoExit") + $args
+  }
+  Start-Process -FilePath powershell.exe -ArgumentList $args -WindowStyle Normal
+}
+
 Write-Host "Starting TextBro..."
 Write-Host "Stopping old dev servers on ports $BackendPort and $FrontendPort..."
 Stop-PortListeners -Ports @($BackendPort, $FrontendPort)
@@ -53,17 +83,13 @@ Start-Sleep -Seconds 1
 
 Write-Host "Starting backend on $BackendUrl..."
 $backendCommand = "`$Host.UI.RawUI.WindowTitle='TextBro Backend'; `$env:PORT='$BackendPort'; cd '$BackendDir'; python start.py"
-Start-Process -FilePath powershell.exe `
-  -ArgumentList "-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $backendCommand `
-  -WindowStyle Normal
+Start-AppTerminal -Title "TextBro Backend" -Command $backendCommand -KeepOpen
 
 Wait-Http "$BackendUrl/preflight"
 
 Write-Host "Starting frontend on $FrontendUrl..."
 $frontendCommand = "`$Host.UI.RawUI.WindowTitle='TextBro Frontend'; `$env:VITE_BACKEND_URL='$BackendUrl'; cd '$FrontendDir'; npm.cmd run dev -- --host 127.0.0.1 --port $FrontendPort --strictPort *> frontend.dev.log"
-Start-Process -FilePath powershell.exe `
-  -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $frontendCommand `
-  -WindowStyle Minimized
+Start-AppTerminal -Title "TextBro Frontend" -Command $frontendCommand
 
 Wait-Http "$FrontendUrl/"
 
