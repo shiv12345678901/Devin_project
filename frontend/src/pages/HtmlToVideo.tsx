@@ -24,6 +24,7 @@ export default function HtmlToVideo() {
   const [html, setHtml] = useState('')
   const [settings, setSettings] = useState<GenerateSettings>(defaultSettings)
   const [replaceTargets, setReplaceTargets] = useState<ReplacementTargets | null>(null)
+  const [redirectQueueId, setRedirectQueueId] = useState<string | null>(null)
   const { state, generateFromHtml } = useTrackedGenerate('html-to-video')
   const toast = useToast()
   const nav = useNavigate()
@@ -37,12 +38,24 @@ export default function HtmlToVideo() {
     setReplaceTargets(draft.replaceTargets)
   }, [])
 
+  useEffect(() => {
+    if (!redirectQueueId) return
+    if (state.status === 'running' || state.status === 'success' || state.status === 'error') {
+      nav(`/processes?queue=${encodeURIComponent(redirectQueueId)}`, { replace: true })
+    }
+  }, [nav, redirectQueueId, state.status])
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!html.trim()) return
-    const { queueId } = generateFromHtml(html, settings, replaceTargets ? { replaceTargets } : undefined)
+    const targets = replaceTargets
+    const predictedQueueId = `submitted-${Date.now().toString(36)}`
+    setRedirectQueueId(predictedQueueId)
+    nav(`/processes?queue=${encodeURIComponent(predictedQueueId)}`)
+    const { queueId } = generateFromHtml(html, settings, targets ? { replaceTargets: targets } : undefined)
+    setRedirectQueueId(queueId)
     setReplaceTargets(null)
-    nav(`/processes?queue=${encodeURIComponent(queueId)}`)
+    nav(`/processes?queue=${encodeURIComponent(queueId)}`, { replace: true })
   }
 
   const beautify = async () => {

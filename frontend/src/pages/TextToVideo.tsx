@@ -272,6 +272,7 @@ export default function TextToVideo() {
     readLastRunSnapshot(),
   )
   const [replaceTargets, setReplaceTargets] = useState<ReplacementTargets | null>(null)
+  const [redirectQueueId, setRedirectQueueId] = useState<string | null>(null)
   const [stepId, setStepId] = useState<StepId>('project')
   const [showPreflight, setShowPreflight] = useState(false)
   const preflightProceedingRef = useRef(false)
@@ -288,6 +289,13 @@ export default function TextToVideo() {
     setStepId('project')
     setErroredSteps(new Set())
   }, [])
+
+  useEffect(() => {
+    if (!redirectQueueId) return
+    if (state.status === 'running' || state.status === 'success' || state.status === 'error') {
+      nav(`/processes?queue=${encodeURIComponent(redirectQueueId)}`, { replace: true })
+    }
+  }, [nav, redirectQueueId, state.status])
 
   const set = <K extends keyof GenerateSettings>(key: K, v: GenerateSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: v }))
@@ -380,9 +388,14 @@ export default function TextToVideo() {
     // Enqueues and (if idle) kicks off immediately. Navigate right away so
     // the user sees either the running run or the queue entry without
     // staying on the wizard.
-    const { queueId } = generate(text, payload, replaceTargets ? { replaceTargets } : undefined)
+    const targets = replaceTargets
+    const predictedQueueId = `submitted-${Date.now().toString(36)}`
+    setRedirectQueueId(predictedQueueId)
+    nav(`/processes?queue=${encodeURIComponent(predictedQueueId)}`)
+    const { queueId } = generate(text, payload, targets ? { replaceTargets: targets } : undefined)
+    setRedirectQueueId(queueId)
     setReplaceTargets(null)
-    nav(`/processes?queue=${encodeURIComponent(queueId)}`)
+    nav(`/processes?queue=${encodeURIComponent(queueId)}`, { replace: true })
   }
 
   const goNext = () => {
