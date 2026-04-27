@@ -121,7 +121,8 @@ export const api = {
 
   list: () => getJson<ListResponse>('/list'),
   history: () => getJson<HistoryEntry[]>('/history'),
-  deleteFile: async (type: 'screenshot' | 'html', filename: string) => {
+  clearHistory: () => postJson<{ success: boolean; message: string }>('/history/clear', {}),
+  deleteFile: async (type: 'screenshot' | 'html' | 'presentation' | 'video', filename: string) => {
     // Encode each path segment separately. encodeURIComponent would escape
     // `/` as `%2F`, which Werkzeug's dev server does NOT decode back to `/`
     // in PATH_INFO — so the <path:filename> converter would get a literal

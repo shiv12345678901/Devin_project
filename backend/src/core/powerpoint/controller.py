@@ -534,6 +534,64 @@ class PowerPointController:
                         f"Error during PowerPoint cleanup: {cleanup_error}"
                     )
 
+    def create_template_presentation(
+        self,
+        template_path: str,
+        image_files: list,
+        output_pptx_path: str,
+        slide_duration: float = 3.0,
+        base_slide_index: int = 3,
+        intro_thumbnail_path: str | None = None,
+        intro_thumbnail_duration: float = 5.0,
+        outro_thumbnail_path: str | None = None,
+        outro_thumbnail_duration: float = 5.0,
+        progress_callback=None,
+        cancel_event=None,
+    ) -> str:
+        """Create a deck through PowerPoint COM while preserving template slides."""
+        try:
+            from src.core.powerpoint.exporter import PowerPointExporter
+        except ImportError as e:
+            raise PowerPointNotFoundError(
+                "PowerPoint exporter not available. "
+                "This feature requires Windows and pywin32."
+            ) from e
+
+        exporter = None
+        try:
+            exporter = PowerPointExporter()
+            if not exporter.is_powerpoint_installed():
+                raise PowerPointNotFoundError(
+                    "Microsoft PowerPoint is not installed or not accessible."
+                )
+            return exporter.create_from_template(
+                template_path=template_path,
+                image_files=image_files,
+                output_path=output_pptx_path,
+                base_slide_index=base_slide_index,
+                slide_duration=slide_duration,
+                intro_thumbnail_path=intro_thumbnail_path,
+                intro_thumbnail_duration=intro_thumbnail_duration,
+                outro_thumbnail_path=outro_thumbnail_path,
+                outro_thumbnail_duration=outro_thumbnail_duration,
+                progress_callback=progress_callback,
+                cancel_event=cancel_event,
+            )
+        except PowerPointNotFoundError:
+            raise
+        except Exception as e:
+            raise ExportError(f"Failed to create presentation: {e}") from e
+        finally:
+            if exporter is not None:
+                try:
+                    exporter.quit_powerpoint()
+                except Exception as cleanup_error:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(
+                        f"Error during PowerPoint cleanup: {cleanup_error}"
+                    )
+
     def create_and_export_video(
         self,
         template_path: str,
@@ -546,6 +604,10 @@ class PowerPointController:
         fps: int = 30,
         quality: int = 5,
         base_slide_index: int = 3,
+        intro_thumbnail_path: str | None = None,
+        intro_thumbnail_duration: float = 5.0,
+        outro_thumbnail_path: str | None = None,
+        outro_thumbnail_duration: float = 5.0,
         progress_callback=None,
         cancel_event=None
     ) -> dict:
@@ -599,6 +661,11 @@ class PowerPointController:
                 image_files=image_files,
                 output_path=output_pptx_path,
                 base_slide_index=base_slide_index,
+                slide_duration=slide_duration,
+                intro_thumbnail_path=intro_thumbnail_path,
+                intro_thumbnail_duration=intro_thumbnail_duration,
+                outro_thumbnail_path=outro_thumbnail_path,
+                outro_thumbnail_duration=outro_thumbnail_duration,
                 progress_callback=progress_callback,
                 cancel_event=cancel_event
             )

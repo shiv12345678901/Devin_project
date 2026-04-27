@@ -28,7 +28,15 @@ from core.run_manager import (
     list_runs,
 )
 from core.workflow_runner import WorkflowContext, subscribe_run, unsubscribe_run
-from routes.helpers import OUTPUT_FOLDER, get_next_batch_id, log_generation, save_html, take_screenshots
+from routes.helpers import (
+    OUTPUT_FOLDER,
+    build_ai_input_text,
+    get_next_batch_id,
+    log_generation,
+    save_html,
+    take_screenshots,
+)
+from utils.eta_tracker import eta_tracker
 
 
 runs_bp = Blueprint("runs", __name__)
@@ -70,6 +78,37 @@ def _rel(path: str | Path | None) -> str | None:
 def _run_output_path(folder: str, output_name: str, operation_id: str, suffix: str) -> str:
     stem = _safe_name(output_name, "output")
     return _rel(Path(folder) / f"{stem}_{operation_id}{suffix}") or ""
+
+
+def _bool_value(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _positive_float(value, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _thumbnail_path(filename: str | None) -> str | None:
+    name = str(filename or "").strip()
+    if not name:
+        return None
+    base = Path("output") / "thumbnails"
+    candidate = (base / name).resolve()
+    try:
+        candidate.relative_to(base.resolve())
+    except ValueError:
+        return None
+    return str(candidate) if candidate.is_file() else None
 
 
 def _close_powerpoint_best_effort() -> None:
@@ -164,19 +203,43 @@ def start_text_to_video():
     use_cache = bool(data.get("use_cache", True))
     beautify_html = bool(data.get("beautify_html", False))
     close_powerpoint = bool(data.get("close_powerpoint_before_start", True))
+    project_info = {
+        "class_name": str(data.get("class_name") or "").strip(),
+        "subject": str(data.get("subject") or "").strip(),
+        "title": str(data.get("title") or "").strip(),
+    }
+    ai_input_text = build_ai_input_text(text, project_info)
+    estimated_total_seconds = eta_tracker.predict_process_time(model_choice, len(ai_input_text))
 
     zoom = float(data.get("zoom") or 2.1)
     overlap = int(data.get("overlap") or 15)
     viewport_width = int(data.get("viewport_width") or 1920)
     viewport_height = int(data.get("viewport_height") or 1080)
     max_screenshots = int(data.get("max_screenshots") or 50)
-    slide_duration = float(data.get("slide_duration_sec") or 5)
+    auto_timing_screenshot_slides = _bool_value(data.get("auto_timing_screenshot_slides"), True)
+    fixed_seconds_per_screenshot_slide = _positive_float(data.get("fixed_seconds_per_screenshot_slide"), 5.0)
+    slide_duration = _positive_float(data.get("slide_duration_sec"), 5.0)
+    intro_thumbnail_enabled = _bool_value(
+        data.get("intro_thumbnail_enabled", data.get("thumbnail_enabled", data.get("thumbnail_on_slide_2"))),
+        False,
+    )
+    outro_thumbnail_enabled = _bool_value(data.get("outro_thumbnail_enabled"), False)
+    intro_thumbnail_filename = str(data.get("intro_thumbnail_filename") or data.get("thumbnail_filename") or "")
+    outro_thumbnail_filename = str(data.get("outro_thumbnail_filename") or "")
+    intro_thumbnail_duration = _positive_float(
+        data.get("intro_thumbnail_duration_sec", data.get("thumbnail_duration_sec")),
+        5.0,
+    )
+    outro_thumbnail_duration = _positive_float(data.get("outro_thumbnail_duration_sec"), 5.0)
     width, height = _resolution_tuple(str(data.get("resolution") or "1080p"))
     fps = int(data.get("fps") or 30)
     quality = _ppt_quality(data.get("video_quality", 85))
 
     fingerprint_payload = {
         "text": text.strip(),
+        "class_name": project_info["class_name"],
+        "subject": project_info["subject"],
+        "title": project_info["title"],
         "system_prompt": system_prompt,
         "output_format": output_format,
         "output_name": output_name,
@@ -187,6 +250,14 @@ def start_text_to_video():
         "viewport_height": viewport_height,
         "max_screenshots": max_screenshots,
         "slide_duration": slide_duration,
+        "auto_timing_screenshot_slides": auto_timing_screenshot_slides,
+        "fixed_seconds_per_screenshot_slide": fixed_seconds_per_screenshot_slide,
+        "intro_thumbnail_enabled": intro_thumbnail_enabled,
+        "intro_thumbnail_filename": intro_thumbnail_filename,
+        "intro_thumbnail_duration": intro_thumbnail_duration,
+        "outro_thumbnail_enabled": outro_thumbnail_enabled,
+        "outro_thumbnail_filename": outro_thumbnail_filename,
+        "outro_thumbnail_duration": outro_thumbnail_duration,
         "resolution": [width, height],
         "fps": fps,
         "quality": quality,
@@ -250,6 +321,7 @@ def start_text_to_video():
     run_id = run["run_id"]
 
     def worker(ctx: WorkflowContext) -> None:
+        process_started = time.time()
         html_filename = None
         screenshot_files: list[str] = []
         screenshot_names: list[str] = []
@@ -257,7 +329,12 @@ def start_text_to_video():
         presentation_file = None
         video_file = None
         try:
-            ctx.progress("ai", 5, f"Generating HTML with model {model_choice}...")
+            progress_data = (
+                {"eta_seconds": estimated_total_seconds}
+                if estimated_total_seconds is not None
+                else None
+            )
+            ctx.progress("ai", 5, f"Generating HTML with model {model_choice}...", data=progress_data)
             ai_started = time.time()
             ai_q: Queue[dict] = Queue()
             ai_holder: dict = {"content": None, "error": None}
@@ -265,7 +342,7 @@ def start_text_to_video():
             def _ai_worker() -> None:
                 try:
                     ai_holder["content"] = get_ai_response(
-                        text,
+                        ai_input_text,
                         use_cache=use_cache,
                         cancel_event=ctx.cancel_event,
                         model_choice=model_choice,
@@ -322,6 +399,7 @@ def start_text_to_video():
                     "screenshot_count": 0,
                 }
                 ctx.complete("Successfully generated HTML file", outputs=outputs)
+                eta_tracker.record_process_completion(model_choice, len(ai_input_text), time.time() - process_started)
                 return
 
             batch_id = get_next_batch_id()
@@ -369,6 +447,21 @@ def start_text_to_video():
 
                 pptx_path = _run_output_path(POWERPOINT_OUTPUT_FOLDER, output_name, operation_id, ".pptx")
                 video_path = _run_output_path(POWERPOINT_VIDEO_FOLDER, output_name, operation_id, ".mp4")
+                screenshot_slide_duration = (
+                    round(480.0 / max(len(screenshot_files), 1), 3)
+                    if auto_timing_screenshot_slides
+                    else fixed_seconds_per_screenshot_slide
+                )
+                intro_thumbnail_path = (
+                    _thumbnail_path(intro_thumbnail_filename)
+                    if intro_thumbnail_enabled
+                    else None
+                )
+                outro_thumbnail_path = (
+                    _thumbnail_path(outro_thumbnail_filename)
+                    if outro_thumbnail_enabled
+                    else None
+                )
 
                 def _ppt_progress(payload: dict) -> None:
                     stage = str(payload.get("stage") or "powerpoint")
@@ -390,7 +483,11 @@ def start_text_to_video():
                         resolution=(width, height),
                         fps=fps,
                         quality=quality,
-                        slide_duration=slide_duration,
+                        slide_duration=screenshot_slide_duration,
+                        intro_thumbnail_path=intro_thumbnail_path,
+                        intro_thumbnail_duration=intro_thumbnail_duration,
+                        outro_thumbnail_path=outro_thumbnail_path,
+                        outro_thumbnail_duration=outro_thumbnail_duration,
                         progress_callback=_ppt_progress,
                         cancel_event=ctx.cancel_event,
                     )
@@ -400,11 +497,17 @@ def start_text_to_video():
                         raise RuntimeError(result.get("warning") or "PowerPoint did not produce an MP4 file")
                 else:
                     ctx.progress("powerpoint", 90, "Building PowerPoint deck...")
-                    presentation_file = controller.create_presentation(
+                    presentation_file = controller.create_template_presentation(
                         template_path=POWERPOINT_TEMPLATE_PATH,
-                        output_path=pptx_path,
+                        output_pptx_path=pptx_path,
                         image_files=screenshot_files,
-                        slide_duration=slide_duration,
+                        slide_duration=screenshot_slide_duration,
+                        intro_thumbnail_path=intro_thumbnail_path,
+                        intro_thumbnail_duration=intro_thumbnail_duration,
+                        outro_thumbnail_path=outro_thumbnail_path,
+                        outro_thumbnail_duration=outro_thumbnail_duration,
+                        progress_callback=_ppt_progress,
+                        cancel_event=ctx.cancel_event,
                     )
                     presentation_file = _rel(presentation_file)
 
@@ -435,6 +538,7 @@ def start_text_to_video():
                 "Successfully generated PowerPoint deck" if output_format == "pptx" else f"Successfully generated {len(screenshot_files)} screenshot(s)"
             )
             ctx.complete(final, outputs=outputs, metrics={"screenshot_count": len(screenshot_files)})
+            eta_tracker.record_process_completion(model_choice, len(ai_input_text), time.time() - process_started)
         except (CancelledError, Exception) as exc:
             if ctx.cancel_event.is_set() or isinstance(exc, CancelledError):
                 _close_powerpoint_best_effort()

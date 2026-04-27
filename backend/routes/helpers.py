@@ -49,6 +49,32 @@ OUTPUT_FOLDER = "output/screenshots"
 HTML_FOLDER = "output/html"
 HISTORY_FILE = "output/history.json"
 
+
+def build_ai_input_text(input_text, project_info=None):
+    """Prepend explicit project metadata so the model does not infer it."""
+    details = project_info or {}
+    labels = [
+        ("class_name", "Class"),
+        ("subject", "Subject"),
+        ("title", "Chapter/Title"),
+    ]
+    lines = [
+        f"{label}: {str(details.get(key) or '').strip()}"
+        for key, label in labels
+        if str(details.get(key) or "").strip()
+    ]
+    if not lines:
+        return input_text
+
+    return (
+        "AUTHORITATIVE PROJECT DETAILS - use these exactly. "
+        "Do not infer or replace them from examples or raw content.\n"
+        + "\n".join(lines)
+        + "\n\nRAW EDUCATIONAL TEXT:\n"
+        + input_text
+    )
+
+
 # Ensure output folders exist at import time
 for _folder in [OUTPUT_FOLDER, HTML_FOLDER]:
     os.makedirs(_folder, exist_ok=True)
@@ -290,3 +316,25 @@ def get_history():
     except Exception as e:
         print(f"Warning: Failed to read history: {e}")
     return []
+
+
+def clear_history():
+    """Clear the generation history file."""
+    with _HISTORY_LOCK:
+        try:
+            os.makedirs(os.path.dirname(HISTORY_FILE) or '.', exist_ok=True)
+            if not os.path.exists(HISTORY_FILE):
+                with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+                    f.write('[]')
+            with open(HISTORY_FILE, 'r+', encoding='utf-8') as f:
+                _file_lock(f)
+                try:
+                    f.seek(0)
+                    f.truncate()
+                    f.write('[]')
+                finally:
+                    _file_unlock(f)
+            return True
+        except Exception as e:
+            print(f"Warning: Failed to clear history: {e}")
+            return False

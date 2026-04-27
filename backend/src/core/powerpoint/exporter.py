@@ -406,18 +406,25 @@ class PowerPointExporter:
         image_files: list,
         output_path: str,
         base_slide_index: int = 3,
+        slide_duration: float = 3.0,
+        intro_thumbnail_path: Optional[str] = None,
+        intro_thumbnail_duration: float = 5.0,
+        outro_thumbnail_path: Optional[str] = None,
+        outro_thumbnail_duration: float = 5.0,
         progress_callback=None,
         cancel_event=None
     ) -> str:
         """
         Create presentation from template using COM automation.
         
-        Replicates VBA macro logic:
+        Replicates default-template macro logic:
         1. Open template
-        2. Remove old content slides between base_slide_index and last slide
-        3. Duplicate base slide for each image (preserving watermark/transitions)
-        4. Insert images as background (sent to back)
-        5. Save As to output_path
+        2. Preserve slides 1, 2, 3, and the final four template slides
+        3. Remove old generated slides after slide 3 through the 5th-last slide
+        4. Duplicate slide 3 for each screenshot
+        5. Insert screenshots behind the existing slide design/watermark
+        6. Optionally insert intro/outro thumbnails into slide 2 / 2nd-last
+        7. Save As to output_path
         
         Args:
             template_path: Path to .pptm template file
@@ -490,12 +497,14 @@ class PowerPointExporter:
                     f"but base_slide_index is {base_slide_index}"
                 )
             
-            # Step 1: Remove old content slides between base slide and last slide
-            # Keep: slides 1 to base_slide_index, and the last slide (end slide)
-            # Remove: slides (base_slide_index + 1) to (total_slides - 1)
-            if total_slides > base_slide_index + 1:
-                # Delete from the end backward to avoid index shifting
-                for i in range(total_slides - 1, base_slide_index, -1):
+            # Step 1: Remove old generated content.
+            # Keep slide 3 as the base slide. Also keep the final four
+            # template slides intact: 4th-last, 3rd-last, 2nd-last, last.
+            # Therefore delete slide 4 through the original 5th-last slide.
+            delete_first = base_slide_index + 1
+            delete_last = total_slides - 4
+            if delete_last >= delete_first:
+                for i in range(delete_last, delete_first - 1, -1):
                     if cancel_event is not None and cancel_event.is_set():
                         raise RuntimeError("Operation cancelled")
                     try:
@@ -504,8 +513,6 @@ class PowerPointExporter:
                     except Exception as e:
                         logger.warning(f"Could not delete slide {i}: {e}")
             
-            # After deletion, we should have:
-            # slides 1..base_slide_index, and the last slide (end)
             remaining = self.presentation.Slides.Count
             logger.info(f"After cleanup: {remaining} slides remaining")
             
@@ -552,6 +559,7 @@ class PowerPointExporter:
                 
                 # Send image to back (behind watermark and other elements)
                 pic.ZOrder(1) # 1 = msoSendToBack
+                self._set_slide_duration(slide, slide_duration)
                 print(f"DEBUG: Image {i+1}/{len(sorted_images)} inserted successfully.")
                 if progress_callback:
                     progress_callback({
@@ -567,6 +575,29 @@ class PowerPointExporter:
                 logger.debug(f"Inserted image {os.path.basename(img_path)} into slide {slide_idx}")
             
             logger.info(f"Inserted {len(sorted_images)} images")
+
+            if intro_thumbnail_path:
+                intro_slide = self.presentation.Slides(2)
+                self._replace_full_slide_image(
+                    intro_slide,
+                    intro_thumbnail_path,
+                    slide_width,
+                    slide_height,
+                )
+                self._set_slide_duration(intro_slide, intro_thumbnail_duration)
+                logger.info("Inserted intro thumbnail on slide 2")
+
+            if outro_thumbnail_path:
+                outro_slide_index = max(1, self.presentation.Slides.Count - 1)
+                outro_slide = self.presentation.Slides(outro_slide_index)
+                self._replace_full_slide_image(
+                    outro_slide,
+                    outro_thumbnail_path,
+                    slide_width,
+                    slide_height,
+                )
+                self._set_slide_duration(outro_slide, outro_thumbnail_duration)
+                logger.info(f"Inserted outro thumbnail on slide {outro_slide_index}")
             
             # Step 4: Save As to output path
             # ppSaveAsDefault = 11, ppSaveAsOpenXMLPresentation = 24
@@ -594,6 +625,40 @@ class PowerPointExporter:
         except Exception as e:
             logger.error(f"Error creating presentation from template: {e}")
             raise
+
+    def _set_slide_duration(self, slide, duration_seconds: float) -> None:
+        """Set automatic slide advance timing without changing slide design."""
+        duration = max(0.1, float(duration_seconds or 0.1))
+        try:
+            transition = slide.SlideShowTransition
+            transition.AdvanceOnClick = 0
+            transition.AdvanceOnTime = -1
+            transition.AdvanceTime = duration
+        except Exception as e:
+            logger.warning(f"Could not set slide timing: {e}")
+
+    def _replace_full_slide_image(
+        self,
+        slide,
+        image_path: str,
+        slide_width: float,
+        slide_height: float,
+    ) -> None:
+        """Replace the full-bleed image layer while preserving overlays."""
+        abs_img = str(Path(image_path).resolve())
+        if not os.path.exists(abs_img):
+            raise FileNotFoundError(f"Thumbnail not found: {image_path}")
+        self._clear_full_bleed_images(slide, slide_width, slide_height)
+        pic = slide.Shapes.AddPicture(
+            FileName=abs_img,
+            LinkToFile=0,
+            SaveWithDocument=-1,
+            Left=0,
+            Top=0,
+            Width=slide_width,
+            Height=slide_height,
+        )
+        pic.ZOrder(1)
     
     def _clear_full_bleed_images(self, slide, slide_width: float, slide_height: float) -> None:
         """Remove full-slide picture placeholders while preserving overlays."""

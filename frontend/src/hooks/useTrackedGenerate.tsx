@@ -76,8 +76,11 @@ interface TrackedGenerationContextValue {
   pausedReason: 'in_flight' | 'duplicate' | 'unknown' | null
   cancel: () => void
   cancelQueued: (queueId: string) => void
+  pauseQueue: () => void
   /** Manually resume auto-dispatch after a 409-induced pause. */
   resumeQueue: () => void
+  reorderQueued: (queueId: string, targetQueueId: string) => void
+  updateQueued: (queueId: string, patch: Partial<Pick<QueueItem, 'text' | 'html' | 'settings'>>) => void
   reset: () => void
   enqueueText: (tool: RunTool, text: string, settings: GenerateSettings) => EnqueueResult
   enqueueHtml: (tool: RunTool, html: string, settings: GenerateSettings) => EnqueueResult
@@ -218,6 +221,34 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     }
   }, [gen.state, runs])
 
+  useEffect(() => {
+    if (gen.state.status !== 'running') return
+    let cancelled = false
+    let wakeLock: { release: () => Promise<void> } | null = null
+
+    const requestWakeLock = async () => {
+      try {
+        const nav = navigator as Navigator & {
+          wakeLock?: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> }
+        }
+        if (!nav.wakeLock) return
+        wakeLock = await nav.wakeLock.request('screen')
+        if (cancelled) {
+          await wakeLock.release().catch(() => undefined)
+          wakeLock = null
+        }
+      } catch {
+        /* Best effort: browser/OS can deny wake lock. */
+      }
+    }
+
+    void requestWakeLock()
+    return () => {
+      cancelled = true
+      void wakeLock?.release().catch(() => undefined)
+    }
+  }, [gen.state.status])
+
   // Dispatcher — starts a queue item's generate call. Safe to call with
   // any item kind; chooses the right hook under the hood. Idempotent: if
   // called twice with the same item id we silently ignore the second call,
@@ -292,6 +323,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       activeStartedRef.current = false
       activeQueueIdRef.current = null
       activeFingerprintRef.current = null
+      if (paused) return
       if (rejected) {
         setPaused(true)
         setPausedReason(rejectedReason ?? 'unknown')
@@ -307,7 +339,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       })
     }, 250)
     return () => window.clearTimeout(timer)
-  }, [dispatch, gen.state])
+  }, [dispatch, gen.state, paused])
 
   const pushOrStart = useCallback(
     (item: QueueItem): EnqueueResult => {
@@ -428,6 +460,11 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     setQueue((prev) => prev.filter((q) => q.id !== queueId))
   }, [])
 
+  const pauseQueue = useCallback(() => {
+    setPaused(true)
+    setPausedReason(null)
+  }, [])
+
   const resumeQueue = useCallback(() => {
     setPaused(false)
     setPausedReason(null)
@@ -445,6 +482,41 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     })
   }, [dispatch])
 
+  const reorderQueued = useCallback((queueId: string, targetQueueId: string) => {
+    if (queueId === targetQueueId) return
+    setQueue((prev) => {
+      const from = prev.findIndex((q) => q.id === queueId)
+      const to = prev.findIndex((q) => q.id === targetQueueId)
+      if (from < 0 || to < 0) return prev
+      const next = prev.slice()
+      const [item] = next.splice(from, 1)
+      next.splice(to, 0, item)
+      return next
+    })
+  }, [])
+
+  const updateQueued = useCallback(
+    (queueId: string, patch: Partial<Pick<QueueItem, 'text' | 'html' | 'settings'>>) => {
+      setQueue((prev) =>
+        prev.map((item) => {
+          if (item.id !== queueId) return item
+          const text = patch.text ?? item.text
+          const html = patch.html ?? item.html
+          return {
+            ...item,
+            ...patch,
+            inputText: item.kind === 'html' ? html ?? item.inputText : text ?? item.inputText,
+            inputPreview:
+              item.kind === 'html'
+                ? (html ?? item.inputPreview).slice(0, 200)
+                : (text ?? item.inputPreview).slice(0, 200),
+          }
+        }),
+      )
+    },
+    [],
+  )
+
   const value = useMemo<TrackedGenerationContextValue>(
     () => ({
       state: gen.state,
@@ -453,7 +525,10 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       pausedReason,
       cancel: gen.cancel,
       cancelQueued,
+      pauseQueue,
       resumeQueue,
+      reorderQueued,
+      updateQueued,
       reset: gen.reset,
       enqueueText,
       enqueueHtml,
@@ -467,7 +542,10 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       paused,
       pausedReason,
       cancelQueued,
+      pauseQueue,
       resumeQueue,
+      reorderQueued,
+      updateQueued,
       enqueueText,
       enqueueHtml,
       enqueueImage,
@@ -489,6 +567,10 @@ export function useTrackedGenerate(tool: RunTool) {
       queue: ctx.queue,
       cancel: ctx.cancel,
       cancelQueued: ctx.cancelQueued,
+      pauseQueue: ctx.pauseQueue,
+      resumeQueue: ctx.resumeQueue,
+      reorderQueued: ctx.reorderQueued,
+      updateQueued: ctx.updateQueued,
       reset: ctx.reset,
       // Back-compat aliases so existing wizards keep working verbatim: all
       // three are now enqueues and return void (ignored by old callers).
@@ -514,9 +596,14 @@ export function useGenerationQueue() {
     queue: ctx.queue,
     cancelQueued: ctx.cancelQueued,
     cancel: ctx.cancel,
+    pauseQueue: ctx.pauseQueue,
     state: ctx.state,
     paused: ctx.paused,
     pausedReason: ctx.pausedReason,
     resumeQueue: ctx.resumeQueue,
+    reorderQueued: ctx.reorderQueued,
+    updateQueued: ctx.updateQueued,
+    enqueueText: ctx.enqueueText,
+    enqueueHtml: ctx.enqueueHtml,
   }
 }

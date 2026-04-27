@@ -15,7 +15,7 @@ from utils.run_guard import begin_run, end_run, RunRejected
 from utils.run_logger import RunLogger, run_log_path
 from routes.helpers import (
     OUTPUT_FOLDER, HTML_FOLDER,
-    get_next_batch_id, sanitize_folder_path,
+    build_ai_input_text, get_next_batch_id, sanitize_folder_path,
     take_screenshots, save_html, log_generation,
 )
 from utils.eta_tracker import eta_tracker
@@ -47,6 +47,35 @@ def _ppt_quality(ui_quality) -> int:
     return max(1, min(5, round(q / 20)))
 
 
+def _positive_float(value, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _bool_value(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+    return bool(value)
+
+
+def _thumbnail_path(filename: str | None) -> str | None:
+    name = str(filename or '').strip()
+    if not name:
+        return None
+    base = os.path.abspath(os.path.join('output', 'thumbnails'))
+    candidate = os.path.abspath(os.path.join(base, name))
+    if candidate == base or not candidate.startswith(base + os.sep):
+        return None
+    return candidate if os.path.isfile(candidate) else None
+
+
 @generate_bp.route('/generate', methods=['POST'])
 def generate():
     """Process text input, save HTML, and generate screenshots."""
@@ -70,9 +99,15 @@ def generate():
         max_screenshots = data.get('max_screenshots', 50)
         use_cache = data.get('use_cache', True)
         beautify_html = data.get('beautify_html', False)
+        project_info = {
+            'class_name': (data.get('class_name') or '').strip(),
+            'subject': (data.get('subject') or '').strip(),
+            'title': (data.get('title') or '').strip(),
+        }
+        ai_input_text = build_ai_input_text(input_text, project_info)
 
         # Token estimate
-        estimated_tokens = len(input_text) // 4
+        estimated_tokens = len(ai_input_text) // 4
         if estimated_tokens > 100000:
             return jsonify({'error': f'Text too long! Estimated: ~{estimated_tokens} tokens, Maximum: ~100,000 tokens.'}), 400
 
@@ -87,15 +122,12 @@ def generate():
         enable_verification = data.get('enable_verification', True)
 
         # Predict ETA
-        estimated_total_seconds = eta_tracker.predict_total_time(
-            model_choice, len(input_text), max_screenshots, 
-            use_cache=use_cache, enable_verification=enable_verification
-        )
+        estimated_total_seconds = eta_tracker.predict_process_time(model_choice, len(ai_input_text))
 
         # AI request
         ai_operation_id = f"{operation_id}_ai"
         metrics_tracker.start(ai_operation_id)
-        ai_content = get_ai_response(input_text, use_cache=use_cache, model_choice=model_choice)
+        ai_content = get_ai_response(ai_input_text, use_cache=use_cache, model_choice=model_choice)
 
         if not ai_content:
             metrics_tracker.end(ai_operation_id, success=False)
@@ -109,7 +141,7 @@ def generate():
             max_revisions = 3
             for attempt in range(max_revisions):
                 v_start = time.time()
-                feedback = verify_html_content(input_text, ai_content, model_choice=model_choice)
+                feedback = verify_html_content(ai_input_text, ai_content, model_choice=model_choice)
                 v_duration = time.time() - v_start
                 eta_tracker.record_verification(v_duration)
                 
@@ -117,7 +149,7 @@ def generate():
                     break
                     
                 print(f"⚠️ Verification failed (Attempt {attempt + 1}/{max_revisions}), requesting revision...")
-                revised_content = get_ai_revision(input_text, ai_content, feedback, model_choice=model_choice)
+                revised_content = get_ai_revision(ai_input_text, ai_content, feedback, model_choice=model_choice)
                 if revised_content:
                     ai_content = revised_content
         else:
@@ -177,12 +209,15 @@ def generate():
         
         eta_tracker.record_completion(
             model_choice=model_choice,
-            input_chars=len(input_text),
+            input_chars=len(ai_input_text),
             ai_seconds=ai_time,
             screenshot_count=len(screenshot_files),
             screenshot_seconds=sc_time,
             use_cache=use_cache
         )
+        total_metrics = metrics_tracker.get_metrics(operation_id)
+        total_time = total_metrics.get('duration_seconds', 0) if total_metrics else 0
+        eta_tracker.record_process_completion(model_choice, len(ai_input_text), total_time)
 
         return jsonify({
             'success': True,
@@ -250,6 +285,7 @@ def generate_sse():
         'title': (data.get('title') or '').strip(),
         'output_format': data.get('output_format', 'images'),
     }
+    ai_input_text = build_ai_input_text(input_text, project_info)
     video_export_settings = {
         'resolution': data.get('resolution', '1080p'),
         'video_quality': data.get('video_quality', 85),
@@ -319,10 +355,7 @@ def generate_sse():
         try:
             model_choice = data.get('model_choice', 'default')
             enable_verification = data.get('enable_verification', True)
-            estimated_total_seconds = eta_tracker.predict_total_time(
-                model_choice, len(input_text), max_screenshots, 
-                use_cache=use_cache, enable_verification=enable_verification
-            )
+            estimated_total_seconds = eta_tracker.predict_process_time(model_choice, len(ai_input_text))
             run_logger.info(
                 f"Predicted total: ~{estimated_total_seconds}s  "
                 f"model={model_choice} verify={enable_verification}"
@@ -345,7 +378,7 @@ def generate_sse():
                 yield f"data: {json.dumps({'type': 'error', 'message': f'{label} export requires a Windows host with PowerPoint installed. This backend is {_platform.system()} — pick `screenshots` or `HTML file` instead.'})}\n\n"
                 return
 
-            estimated_tokens = len(input_text) // 4
+            estimated_tokens = len(ai_input_text) // 4
             if estimated_tokens > 100000:
                 yield f"data: {json.dumps({'type': 'error', 'message': f'Text too long! ~{estimated_tokens} tokens, max ~100,000'})}\n\n"
                 return
@@ -365,7 +398,7 @@ def generate_sse():
             def _ai_worker():
                 try:
                     ai_holder['content'] = get_ai_response(
-                        input_text,
+                        ai_input_text,
                         use_cache=use_cache,
                         cancel_event=cancel_event,
                         model_choice=model_choice,
@@ -443,7 +476,7 @@ def generate_sse():
                 for attempt in range(max_revisions):
                     v_start = time.time()
                     run_logger.info(f"Verification attempt {attempt + 1}/{max_revisions} starting")
-                    feedback = verify_html_content(input_text, ai_content, cancel_event=cancel_event, model_choice=model_choice)
+                    feedback = verify_html_content(ai_input_text, ai_content, cancel_event=cancel_event, model_choice=model_choice)
                     v_duration = time.time() - v_start
                     eta_tracker.record_verification(v_duration)
                     run_logger.info(
@@ -460,7 +493,7 @@ def generate_sse():
 
                     yield f"data: {json.dumps({'type': 'progress', 'stage': 'ai_revision', 'message': f'Revising missing content (Attempt {attempt + 1}/{max_revisions})...', 'progress': 20 + (attempt * 3)})}\n\n"
                     run_logger.info(f"Asking AI for revision pass {attempt + 1}")
-                    revised_content = get_ai_revision(input_text, ai_content, feedback, cancel_event=cancel_event, model_choice=model_choice)
+                    revised_content = get_ai_revision(ai_input_text, ai_content, feedback, cancel_event=cancel_event, model_choice=model_choice)
 
                     if cancel_event.is_set():
                         yield f"data: {json.dumps({'type': 'cancelled', 'message': 'Generation cancelled'})}\n\n"
@@ -631,6 +664,21 @@ def generate_sse():
                     video_path = os.path.join(POWERPOINT_VIDEO_FOLDER, f"{stem}.mp4")
                     os.makedirs(POWERPOINT_OUTPUT_FOLDER, exist_ok=True)
                     os.makedirs(POWERPOINT_VIDEO_FOLDER, exist_ok=True)
+                    screenshot_slide_duration = (
+                        round(480.0 / max(len(screenshot_files), 1), 3)
+                        if _bool_value(video_export_settings.get('auto_timing_screenshot_slides'), True)
+                        else _positive_float(video_export_settings.get('fixed_seconds_per_screenshot_slide'), 5.0)
+                    )
+                    intro_thumbnail_path = (
+                        _thumbnail_path(video_export_settings.get('intro_thumbnail_filename'))
+                        if _bool_value(video_export_settings.get('intro_thumbnail_enabled'))
+                        else None
+                    )
+                    outro_thumbnail_path = (
+                        _thumbnail_path(video_export_settings.get('outro_thumbnail_filename'))
+                        if _bool_value(video_export_settings.get('outro_thumbnail_enabled'))
+                        else None
+                    )
 
                     controller = PowerPointController()
                     if requested_format == 'video':
@@ -640,10 +688,14 @@ def generate_sse():
                             image_files=screenshot_files,
                             output_pptx_path=pptx_path,
                             output_video_path=video_path,
-                            slide_duration=float(video_export_settings.get('slide_duration_sec') or 5),
+                            slide_duration=screenshot_slide_duration,
                             resolution=_resolution_tuple(video_export_settings.get('resolution')),
                             fps=int(video_export_settings.get('fps') or 30),
                             quality=_ppt_quality(video_export_settings.get('video_quality')),
+                            intro_thumbnail_path=intro_thumbnail_path,
+                            intro_thumbnail_duration=_positive_float(video_export_settings.get('intro_thumbnail_duration_sec'), 5.0),
+                            outro_thumbnail_path=outro_thumbnail_path,
+                            outro_thumbnail_duration=_positive_float(video_export_settings.get('outro_thumbnail_duration_sec'), 5.0),
                         )
                         presentation_file = export_result.get('presentation_path')
                         video_file = export_result.get('video_path')
@@ -655,11 +707,15 @@ def generate_sse():
                         # using image_folder would glob every PNG in the
                         # folder (including leftovers from previous runs)
                         # and inject those as slides.
-                        controller.create_presentation(
+                        controller.create_template_presentation(
                             template_path=POWERPOINT_TEMPLATE_PATH,
-                            output_path=pptx_path,
+                            output_pptx_path=pptx_path,
                             image_files=screenshot_files,
-                            slide_duration=float(video_export_settings.get('slide_duration_sec') or 5),
+                            slide_duration=screenshot_slide_duration,
+                            intro_thumbnail_path=intro_thumbnail_path,
+                            intro_thumbnail_duration=_positive_float(video_export_settings.get('intro_thumbnail_duration_sec'), 5.0),
+                            outro_thumbnail_path=outro_thumbnail_path,
+                            outro_thumbnail_duration=_positive_float(video_export_settings.get('outro_thumbnail_duration_sec'), 5.0),
                         )
                         presentation_file = pptx_path
                 except Exception as exc:
@@ -706,12 +762,15 @@ def generate_sse():
             sc_metrics = metrics_tracker.get_metrics(screenshot_operation_id)
             eta_tracker.record_completion(
                 model_choice=model_choice,
-                input_chars=len(input_text),
+                input_chars=len(ai_input_text),
                 ai_seconds=ai_metrics.get('duration_seconds', 0) if ai_metrics else 0,
                 screenshot_count=len(screenshot_files),
                 screenshot_seconds=sc_metrics.get('duration_seconds', 0) if sc_metrics else 0,
                 use_cache=use_cache
             )
+            total_metrics = metrics_tracker.get_metrics(operation_id)
+            total_time = total_metrics.get('duration_seconds', 0) if total_metrics else 0
+            eta_tracker.record_process_completion(model_choice, len(ai_input_text), total_time)
 
             yield f"data: {json.dumps({'type': 'complete', 'success': True, 'message': final_message, 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': screenshot_names, 'screenshot_count': len(screenshot_files), 'screenshot_folder': screenshot_folder, 'presentation_file': presentation_file, 'video_file': video_file, 'operation_id': operation_id})}\n\n"
 
@@ -756,8 +815,14 @@ def preview_html():
         use_cache = data.get('use_cache', True)
         beautify = data.get('beautify', False)
         model_choice = data.get('model_choice', 'default')
+        project_info = {
+            'class_name': (data.get('class_name') or '').strip(),
+            'subject': (data.get('subject') or '').strip(),
+            'title': (data.get('title') or '').strip(),
+        }
+        ai_input_text = build_ai_input_text(input_text, project_info)
 
-        ai_content = get_ai_response(input_text, use_cache=use_cache, model_choice=model_choice)
+        ai_content = get_ai_response(ai_input_text, use_cache=use_cache, model_choice=model_choice)
         if not ai_content:
             return jsonify({'error': 'Failed to get AI response'}), 500
 

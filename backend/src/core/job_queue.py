@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 import traceback
+import sys
 from collections import deque
 from dataclasses import dataclass
 from typing import Callable
@@ -26,6 +27,35 @@ _QUEUE: deque[QueuedJob] = deque()
 _CURRENT: QueuedJob | None = None
 _CONDITION = threading.Condition()
 _STARTED = False
+
+
+def _prevent_sleep() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        ES_CONTINUOUS = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001
+        ES_DISPLAY_REQUIRED = 0x00000002
+        ctypes.windll.kernel32.SetThreadExecutionState(
+            ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _allow_sleep() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ES_CONTINUOUS = 0x80000000
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+    except Exception:
+        pass
 
 
 def _queue_positions() -> dict[str, int]:
@@ -81,7 +111,9 @@ def _worker_loop() -> None:
         # route used here (`/job-queue`) and run_id payload guarantee a
         # unique fingerprint so we never trip the dedup window.
         slot_held = False
+        sleep_guard = False
         try:
+            sleep_guard = _prevent_sleep()
             try:
                 begin_run(job.operation_id, "/job-queue", {"run_id": job.run_id})
                 slot_held = True
@@ -99,6 +131,8 @@ def _worker_loop() -> None:
             if run and run.get("status") not in {"completed", "failed", "cancelled"}:
                 ctx.fail(f"Error: {exc}")
         finally:
+            if sleep_guard:
+                _allow_sleep()
             if slot_held:
                 end_run(job.operation_id)
             with _CONDITION:

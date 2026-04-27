@@ -14,12 +14,14 @@ import {
 import { api } from '../api/client'
 import { useRuns } from '../store/runs'
 import { BRAND_SWATCHES, useSettings, type ThemeMode } from '../store/settings'
+import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
 
 export default function Settings() {
   const { settings, update, reset } = useSettings()
   const { clear, runs } = useRuns()
   const confirm = useConfirm()
+  const toast = useToast()
   const [pingState, setPingState] = useState<'idle' | 'pinging' | 'ok' | 'error'>('idle')
   const [pingError, setPingError] = useState('')
 
@@ -212,25 +214,35 @@ export default function Settings() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-sm text-slate-600 dark:text-slate-300">
             <div className="font-medium text-slate-800 dark:text-slate-100">
-              Clear local run history
+              Clear process history
             </div>
             <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              Removes all {runs.length} entries from the Processes tab. Server
-              files are not touched.
+              Removes all {runs.length} local entries and clears backend saved
+              history. Generated files are not touched.
             </div>
           </div>
           <button
             type="button"
             className="btn-danger"
-            disabled={runs.length === 0}
             onClick={async () => {
               const ok = await confirm({
-                title: `Remove all ${runs.length} local run entries?`,
-                message: 'Only the local Processes log is cleared. Backend output files are not affected.',
+                title: 'Clear all process history?',
+                message: 'This clears the local Processes log and backend saved history. Generated output files are not affected.',
                 confirmLabel: 'Clear',
                 variant: 'danger',
               })
-              if (ok) clear()
+              if (!ok) return
+              try {
+                await api.clearHistory()
+                clear()
+                toast.push({ variant: 'success', message: 'Process history cleared.' })
+              } catch (e) {
+                toast.push({
+                  variant: 'error',
+                  title: 'Clear history failed',
+                  message: e instanceof Error ? e.message : String(e),
+                })
+              }
             }}
           >
             <Trash2 size={14} /> Clear history

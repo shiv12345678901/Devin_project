@@ -14,10 +14,13 @@ import {
   Download,
   FileText,
   Film,
+  GripVertical,
   ImageIcon,
   ListOrdered,
   Loader2,
   Pause,
+  Pencil,
+  Play,
   RefreshCw,
   StopCircle,
   Trash2,
@@ -26,7 +29,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { api } from '../api/client'
-import type { CacheStats, HistoryEntry } from '../api/types'
+import type { CacheStats, GenerateSettings, HistoryEntry } from '../api/types'
 import { formatRelative, formatRuntime, useRuns } from '../store/runs'
 import type { Run, RunStatus, RunTool } from '../store/runs'
 import { useToast } from '../store/toast'
@@ -38,6 +41,15 @@ import type { QueueItem } from '../hooks/useTrackedGenerate'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 
 type ToolLike = RunTool | 'regenerate' | 'text-to-image' | 'html-to-image' | 'image-to-screenshots' | string | undefined
+type EditableProcess = {
+  id: string
+  title: string
+  tool: RunTool
+  kind: 'text' | 'html'
+  text: string
+  settings: GenerateSettings
+  mode: 'queue' | 'regenerate'
+}
 
 const TOOL_META: Record<string, { label: string; icon: typeof FileText }> = {
   'text-to-video': { label: 'Text → Video', icon: FileText },
@@ -51,6 +63,16 @@ const TOOL_META: Record<string, { label: string; icon: typeof FileText }> = {
 
 function toolMeta(tool: ToolLike) {
   return TOOL_META[tool ?? ''] ?? { label: tool ?? 'Run', icon: Activity }
+}
+
+function toGenerateSettings(settings: Run['settings'] | GenerateSettings | undefined): GenerateSettings {
+  const raw = settings ?? {}
+  const { resolution, ...rest } = raw
+  const next: GenerateSettings = { ...rest }
+  if (['720p', '1080p', '1440p', '4k'].includes(String(resolution))) {
+    next.resolution = resolution as GenerateSettings['resolution']
+  }
+  return next
 }
 
 function StatusBadge({ status }: { status: RunStatus | 'completed' }) {
@@ -95,10 +117,14 @@ function useNow(enabled: boolean, tickMs = 1000): number {
 function RunRow({
   run,
   onRemove,
+  onRegenerate,
+  onEditRegenerate,
   highlight = false,
 }: {
   run: Run
   onRemove?: (id: string) => void
+  onRegenerate?: (run: Run) => void
+  onEditRegenerate?: (run: Run) => void
   highlight?: boolean
 }) {
   const meta = toolMeta(run.tool)
@@ -430,7 +456,17 @@ function RunRow({
           )}
 
           {onRemove && (
-            <div className="flex justify-end">
+            <div className="flex flex-wrap justify-end gap-2">
+              {(run.status === 'success' || run.status === 'error') && inputText && (
+                <>
+                  <button className="btn-secondary btn-sm" onClick={() => onEditRegenerate?.(run)}>
+                    <Pencil size={12} /> Edit
+                  </button>
+                  <button className="btn-primary btn-sm" onClick={() => onRegenerate?.(run)}>
+                    <RefreshCw size={12} /> Regenerate
+                  </button>
+                </>
+              )}
               <button className="btn-ghost text-xs" onClick={() => onRemove(run.id)}>
                 <Trash2 size={12} /> Remove from log
               </button>
@@ -645,22 +681,38 @@ function LiveRunCard({ onCancel }: { onCancel: () => void }) {
 
 function QueueCard({
   items,
+  paused,
+  onPause,
+  onResume,
   onCancelQueued,
+  onEditQueued,
+  onReorderQueued,
 }: {
   items: QueueItem[]
+  paused: boolean
+  onPause: () => void
+  onResume: () => void
   onCancelQueued: (id: string) => void
+  onEditQueued: (item: QueueItem) => void
+  onReorderQueued: (sourceId: string, targetId: string) => void
 }) {
   if (items.length === 0) return null
   return (
     <div className="card">
-      <div className="mb-3 flex items-center gap-2">
-        <ListOrdered size={16} className="text-slate-500" />
-        <div className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
-          Queue
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <ListOrdered size={16} className="text-slate-500" />
+          <div className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
+            Queue
+          </div>
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-white/[0.05] dark:text-slate-300">
+            {items.length} pending
+          </span>
         </div>
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-white/[0.05] dark:text-slate-300">
-          {items.length} pending
-        </span>
+        <button type="button" className="btn-secondary btn-sm" onClick={paused ? onResume : onPause}>
+          {paused ? <Play size={12} /> : <Pause size={12} />}
+          {paused ? 'Resume' : 'Pause'}
+        </button>
       </div>
       <ul className="space-y-2">
         {items.map((q, idx) => {
@@ -669,8 +721,17 @@ function QueueCard({
           return (
             <li
               key={q.id}
+              draggable
+              onDragStart={(event) => event.dataTransfer.setData('text/plain', q.id)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault()
+                const sourceId = event.dataTransfer.getData('text/plain')
+                if (sourceId) onReorderQueued(sourceId, q.id)
+              }}
               className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50/60 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/[0.03]"
             >
+              <GripVertical size={14} className="shrink-0 cursor-grab text-slate-400" />
               <span className="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-white/10 dark:text-slate-300">
                 #{idx + 1}
               </span>
@@ -681,6 +742,15 @@ function QueueCard({
               <span className="min-w-0 flex-1 truncate text-xs text-slate-600 dark:text-slate-300">
                 {q.inputPreview || '(no preview)'}
               </span>
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => onEditQueued(q)}
+                title="Edit queued item"
+                disabled={q.kind === 'image'}
+              >
+                <Pencil size={12} /> Edit
+              </button>
               <button
                 type="button"
                 className="btn-ghost text-xs"
@@ -697,6 +767,152 @@ function QueueCard({
   )
 }
 
+function ProcessEditModal({
+  process,
+  onClose,
+  onSave,
+}: {
+  process: EditableProcess
+  onClose: () => void
+  onSave: (process: EditableProcess) => void
+}) {
+  const [text, setText] = useState(process.text)
+  const [settings, setSettings] = useState<GenerateSettings>(process.settings)
+  const dialogRef = useFocusTrap<HTMLDivElement>(true)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [onClose])
+
+  const set = <K extends keyof GenerateSettings>(key: K, value: GenerateSettings[K]) => {
+    setSettings((prev) => ({ ...prev, [key]: value }))
+  }
+  const numberValue = (value: unknown): number | undefined => {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : undefined
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-sm" onClick={onClose} aria-hidden />
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={process.title}
+        className="glass-strong relative flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden"
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-white/10">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
+              {process.title}
+            </div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              {toolMeta(process.tool).label}
+            </div>
+          </div>
+          <button type="button" className="btn-ghost !px-2" onClick={onClose} aria-label="Close editor">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="space-y-4 overflow-auto p-4">
+          <label className="block">
+            <span className="label">Input</span>
+            <textarea
+              className="textarea h-56 resize-y font-mono text-xs"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+            />
+          </label>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="block">
+              <span className="label">Class</span>
+              <input className="input" value={settings.class_name ?? ''} onChange={(e) => set('class_name', e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="label">Subject</span>
+              <input className="input" value={settings.subject ?? ''} onChange={(e) => set('subject', e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="label">Title</span>
+              <input className="input" value={settings.title ?? ''} onChange={(e) => set('title', e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="label">Output</span>
+              <select className="select" value={settings.output_format ?? 'images'} onChange={(e) => set('output_format', e.target.value as GenerateSettings['output_format'])}>
+                <option value="html">HTML</option>
+                <option value="images">Screenshots</option>
+                <option value="pptx">PowerPoint</option>
+                <option value="video">MP4 video</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="label">Model</span>
+              <select className="select" value={settings.model_choice ?? 'default'} onChange={(e) => set('model_choice', e.target.value)}>
+                <option value="default">Default</option>
+                <option value="fast">Fast</option>
+                <option value="short">Short</option>
+                <option value="balanced">Balanced</option>
+                <option value="quality">Quality</option>
+                <option value="long">Long context</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="label">Zoom</span>
+              <input className="input" type="number" step={0.1} value={settings.zoom ?? ''} onChange={(e) => set('zoom', numberValue(e.target.value))} />
+            </label>
+            <label className="block">
+              <span className="label">Width</span>
+              <input className="input" type="number" value={settings.viewport_width ?? ''} onChange={(e) => set('viewport_width', numberValue(e.target.value))} />
+            </label>
+            <label className="block">
+              <span className="label">Height</span>
+              <input className="input" type="number" value={settings.viewport_height ?? ''} onChange={(e) => set('viewport_height', numberValue(e.target.value))} />
+            </label>
+            <label className="block">
+              <span className="label">Max screenshots</span>
+              <input className="input" type="number" value={settings.max_screenshots ?? ''} onChange={(e) => set('max_screenshots', numberValue(e.target.value))} />
+            </label>
+          </div>
+          <label className="block">
+            <span className="label">System prompt</span>
+            <textarea
+              className="textarea h-24 resize-y"
+              value={settings.system_prompt ?? ''}
+              onChange={(e) => set('system_prompt', e.target.value)}
+            />
+          </label>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-200 px-4 py-3 dark:border-white/10">
+          <button type="button" className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => onSave({ ...process, text, settings })}
+            disabled={!text.trim()}
+          >
+            {process.mode === 'queue' ? <Check size={14} /> : <RefreshCw size={14} />}
+            {process.mode === 'queue' ? 'Save changes' : 'Regenerate'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
 export default function Processes() {
   const { runs, clear, remove } = useRuns()
   const {
@@ -706,7 +922,12 @@ export default function Processes() {
     state: liveState,
     paused: queuePaused,
     pausedReason: queuePausedReason,
+    pauseQueue,
     resumeQueue,
+    reorderQueued,
+    updateQueued,
+    enqueueText,
+    enqueueHtml,
   } = useGenerationQueue()
   const [searchParams] = useSearchParams()
   const highlightOp = searchParams.get('op')
@@ -716,6 +937,7 @@ export default function Processes() {
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [filter, setFilter] = useState<'all' | RunTool>('all')
+  const [editingProcess, setEditingProcess] = useState<EditableProcess | null>(null)
   const toast = useToast()
   const confirmDialog = useConfirm()
 
@@ -811,6 +1033,86 @@ export default function Processes() {
         message: e instanceof Error ? e.message : String(e),
       })
     }
+  }
+
+  const queueEditorForItem = (item: QueueItem) => {
+    if (item.kind === 'image') {
+      toast.push({ variant: 'info', message: 'Image jobs need their original uploaded file, so edit is unavailable.' })
+      return
+    }
+    setEditingProcess({
+      id: item.id,
+      title: 'Edit queued process',
+      tool: item.tool,
+      kind: item.kind,
+      text: item.kind === 'html' ? item.html ?? item.inputText ?? '' : item.text ?? item.inputText ?? '',
+      settings: item.settings ?? {},
+      mode: 'queue',
+    })
+  }
+
+  const regenerateRun = (run: Run, override?: { text: string; settings: GenerateSettings }) => {
+    const text = override?.text ?? run.inputText ?? run.inputPreview ?? ''
+    const settings = toGenerateSettings(override?.settings ?? run.settings)
+    if (!text.trim()) {
+      toast.push({ variant: 'error', message: 'This process has no saved input to regenerate.' })
+      return
+    }
+    if (run.tool === 'html-to-video') {
+      enqueueHtml(run.tool, text, settings)
+    } else if (run.tool === 'text-to-video') {
+      enqueueText(run.tool, text, settings)
+    } else {
+      toast.push({ variant: 'error', message: 'Image processes cannot be regenerated after the original file is gone.' })
+      return
+    }
+    toast.push({ variant: 'success', message: 'Process queued for regeneration.' })
+  }
+
+  const editRegenerateRun = (run: Run) => {
+    const text = run.inputText ?? run.inputPreview ?? ''
+    if (!text.trim()) {
+      toast.push({ variant: 'error', message: 'This process has no saved input to edit.' })
+      return
+    }
+    if (run.tool === 'image-to-video') {
+      toast.push({ variant: 'error', message: 'Image processes cannot be edited after the original file is gone.' })
+      return
+    }
+    setEditingProcess({
+      id: run.id,
+      title: 'Edit and regenerate process',
+      tool: run.tool,
+      kind: run.tool === 'html-to-video' ? 'html' : 'text',
+      text,
+      settings: toGenerateSettings(run.settings),
+      mode: 'regenerate',
+    })
+  }
+
+  const saveEditedProcess = (process: EditableProcess) => {
+    if (process.mode === 'queue') {
+      updateQueued(process.id, {
+        text: process.kind === 'text' ? process.text : undefined,
+        html: process.kind === 'html' ? process.text : undefined,
+        settings: process.settings,
+      })
+      toast.push({ variant: 'success', message: 'Queued process updated.' })
+    } else {
+      regenerateRun(
+        {
+          id: process.id,
+          tool: process.tool,
+          status: 'success',
+          startedAt: Date.now(),
+          inputPreview: process.text.slice(0, 200),
+          inputText: process.text,
+          settings: process.settings,
+        },
+        { text: process.text, settings: process.settings },
+      )
+    }
+    setEditingProcess(null)
   }
 
   const filters: Array<{ key: 'all' | RunTool; label: string }> = [
@@ -916,7 +1218,9 @@ export default function Processes() {
                 ? 'The previous run was rejected because another run is already in progress on the backend. Resuming would just hit the same 409 — wait for the active run to finish, then resume.'
                 : queuePausedReason === 'duplicate'
                 ? 'The previous run was rejected as a duplicate of a recent submission. Tweak the input or wait a few seconds before resuming.'
-                : 'The previous run was rejected by the backend. Investigate before resuming.'}
+                : queuePausedReason === 'unknown'
+                ? 'The previous run was rejected by the backend. Investigate before resuming.'
+                : 'Pending jobs will wait here until you resume the queue.'}
             </p>
           </div>
           <button
@@ -932,7 +1236,15 @@ export default function Processes() {
       {/* `queue` now contains pending-only items (the currently-executing
           run is tracked separately and appears as a tracked run row above),
           so we render the full queue rather than `slice(1)`. */}
-      <QueueCard items={queue} onCancelQueued={cancelQueued} />
+      <QueueCard
+        items={queue}
+        paused={queuePaused}
+        onPause={pauseQueue}
+        onResume={resumeQueue}
+        onCancelQueued={cancelQueued}
+        onEditQueued={queueEditorForItem}
+        onReorderQueued={reorderQueued}
+      />
 
       {runRows.length === 0 && historyRows.length === 0 && queue.length === 0 && liveState.status !== 'running' ? (
         <EmptyState
@@ -952,6 +1264,8 @@ export default function Processes() {
               key={r.id}
               run={r}
               onRemove={remove}
+              onRegenerate={regenerateRun}
+              onEditRegenerate={editRegenerateRun}
               highlight={
                 (!!highlightOp &&
                   (r.operationId === highlightOp || r.id === highlightOp)) ||
@@ -975,6 +1289,13 @@ export default function Processes() {
             </>
           )}
         </div>
+      )}
+      {editingProcess && (
+        <ProcessEditModal
+          process={editingProcess}
+          onClose={() => setEditingProcess(null)}
+          onSave={saveEditedProcess}
+        />
       )}
     </div>
   )

@@ -9,14 +9,18 @@ import time
 from flask import Blueprint, request, jsonify, send_file
 
 THUMBNAILS_FOLDER = 'output/thumbnails'
+PRESENTATIONS_FOLDER = 'output/presentations'
+VIDEOS_FOLDER = 'output/videos'
 os.makedirs(THUMBNAILS_FOLDER, exist_ok=True)
+os.makedirs(PRESENTATIONS_FOLDER, exist_ok=True)
+os.makedirs(VIDEOS_FOLDER, exist_ok=True)
 
 from core.ai_client import cache
 from utils.performance_metrics import metrics_tracker
 from routes.helpers import (
     OUTPUT_FOLDER, HTML_FOLDER,
     get_next_batch_id, sanitize_folder_path,
-    take_screenshots, get_history,
+    take_screenshots, get_history, clear_history,
     log_generation,
 )
 
@@ -137,9 +141,11 @@ def download_file(filepath):
 
 @resources_bp.route('/list')
 def list_files():
-    """List all generated screenshots and HTML files."""
+    """List all generated screenshots, HTML files, presentations, and videos."""
     screenshots = []
     html_files = []
+    presentation_files = []
+    video_files = []
 
     if os.path.exists(OUTPUT_FOLDER):
         for f in os.listdir(OUTPUT_FOLDER):
@@ -156,19 +162,42 @@ def list_files():
         html_files = [f for f in os.listdir(HTML_FOLDER) if f.endswith('.html')]
         html_files.sort(reverse=True)
 
-    return jsonify({'screenshots': screenshots, 'html_files': html_files})
+    if os.path.exists(PRESENTATIONS_FOLDER):
+        presentation_files = [
+            f for f in os.listdir(PRESENTATIONS_FOLDER)
+            if f.lower().endswith(('.pptx', '.pptm'))
+        ]
+        presentation_files.sort(reverse=True)
+
+    if os.path.exists(VIDEOS_FOLDER):
+        video_files = [
+            f for f in os.listdir(VIDEOS_FOLDER)
+            if f.lower().endswith(('.mp4', '.mov', '.webm'))
+        ]
+        video_files.sort(reverse=True)
+
+    return jsonify({
+        'screenshots': screenshots,
+        'html_files': html_files,
+        'presentation_files': presentation_files,
+        'video_files': video_files,
+    })
 
 
 # ─── Delete ────────────────────────────────────────────────────────────────
 
 @resources_bp.route('/delete/<file_type>/<path:filename>', methods=['DELETE'])
 def delete_file_route(file_type, filename):
-    """Delete a screenshot or HTML file."""
+    """Delete a generated screenshot, HTML, presentation, or video file."""
     try:
         if file_type == 'screenshot':
             folder = OUTPUT_FOLDER
         elif file_type == 'html':
             folder = HTML_FOLDER
+        elif file_type == 'presentation':
+            folder = PRESENTATIONS_FOLDER
+        elif file_type == 'video':
+            folder = VIDEOS_FOLDER
         else:
             return jsonify({'error': 'Invalid file type'}), 400
 
@@ -311,6 +340,14 @@ def download_zip():
 def history():
     """Get generation history."""
     return jsonify(get_history())
+
+
+@resources_bp.route('/history/clear', methods=['POST'])
+def clear_history_route():
+    """Clear saved backend generation history."""
+    if clear_history():
+        return jsonify({'success': True, 'message': 'History cleared successfully'})
+    return jsonify({'success': False, 'error': 'Failed to clear history'}), 500
 
 
 # ─── Cache ─────────────────────────────────────────────────────────────────

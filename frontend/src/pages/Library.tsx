@@ -5,8 +5,10 @@ import {
   Download,
   Eye,
   FileText,
+  Film,
   Image as ImageIcon,
   Loader2,
+  Presentation,
   RefreshCw,
   Search,
   Trash2,
@@ -19,12 +21,26 @@ import EmptyState from '../components/EmptyState'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
 
-type AssetKind = 'html' | 'screenshot'
+type AssetKind = 'html' | 'screenshot' | 'presentation' | 'video'
 type SortKey = 'name-asc' | 'name-desc'
 
 interface Preview {
   kind: AssetKind
   filename: string
+}
+
+function kindLabel(kind: AssetKind): string {
+  if (kind === 'screenshot') return 'screenshots'
+  if (kind === 'html') return 'HTML files'
+  if (kind === 'presentation') return 'PowerPoint files'
+  return 'videos'
+}
+
+function kindIcon(kind: AssetKind): React.ReactNode {
+  if (kind === 'screenshot') return <ImageIcon size={20} />
+  if (kind === 'html') return <FileText size={20} />
+  if (kind === 'presentation') return <Presentation size={20} />
+  return <Film size={20} />
 }
 
 /**
@@ -41,6 +57,8 @@ export default function Library() {
   const [kind, setKind] = useState<AssetKind>('screenshot')
   const [screenshots, setScreenshots] = useState<string[]>([])
   const [htmlFiles, setHtmlFiles] = useState<string[]>([])
+  const [presentationFiles, setPresentationFiles] = useState<string[]>([])
+  const [videoFiles, setVideoFiles] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -58,6 +76,8 @@ export default function Library() {
       const r = await api.list()
       setScreenshots(r.screenshots ?? [])
       setHtmlFiles(r.html_files ?? [])
+      setPresentationFiles(r.presentation_files ?? [])
+      setVideoFiles(r.video_files ?? [])
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -80,7 +100,14 @@ export default function Library() {
     setSelected(new Set())
   }
 
-  const raw = kind === 'screenshot' ? screenshots : htmlFiles
+  const raw =
+    kind === 'screenshot'
+      ? screenshots
+      : kind === 'html'
+      ? htmlFiles
+      : kind === 'presentation'
+      ? presentationFiles
+      : videoFiles
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     const list = q ? raw.filter((f) => f.toLowerCase().includes(q)) : [...raw]
@@ -135,7 +162,11 @@ export default function Library() {
   }
 
   const urlFor = (name: string) =>
-    kind === 'screenshot' ? api.screenshotUrl(name) : api.htmlUrl(name)
+    kind === 'screenshot'
+      ? api.screenshotUrl(name)
+      : kind === 'html'
+      ? api.htmlUrl(name)
+      : api.downloadUrl(kind === 'presentation' ? `output/presentations/${name}` : `output/videos/${name}`)
 
   const onDownloadOne = (name: string) => {
     const a = document.createElement('a')
@@ -181,10 +212,15 @@ export default function Library() {
     if (!ok) return
     setWorking(true)
     try {
-      const type = kind === 'screenshot' ? 'screenshot' : 'html'
-      await Promise.all(
-        [...selected].map((name) => api.deleteFile(type as 'screenshot' | 'html', name)),
-      )
+      const type =
+        kind === 'screenshot'
+          ? 'screenshot'
+          : kind === 'html'
+          ? 'html'
+          : kind === 'presentation'
+          ? 'presentation'
+          : 'video'
+      await Promise.all([...selected].map((name) => api.deleteFile(type, name)))
       const removed = selected.size
       setSelected(new Set())
       await load()
@@ -208,8 +244,8 @@ export default function Library() {
             Library
           </h1>
           <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-            Every HTML file and screenshot produced by the backend. Preview,
-            download, or clean up.
+            Every screenshot, HTML file, PowerPoint deck, and video produced
+            by the backend. Preview, download, or clean up.
           </p>
         </div>
         <button type="button" className="btn-secondary" onClick={load} disabled={loading}>
@@ -222,6 +258,8 @@ export default function Library() {
         kind={kind}
         screenshots={screenshots.length}
         htmlFiles={htmlFiles.length}
+        presentationFiles={presentationFiles.length}
+        videoFiles={videoFiles.length}
         onSwitch={switchKind}
       />
 
@@ -229,7 +267,7 @@ export default function Library() {
       <div className="card flex flex-wrap items-center gap-3">
         <div className="relative min-w-[220px] flex-1">
           <label htmlFor="library-search" className="sr-only">
-            Search {kind === 'screenshot' ? 'screenshots' : 'HTML files'}
+            Search {kindLabel(kind)}
           </label>
           <Search
             size={14}
@@ -240,7 +278,7 @@ export default function Library() {
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={`Search ${kind === 'screenshot' ? 'screenshots' : 'HTML files'}…`}
+            placeholder={`Search ${kindLabel(kind)}...`}
             className="input !pl-9"
           />
         </div>
@@ -305,8 +343,8 @@ export default function Library() {
       ) : filtered.length === 0 ? (
         raw.length === 0 ? (
           <EmptyState
-            icon={kind === 'screenshot' ? <ImageIcon size={20} /> : <FileText size={20} />}
-            title={kind === 'screenshot' ? 'No screenshots yet' : 'No HTML files yet'}
+            icon={kindIcon(kind)}
+            title={`No ${kindLabel(kind)} yet`}
             description={
               <>
                 Run a Text→Video, HTML→Video, or Image→Video job and the
@@ -344,7 +382,7 @@ export default function Library() {
             onLoadMore={() => setVisibleCount((n) => Math.min(n + LIBRARY_PAGE_SIZE, filtered.length))}
           />
         </>
-      ) : (
+      ) : kind === 'html' ? (
         <>
           <div className="card divide-y divide-slate-100 dark:divide-white/5">
             {visible.map((name) => (
@@ -366,17 +404,48 @@ export default function Library() {
             onLoadMore={() => setVisibleCount((n) => Math.min(n + LIBRARY_PAGE_SIZE, filtered.length))}
           />
         </>
+      ) : (
+        <>
+          <div className="card divide-y divide-slate-100 dark:divide-white/5">
+            {visible.map((name) => (
+              <GeneratedFileRow
+                key={name}
+                kind={kind}
+                name={name}
+                selected={selected.has(name)}
+                onToggle={() => toggleOne(name)}
+                onPreview={kind === 'video' ? () => setPreview({ kind: 'video', filename: name }) : undefined}
+                onDownload={() => onDownloadOne(name)}
+              />
+            ))}
+          </div>
+          <LibraryPaginator
+            sentinelRef={sentinelRef}
+            hasMore={hasMore}
+            shown={visible.length}
+            total={filtered.length}
+            onLoadMore={() => setVisibleCount((n) => Math.min(n + LIBRARY_PAGE_SIZE, filtered.length))}
+          />
+        </>
       )}
       </div>
 
       {preview && (
-        <HtmlPreviewModal
-          kind={preview.kind === 'screenshot' ? 'image' : 'html'}
-          src={urlFor(preview.filename)}
-          title={preview.filename.split('/').pop() ?? preview.filename}
-          subtitle={preview.kind === 'html' ? 'HTML file' : preview.filename}
-          onClose={() => setPreview(null)}
-        />
+        preview.kind === 'video' ? (
+          <VideoPreviewModal
+            src={urlFor(preview.filename)}
+            title={preview.filename.split('/').pop() ?? preview.filename}
+            onClose={() => setPreview(null)}
+          />
+        ) : (
+          <HtmlPreviewModal
+            kind={preview.kind === 'screenshot' ? 'image' : 'html'}
+            src={urlFor(preview.filename)}
+            title={preview.filename.split('/').pop() ?? preview.filename}
+            subtitle={preview.kind === 'html' ? 'HTML file' : preview.filename}
+            onClose={() => setPreview(null)}
+          />
+        )
       )}
     </div>
   )
@@ -537,20 +606,129 @@ function HtmlRow({
 // WAI-ARIA tablist pattern with roving-tabindex + arrow-key navigation, so
 // Left/Right, Home/End walk between "Screenshots" and "HTML files" and the
 // active tab is the one in the document tab order.
+function GeneratedFileRow({
+  kind,
+  name,
+  selected,
+  onToggle,
+  onPreview,
+  onDownload,
+}: {
+  kind: 'presentation' | 'video'
+  name: string
+  selected: boolean
+  onToggle: () => void
+  onPreview?: () => void
+  onDownload: () => void
+}) {
+  const Icon = kind === 'presentation' ? Presentation : Film
+  return (
+    <div className="flex items-center gap-3 py-3">
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={onToggle}
+        className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-300"
+        aria-label={`Select ${name}`}
+      />
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-white/[0.05] dark:text-slate-300">
+        <Icon size={16} />
+      </div>
+      <div className="min-w-0 flex-1 text-sm font-medium text-slate-800 dark:text-slate-100">
+        <span className="block truncate">{name}</span>
+        <span className="text-xs font-normal text-slate-500 dark:text-slate-400">
+          {kind === 'presentation' ? 'PowerPoint deck' : 'MP4 video'}
+        </span>
+      </div>
+      {onPreview && (
+        <button type="button" onClick={onPreview} className="btn-ghost !px-2 !py-1" aria-label="Preview">
+          <Eye size={14} />
+        </button>
+      )}
+      <button type="button" onClick={onDownload} className="btn-ghost !px-2 !py-1" aria-label="Download">
+        <Download size={14} />
+      </button>
+    </div>
+  )
+}
+
+function VideoPreviewModal({
+  src,
+  title,
+  onClose,
+}: {
+  src: string
+  title: string
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [onClose])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={onClose} aria-hidden />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="glass-strong relative flex h-full max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-3 dark:border-white/10">
+          <div className="min-w-0">
+            <div className="truncate font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
+              {title}
+            </div>
+            <div className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">
+              Video file
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <a href={src} className="btn-secondary">
+              <Download size={14} /> Download
+            </a>
+            <button type="button" className="btn-ghost !px-2" onClick={onClose} aria-label="Close preview">
+              x
+            </button>
+          </div>
+        </div>
+        <div className="flex flex-1 items-center justify-center bg-slate-950 p-4">
+          <video src={src} controls autoPlay className="max-h-full max-w-full rounded-md bg-black" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function LibraryTabs({
   kind,
   screenshots,
   htmlFiles,
+  presentationFiles,
+  videoFiles,
   onSwitch,
 }: {
   kind: AssetKind
   screenshots: number
   htmlFiles: number
+  presentationFiles: number
+  videoFiles: number
   onSwitch: (next: AssetKind) => void
 }) {
   const tabs: { id: AssetKind; label: string; icon: typeof FileText; count: number }[] = [
     { id: 'screenshot', label: 'Screenshots', icon: ImageIcon, count: screenshots },
     { id: 'html', label: 'HTML files', icon: FileText, count: htmlFiles },
+    { id: 'presentation', label: 'PowerPoint', icon: Presentation, count: presentationFiles },
+    { id: 'video', label: 'Videos', icon: Film, count: videoFiles },
   ]
   const refs = useRef<Array<HTMLButtonElement | null>>([])
 

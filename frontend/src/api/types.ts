@@ -196,6 +196,8 @@ export interface HistoryEntry {
 export interface ListResponse {
   screenshots: string[]
   html_files: string[]
+  presentation_files?: string[]
+  video_files?: string[]
 }
 
 export interface CacheStats {

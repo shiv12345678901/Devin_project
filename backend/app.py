@@ -391,6 +391,7 @@ _API_EXACT = {
     '/download-zip',
     '/list',
     '/history',
+    '/history/clear',
     '/healthz',
     '/preflight',
     '/runs',

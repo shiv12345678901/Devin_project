@@ -1,6 +1,7 @@
 import json
 import os
-from typing import TypedDict, Dict, Any, cast
+import threading
+from typing import TypedDict, Dict, List, Optional, cast
 
 class ModelSpeed(TypedDict):
     chars_per_second: float
@@ -19,12 +20,32 @@ class ETAData(TypedDict):
     screenshots: ScreenshotSpeed
     verification: VerificationSpeed
 
+class ProcessEstimateSample(TypedDict):
+    input_chars: int
+    seconds: float
+
+class ProcessEstimateModel(TypedDict):
+    seconds_per_char: float
+    samples: int
+    runs: List[ProcessEstimateSample]
+
+class ProcessEstimateData(TypedDict):
+    min_samples: int
+    models: Dict[str, ProcessEstimateModel]
+
 class ETATracker:
     """Tracks and predicts completion times based on historical runs."""
     
-    def __init__(self, storage_path: str = "config/estimated_times.json") -> None:
+    def __init__(
+        self,
+        storage_path: str = "config/estimated_times.json",
+        process_storage_path: str = "config/process_time_estimates.json",
+    ) -> None:
         self.storage_path = storage_path
+        self.process_storage_path = process_storage_path
+        self._lock = threading.Lock()
         self.data: ETAData = self._load_data()
+        self.process_data: ProcessEstimateData = self._load_process_data()
         
     def _load_data(self) -> ETAData:
         """Load historical timing data from disk, or initialize defaults."""
@@ -51,6 +72,20 @@ class ETATracker:
             "screenshots": {"seconds_per_screenshot": 1.5, "samples": 0},
             "verification": {"average_seconds": 15.0, "samples": 0}
         })
+
+    def _load_process_data(self) -> ProcessEstimateData:
+        """Load successful process timing data used for user-facing ETAs."""
+        if os.path.exists(self.process_storage_path):
+            try:
+                with open(self.process_storage_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                data.setdefault("min_samples", 10)
+                data.setdefault("models", {})
+                return cast(ProcessEstimateData, data)
+            except Exception as e:
+                print(f"Warning: Error loading process ETA data: {e}")
+
+        return cast(ProcessEstimateData, {"min_samples": 10, "models": {}})
         
     def _save_data(self):
         """Save the current timing data to disk."""
@@ -61,6 +96,15 @@ class ETATracker:
         except Exception as e:
             print(f"⚠️ Error saving ETA data: {e}")
             
+    def _save_process_data(self):
+        """Save process ETA samples to disk."""
+        try:
+            os.makedirs(os.path.dirname(self.process_storage_path), exist_ok=True)
+            with open(self.process_storage_path, 'w', encoding='utf-8') as f:
+                json.dump(self.process_data, f, indent=4)
+        except Exception as e:
+            print(f"Warning: Error saving process ETA data: {e}")
+
     def record_verification(self, seconds: float):
         """Record the time taken for a verification pass."""
         if seconds <= 0:
@@ -124,6 +168,58 @@ class ETATracker:
             
         if updated:
             self._save_data()
+
+    def record_process_completion(self, model_choice: str, input_chars: int, total_seconds: float) -> None:
+        """Record a successful end-to-end process sample.
+
+        User-facing estimates intentionally use only the selected model and
+        input character count. Predictions stay hidden until a model has at
+        least ``min_samples`` successful process runs.
+        """
+        if input_chars <= 0 or total_seconds <= 0:
+            return
+
+        model = str(model_choice or "default")
+        sample: ProcessEstimateSample = {
+            "input_chars": int(input_chars),
+            "seconds": round(float(total_seconds), 3),
+        }
+
+        with self._lock:
+            models = self.process_data.setdefault("models", {})
+            if model not in models:
+                models[model] = cast(ProcessEstimateModel, {
+                    "seconds_per_char": 0.0,
+                    "samples": 0,
+                    "runs": [],
+                })
+
+            model_data = models[model]
+            runs = model_data.setdefault("runs", [])
+            runs.append(sample)
+            del runs[:-100]
+
+            total_chars = sum(max(0, int(r.get("input_chars", 0))) for r in runs)
+            total_time = sum(max(0.0, float(r.get("seconds", 0))) for r in runs)
+            model_data["samples"] = len(runs)
+            model_data["seconds_per_char"] = total_time / total_chars if total_chars > 0 else 0.0
+            self._save_process_data()
+
+    def predict_process_time(self, model_choice: str, input_chars: int) -> Optional[int]:
+        """Predict process seconds once the selected model has enough samples."""
+        if input_chars <= 0:
+            return None
+
+        model_data = self.process_data.get("models", {}).get(str(model_choice or "default"))
+        if not model_data:
+            return None
+        min_samples = int(self.process_data.get("min_samples", 10))
+        if int(model_data.get("samples", 0)) < min_samples:
+            return None
+        seconds_per_char = float(model_data.get("seconds_per_char", 0.0))
+        if seconds_per_char <= 0:
+            return None
+        return max(5, round(input_chars * seconds_per_char))
             
     def predict_total_time(self, model_choice, input_chars, estimated_screenshots=10, use_cache=False, enable_verification=True):
         """
