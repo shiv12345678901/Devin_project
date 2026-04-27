@@ -10,6 +10,7 @@ from typing import Callable
 from core.ai_client import unregister_operation
 from core import run_manager
 from core.workflow_runner import WorkflowContext, publish_run_event
+from utils.run_guard import RunRejected, begin_run, end_run
 
 
 @dataclass
@@ -73,7 +74,20 @@ def _worker_loop() -> None:
             _publish_queue_positions()
 
         ctx = WorkflowContext(job.run_id, job.operation_id, job.cancel_event)
+        # Hold the global single-flight slot for the duration of the job.
+        # Without this a queued text-to-video would happily run alongside a
+        # `/generate-sse` (or `/generate-html`, `/image-to-screenshots-sse`)
+        # request, doubling load on the Playwright pool / AI quota. The
+        # route used here (`/job-queue`) and run_id payload guarantee a
+        # unique fingerprint so we never trip the dedup window.
+        slot_held = False
         try:
+            try:
+                begin_run(job.operation_id, "/job-queue", {"run_id": job.run_id})
+                slot_held = True
+            except RunRejected as rr:
+                ctx.fail(f"Backend busy: {rr.message}")
+                continue
             if job.cancel_event.is_set():
                 ctx.cancel()
             else:
@@ -85,6 +99,8 @@ def _worker_loop() -> None:
             if run and run.get("status") not in {"completed", "failed", "cancelled"}:
                 ctx.fail(f"Error: {exc}")
         finally:
+            if slot_held:
+                end_run(job.operation_id)
             with _CONDITION:
                 _CURRENT = None
                 _publish_queue_positions()

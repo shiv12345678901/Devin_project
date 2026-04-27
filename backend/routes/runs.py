@@ -193,7 +193,12 @@ def start_text_to_video():
         return jsonify({
             "success": False,
             "error": f"This exact job is already {duplicate.get('status')}.",
+            # `reason` lines up with the keys the frontend's
+            # tryParseRejection() understands so the wizard can show its
+            # tailored "duplicate" banner instead of a generic 409 string.
+            "reason": "duplicate",
             "duplicate_run_id": duplicate.get("run_id"),
+            "operation_id": duplicate.get("operation_id"),
         }), 409
 
     operation_id = f"text_video_{int(time.time() * 1000)}"

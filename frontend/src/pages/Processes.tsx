@@ -17,6 +17,7 @@ import {
   ImageIcon,
   ListOrdered,
   Loader2,
+  Pause,
   RefreshCw,
   StopCircle,
   Trash2,
@@ -693,7 +694,15 @@ function QueueCard({
 
 export default function Processes() {
   const { runs, clear, remove } = useRuns()
-  const { queue, cancelQueued, cancel: cancelLive, state: liveState } = useGenerationQueue()
+  const {
+    queue,
+    cancelQueued,
+    cancel: cancelLive,
+    state: liveState,
+    paused: queuePaused,
+    pausedReason: queuePausedReason,
+    resumeQueue,
+  } = useGenerationQueue()
   const [searchParams] = useSearchParams()
   const highlightOp = searchParams.get('op')
   const highlightQueue = searchParams.get('queue')
@@ -889,6 +898,32 @@ export default function Processes() {
       {err && <div className="card text-sm text-red-600 dark:text-red-300">{err}</div>}
 
       <LiveRunCard onCancel={cancelLive} />
+      {queuePaused && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+        >
+          <Pause size={16} className="mt-0.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">Queue paused</p>
+            <p className="mt-0.5 text-xs opacity-90">
+              {queuePausedReason === 'in_flight'
+                ? 'The previous run was rejected because another run is already in progress on the backend. Resuming would just hit the same 409 — wait for the active run to finish, then resume.'
+                : queuePausedReason === 'duplicate'
+                ? 'The previous run was rejected as a duplicate of a recent submission. Tweak the input or wait a few seconds before resuming.'
+                : 'The previous run was rejected by the backend. Investigate before resuming.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn-secondary btn-sm shrink-0 self-center"
+            onClick={resumeQueue}
+            disabled={queue.length === 0}
+          >
+            Resume queue
+          </button>
+        </div>
+      )}
       <QueueCard items={queue.slice(1)} onCancelQueued={cancelQueued} />
 
       {runRows.length === 0 && historyRows.length === 0 && queue.length === 0 && liveState.status !== 'running' ? (
