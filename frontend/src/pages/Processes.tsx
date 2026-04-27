@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import {
   Activity,
@@ -29,7 +30,6 @@ import { formatRelative, formatRuntime, useRuns } from '../store/runs'
 import type { Run, RunStatus, RunTool } from '../store/runs'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
-import HtmlPreviewModal from '../components/HtmlPreviewModal'
 import ProgressBar from '../components/ProgressBar'
 import { useGenerationQueue } from '../hooks/useTrackedGenerate'
 import type { QueueItem } from '../hooks/useTrackedGenerate'
@@ -107,6 +107,7 @@ function RunRow({
   // setState from an effect just because the prop flipped.
   const open = userOpen || highlight
   const [preview, setPreview] = useState<string | null>(null)
+  const [videoPreview, setVideoPreview] = useState(false)
   const [previewIndex, setPreviewIndex] = useState(0)
   const [copiedInput, setCopiedInput] = useState(false)
   const toast = useToast()
@@ -305,76 +306,77 @@ function RunRow({
             </Section>
           </div>
 
+          {(run.videoFile || (hasOutputs && run.screenshotFiles && run.screenshotFiles.length > 0)) && (
+            <div className="grid gap-3 lg:grid-cols-2">
           {run.videoFile && (
             <div className="rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                   <Film size={16} className="shrink-0 text-brand-500" />
                   <div className="min-w-0">
                     <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                      Video preview
+                      Video
                     </div>
                     <div className="truncate text-xs text-slate-600 dark:text-slate-300">
                       {run.videoFile}
                     </div>
                   </div>
                 </div>
-                <a href={api.downloadUrl(run.videoFile)} className="btn-secondary btn-sm">
-                  <Download size={12} /> Download MP4
-                </a>
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setVideoPreview(true)}>
+                  Maximize
+                </button>
               </div>
-              <video
-                src={api.downloadUrl(run.videoFile)}
-                controls
-                preload="metadata"
-                className="aspect-video w-full rounded-md bg-black"
-              />
+              <button
+                type="button"
+                onClick={() => setVideoPreview(true)}
+                className="block aspect-video w-full overflow-hidden rounded-md bg-black"
+                title="Open video preview"
+              >
+                <video
+                  src={api.downloadUrl(run.videoFile)}
+                  preload="metadata"
+                  muted
+                  className="h-full w-full object-contain"
+                />
+              </button>
+              <a href={api.downloadUrl(run.videoFile)} className="btn-secondary btn-sm mt-2 w-full">
+                <Download size={12} /> Download MP4
+              </a>
             </div>
           )}
 
           {hasOutputs && run.screenshotFiles && run.screenshotFiles.length > 0 && (
             <div>
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                  Screenshot preview ({run.screenshotFiles.length})
+                  Screenshots
                 </div>
                 {selectedScreenshotUrl && (
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      className="btn-secondary btn-sm"
-                      onClick={() => movePreview(-1)}
-                      disabled={screenshots.length < 2}
-                    >
-                      <ChevronLeft size={12} /> Previous
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-secondary btn-sm"
-                      onClick={() => movePreview(1)}
-                      disabled={screenshots.length < 2}
-                    >
-                      Next <ChevronRight size={12} />
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    onClick={() => setPreview(selectedScreenshotUrl)}
+                  >
+                    Preview
+                  </button>
                 )}
               </div>
               {selectedScreenshotUrl && (
                 <button
                   type="button"
                   onClick={() => setPreview(selectedScreenshotUrl)}
-                  className="mb-3 block w-full overflow-hidden rounded-md border border-slate-200 bg-slate-50 text-left dark:border-white/10 dark:bg-white/[0.03]"
+                  className="mb-3 block aspect-video w-full overflow-hidden rounded-md border border-slate-200 bg-white text-left dark:border-white/10 dark:bg-slate-950"
                   title="Open screenshot preview"
                 >
                   <img
                     src={selectedScreenshotUrl}
                     alt={selectedScreenshot ?? 'Screenshot'}
-                    className="max-h-80 w-full object-contain"
+                    className="h-full w-full object-contain"
                   />
                 </button>
               )}
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-6 md:grid-cols-8">
-                {run.screenshotFiles.map((f, index) => {
+              <div className="grid grid-cols-6 gap-1">
+                {run.screenshotFiles.slice(0, 12).map((f, index) => {
                   // `f` is already a path relative to OUTPUT_FOLDER
                   // (e.g. "5(1).png" or "batch 3/5(1).png"). Do NOT prepend
                   // screenshotFolder — that double-prefixed the path and
@@ -388,8 +390,8 @@ function RunRow({
                       onClick={() => openScreenshot(index)}
                       className={
                         index === previewIndex
-                          ? 'block aspect-video overflow-hidden rounded-md border border-brand-400 bg-brand-50 text-left ring-2 ring-brand-400/30 dark:border-brand-400 dark:bg-brand-500/10'
-                          : 'block aspect-video overflow-hidden rounded-md border border-slate-200 bg-slate-50 text-left transition-shadow hover:shadow-glass-lg dark:border-white/10 dark:bg-white/[0.03]'
+                          ? 'block aspect-video overflow-hidden rounded border border-brand-400 bg-brand-50 text-left ring-1 ring-brand-400 dark:border-brand-400 dark:bg-brand-500/10'
+                          : 'block aspect-video overflow-hidden rounded border border-slate-200 bg-slate-50 text-left dark:border-white/10 dark:bg-white/[0.03]'
                       }
                       title={`Preview ${f.split('/').pop() ?? f}`}
                     >
@@ -400,13 +402,27 @@ function RunRow({
               </div>
             </div>
           )}
+            </div>
+          )}
 
-          {preview && (
-            <HtmlPreviewModal
+          {preview && selectedScreenshotUrl && (
+            <AssetPreviewModal
               kind="image"
               src={preview}
-              title={preview.split('/').pop() ?? 'Screenshot'}
+              title={selectedScreenshot?.split('/').pop() ?? 'Screenshot'}
+              subtitle={`${previewIndex + 1} of ${screenshots.length}`}
               onClose={() => setPreview(null)}
+              onPrevious={screenshots.length > 1 ? () => movePreview(-1) : undefined}
+              onNext={screenshots.length > 1 ? () => movePreview(1) : undefined}
+            />
+          )}
+
+          {videoPreview && run.videoFile && (
+            <AssetPreviewModal
+              kind="video"
+              src={api.downloadUrl(run.videoFile)}
+              title={run.videoFile.split('/').pop() ?? 'Video'}
+              onClose={() => setVideoPreview(false)}
             />
           )}
 
@@ -431,6 +447,81 @@ function formatHistoryTimestamp(ts: number | string | undefined): string {
     return new Date(num * 1000).toLocaleString()
   }
   return String(ts)
+}
+
+function AssetPreviewModal({
+  kind,
+  src,
+  title,
+  subtitle,
+  onClose,
+  onPrevious,
+  onNext,
+}: {
+  kind: 'image' | 'video'
+  src: string
+  title: string
+  subtitle?: string
+  onClose: () => void
+  onPrevious?: () => void
+  onNext?: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      if (e.key === 'ArrowLeft') onPrevious?.()
+      if (e.key === 'ArrowRight') onNext?.()
+    }
+    window.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [onClose, onNext, onPrevious])
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-sm" onClick={onClose} aria-hidden />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="glass-strong relative flex h-full max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden"
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-white/10">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-50">{title}</div>
+            {subtitle && <div className="text-xs text-slate-500 dark:text-slate-400">{subtitle}</div>}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {kind === 'image' && onPrevious && (
+              <button type="button" className="btn-secondary btn-sm" onClick={onPrevious}>
+                <ChevronLeft size={12} /> Previous
+              </button>
+            )}
+            {kind === 'image' && onNext && (
+              <button type="button" className="btn-secondary btn-sm" onClick={onNext}>
+                Next <ChevronRight size={12} />
+              </button>
+            )}
+            <button type="button" className="btn-ghost !px-2" onClick={onClose} aria-label="Close preview">
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+        <div className="flex flex-1 items-center justify-center overflow-auto bg-slate-50 p-4 dark:bg-slate-950/40">
+          {kind === 'video' ? (
+            <video src={src} controls autoPlay className="max-h-full max-w-full rounded-md bg-black" />
+          ) : (
+            <img src={src} alt={title} className="max-h-full max-w-full rounded-md object-contain shadow-lg" />
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
 }
 
 function HistoryRow({ entry }: { entry: HistoryEntry }) {
