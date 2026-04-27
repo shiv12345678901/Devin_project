@@ -1324,7 +1324,7 @@ function Field({
     <div className={className}>
       <label className="label">
         {label}
-        {required && <span className="ml-1 text-rose-500">*</span>}
+        {required && <span className="ml-1 text-rose-500 dark:text-rose-400">*</span>}
       </label>
       {children}
       {error && <FieldError message={error} />}

@@ -27,6 +27,16 @@ interface Preview {
   filename: string
 }
 
+/**
+ * How many library entries to render per "page". On a full repo a section
+ * can contain several hundred files — rendering the whole grid at once
+ * pushes the browser into tens of thousands of DOM nodes (4 tiles per
+ * card × 500+ = 2k image tags + metadata) and the scroll becomes
+ * unusable. We render in pages and auto-load the next page when the
+ * sentinel scrolls into view.
+ */
+const LIBRARY_PAGE_SIZE = 60
+
 export default function Library() {
   const [kind, setKind] = useState<AssetKind>('screenshot')
   const [screenshots, setScreenshots] = useState<string[]>([])
@@ -77,6 +87,37 @@ export default function Library() {
     list.sort((a, b) => (sort === 'name-asc' ? a.localeCompare(b) : b.localeCompare(a)))
     return list
   }, [raw, query, sort])
+
+  // Pagination — reset whenever the visible list identity changes (tab
+  // switch, search, sort, underlying list reloaded). We defer the reset
+  // with setTimeout(0) so the setState doesn't fire synchronously in an
+  // effect body (matches the `load()` pattern above and satisfies
+  // react-hooks/set-state-in-effect).
+  const [visibleCount, setVisibleCount] = useState(LIBRARY_PAGE_SIZE)
+  useEffect(() => {
+    const t = setTimeout(() => setVisibleCount(LIBRARY_PAGE_SIZE), 0)
+    return () => clearTimeout(t)
+  }, [kind, query, sort, raw])
+  const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
+  const hasMore = visibleCount < filtered.length
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!hasMore) return
+    const el = sentinelRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setVisibleCount((n) => Math.min(n + LIBRARY_PAGE_SIZE, filtered.length))
+          }
+        }
+      },
+      { rootMargin: '320px' },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [hasMore, filtered.length])
 
   const allSelected = filtered.length > 0 && filtered.every((f) => selected.has(f))
   const toggleAll = () => {
@@ -282,31 +323,49 @@ export default function Library() {
           />
         )
       ) : kind === 'screenshot' ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {filtered.map((name) => (
-            <ScreenshotCard
-              key={name}
-              name={name}
-              selected={selected.has(name)}
-              onToggle={() => toggleOne(name)}
-              onPreview={() => setPreview({ kind: 'screenshot', filename: name })}
-              onDownload={() => onDownloadOne(name)}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {visible.map((name) => (
+              <ScreenshotCard
+                key={name}
+                name={name}
+                selected={selected.has(name)}
+                onToggle={() => toggleOne(name)}
+                onPreview={() => setPreview({ kind: 'screenshot', filename: name })}
+                onDownload={() => onDownloadOne(name)}
+              />
+            ))}
+          </div>
+          <LibraryPaginator
+            sentinelRef={sentinelRef}
+            hasMore={hasMore}
+            shown={visible.length}
+            total={filtered.length}
+            onLoadMore={() => setVisibleCount((n) => Math.min(n + LIBRARY_PAGE_SIZE, filtered.length))}
+          />
+        </>
       ) : (
-        <div className="card divide-y divide-slate-100 dark:divide-white/5">
-          {filtered.map((name) => (
-            <HtmlRow
-              key={name}
-              name={name}
-              selected={selected.has(name)}
-              onToggle={() => toggleOne(name)}
-              onPreview={() => setPreview({ kind: 'html', filename: name })}
-              onDownload={() => onDownloadOne(name)}
-            />
-          ))}
-        </div>
+        <>
+          <div className="card divide-y divide-slate-100 dark:divide-white/5">
+            {visible.map((name) => (
+              <HtmlRow
+                key={name}
+                name={name}
+                selected={selected.has(name)}
+                onToggle={() => toggleOne(name)}
+                onPreview={() => setPreview({ kind: 'html', filename: name })}
+                onDownload={() => onDownloadOne(name)}
+              />
+            ))}
+          </div>
+          <LibraryPaginator
+            sentinelRef={sentinelRef}
+            hasMore={hasMore}
+            shown={visible.length}
+            total={filtered.length}
+            onLoadMore={() => setVisibleCount((n) => Math.min(n + LIBRARY_PAGE_SIZE, filtered.length))}
+          />
+        </>
       )}
       </div>
 
@@ -319,6 +378,37 @@ export default function Library() {
           onClose={() => setPreview(null)}
         />
       )}
+    </div>
+  )
+}
+
+function LibraryPaginator({
+  sentinelRef,
+  hasMore,
+  shown,
+  total,
+  onLoadMore,
+}: {
+  sentinelRef: React.MutableRefObject<HTMLDivElement | null>
+  hasMore: boolean
+  shown: number
+  total: number
+  onLoadMore: () => void
+}) {
+  if (total <= LIBRARY_PAGE_SIZE) return null
+  return (
+    <div className="mt-4 flex flex-col items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+      <div aria-live="polite">
+        Showing {shown.toLocaleString()} of {total.toLocaleString()} items
+      </div>
+      {hasMore ? (
+        <>
+          <button type="button" className="btn-secondary btn-sm" onClick={onLoadMore}>
+            Load more
+          </button>
+          <div ref={sentinelRef} aria-hidden="true" className="h-1 w-full" />
+        </>
+      ) : null}
     </div>
   )
 }
