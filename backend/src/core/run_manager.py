@@ -365,3 +365,40 @@ def find_active_run_by_fingerprint(
             if item.get("input_fingerprint") == input_fingerprint:
                 return item
         return None
+
+
+def find_recent_run_by_fingerprint(
+    tool: str,
+    input_fingerprint: str,
+    within_seconds: float,
+) -> dict[str, Any] | None:
+    """Return a recently-finished run with a matching fingerprint, if any.
+
+    Used as defense-in-depth against the client dispatching the same payload
+    twice in quick succession. ``find_active_run_by_fingerprint`` already
+    blocks simultaneous duplicates; this catches the narrower race where
+    the client fires a second identical submission within ``within_seconds``
+    of the first completing. Only ``completed`` runs are considered — a
+    recently failed/cancelled run should always be allowed to retry.
+    """
+    if within_seconds <= 0:
+        return None
+    now = time.time()
+    with _LOCK:
+        for item in _load_index():
+            if item.get("tool") != tool:
+                continue
+            if item.get("status") != "completed":
+                continue
+            if item.get("input_fingerprint") != input_fingerprint:
+                continue
+            finished_at = item.get("completed_at") or item.get("updated_at") or 0
+            try:
+                finished_at = float(finished_at)
+            except (TypeError, ValueError):
+                continue
+            if finished_at <= 0:
+                continue
+            if now - finished_at <= within_seconds:
+                return item
+        return None

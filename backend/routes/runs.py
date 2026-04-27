@@ -20,7 +20,13 @@ from core.ai_client import (
 )
 from core.job_queue import cancel_job, enqueue, get_queue_snapshot
 from core.powerpoint.controller import ExportError, PowerPointController, PowerPointNotFoundError, TemplateError
-from core.run_manager import create_run, find_active_run_by_fingerprint, get_run, list_runs
+from core.run_manager import (
+    create_run,
+    find_active_run_by_fingerprint,
+    find_recent_run_by_fingerprint,
+    get_run,
+    list_runs,
+)
 from core.workflow_runner import WorkflowContext, subscribe_run, unsubscribe_run
 from routes.helpers import OUTPUT_FOLDER, get_next_batch_id, log_generation, save_html, take_screenshots
 
@@ -199,6 +205,28 @@ def start_text_to_video():
             "reason": "duplicate",
             "duplicate_run_id": duplicate.get("run_id"),
             "operation_id": duplicate.get("operation_id"),
+        }), 409
+
+    # Defense-in-depth: also reject a second identical submission within a
+    # short window of the first one *completing*. The client-side queue
+    # already dedupes payloads, but a page reload, a racing retry, or an
+    # orphaned second tab can all resubmit the exact same job the moment
+    # the first finishes. The active-fingerprint check above doesn't catch
+    # those because at that instant the first run is no longer "active".
+    # Window is tuned to bounce accidental double-submits without blocking
+    # legitimate "try it again with the same input" retries.
+    try:
+        recent_window = float(os.environ.get("TEXT_VIDEO_RECENT_DEDUP_SECS", "30"))
+    except ValueError:
+        recent_window = 30.0
+    recent = find_recent_run_by_fingerprint("text-to-video", input_fingerprint, recent_window)
+    if recent:
+        return jsonify({
+            "success": False,
+            "error": "This exact job just finished moments ago — open the existing run instead of resubmitting.",
+            "reason": "duplicate",
+            "duplicate_run_id": recent.get("run_id"),
+            "operation_id": recent.get("operation_id"),
         }), 409
 
     operation_id = f"text_video_{int(time.time() * 1000)}"
