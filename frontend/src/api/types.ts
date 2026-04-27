@@ -73,18 +73,38 @@ export interface GenerateResponse {
   }
 }
 
+export interface BackendRunStartResponse {
+  success: boolean
+  run_id: string
+  operation_id: string
+  queue_position?: number
+  error?: string
+}
+
 export type SseEvent =
   | {
       type: 'started'
+      run_id?: string
       operation_id: string
       estimated_total_seconds?: number
       stage?: string
       progress?: number
+      message?: string
       /** Server-side per-run log file. Read via GET /logs/<op_id>?tail=N. */
       log_path?: string
     }
   | {
+      type: 'queued'
+      run_id?: string
+      operation_id?: string
+      message: string
+      progress?: number
+      queue_position?: number
+    }
+  | {
       type: 'progress'
+      run_id?: string
+      operation_id?: string
       stage: string
       message: string
       progress: number
@@ -114,9 +134,22 @@ export type SseEvent =
       operation_id?: string
       performance?: Record<string, number>
       message?: string
+      data?: {
+        success?: boolean
+        message?: string
+        html_filename?: string
+        html_file?: string
+        screenshot_files?: string[]
+        screenshot_count?: number
+        screenshot_folder?: string
+        presentation_file?: string
+        presentation_path?: string
+        video_file?: string
+        video_path?: string
+      }
     }
-  | { type: 'error'; message: string; log_path?: string }
-  | { type: 'cancelled'; message: string }
+  | { type: 'error'; run_id?: string; operation_id?: string; message: string; log_path?: string }
+  | { type: 'cancelled'; run_id?: string; operation_id?: string; message: string }
 
 export interface HistoryEntry {
   id?: string | number

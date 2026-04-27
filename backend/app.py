@@ -141,11 +141,18 @@ from routes.generate import generate_bp  # noqa: E402
 from routes.html_routes import html_bp  # noqa: E402
 from routes.image_routes import image_bp  # noqa: E402
 from routes.resources import resources_bp  # noqa: E402
+from routes.runs import runs_bp  # noqa: E402
+from core.run_manager import mark_interrupted_active_runs  # noqa: E402
 
 app.register_blueprint(generate_bp)
 app.register_blueprint(html_bp)
 app.register_blueprint(image_bp)
 app.register_blueprint(resources_bp)
+app.register_blueprint(runs_bp)
+
+_interrupted_runs = mark_interrupted_active_runs()
+if _interrupted_runs:
+    print(f"Marked {_interrupted_runs} stale queued/running process(es) as interrupted", flush=True)
 
 
 # ─── Health & Preflight ───────────────────────────────────────────────────
@@ -233,38 +240,51 @@ def preflight():
     except Exception as e:  # pragma: no cover — surfaces in UI
         checks['ai_config']['detail'] = f'Failed to load config: {e}'
 
-    # PowerPoint: only succeeds on Windows with pywin32 + PowerPoint. We MUST
-    # call Quit() afterwards, otherwise every /preflight hit spawns a new
-    # POWERPNT.EXE process that never exits (the wizard triggers preflight
-    # before every run, so this leak accumulates fast).
+    # PowerPoint: normal preflight must not launch PowerPoint. The older
+    # probe spawned POWERPNT.EXE just to test COM, making export look like it
+    # started before screenshots existed. Use ?fresh=1&powerpoint=1 for the
+    # expensive manual launch check.
     if _platform.system() == 'Windows':
-        app_obj = None
-        com_initialized = False
-        try:
-            import pythoncom  # type: ignore
-            import win32com.client  # type: ignore
+        if request.args.get('powerpoint') == '1':
+            app_obj = None
+            com_initialized = False
+            try:
+                import pythoncom  # type: ignore
+                import win32com.client  # type: ignore
 
-            pythoncom.CoInitialize()
-            com_initialized = True
-            app_obj = win32com.client.DispatchEx('PowerPoint.Application')
-            version = getattr(app_obj, 'Version', 'unknown')
-            checks['powerpoint']['ok'] = True
-            checks['powerpoint']['detail'] = f'PowerPoint {version} detected'
-        except Exception as e:
-            checks['powerpoint']['detail'] = (
-                f'Optional for screenshots; PowerPoint not available: {e}'
-            )
-        finally:
-            if app_obj is not None:
-                try:
-                    app_obj.Quit()
-                except Exception:
-                    pass
-            if com_initialized:
-                try:
-                    pythoncom.CoUninitialize()  # type: ignore[name-defined]
-                except Exception:
-                    pass
+                pythoncom.CoInitialize()
+                com_initialized = True
+                app_obj = win32com.client.DispatchEx('PowerPoint.Application')
+                version = getattr(app_obj, 'Version', 'unknown')
+                checks['powerpoint']['ok'] = True
+                checks['powerpoint']['detail'] = f'PowerPoint {version} detected'
+            except Exception as e:
+                checks['powerpoint']['detail'] = (
+                    f'Optional for screenshots; PowerPoint not available: {e}'
+                )
+            finally:
+                if app_obj is not None:
+                    try:
+                        app_obj.Quit()
+                    except Exception:
+                        pass
+                if com_initialized:
+                    try:
+                        pythoncom.CoUninitialize()  # type: ignore[name-defined]
+                    except Exception:
+                        pass
+        else:
+            try:
+                import pythoncom  # type: ignore # noqa: F401
+                import win32com.client  # type: ignore # noqa: F401
+                checks['powerpoint']['ok'] = True
+                checks['powerpoint']['detail'] = (
+                    'pywin32 is installed; PowerPoint launch skipped during normal preflight'
+                )
+            except Exception as e:
+                checks['powerpoint']['detail'] = (
+                    f'pywin32 not available; PowerPoint export may fail: {e}'
+                )
     else:
         checks['powerpoint']['detail'] = (
             f'PowerPoint COM is Windows-only; this host is {_platform.system()}'
@@ -373,10 +393,13 @@ _API_EXACT = {
     '/history',
     '/healthz',
     '/preflight',
+    '/runs',
+    '/runs/queue',
     '/upload-thumbnail',
 }
 _API_PATH_PREFIXES = (
     '/cancel/',
+    '/runs/',
     '/screenshots/',
     '/html/',
     '/thumbnails/',

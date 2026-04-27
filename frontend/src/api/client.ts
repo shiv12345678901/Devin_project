@@ -6,6 +6,7 @@ import type {
   ListResponse,
   PreflightResponse,
   SseEvent,
+  BackendRunStartResponse,
 } from './types'
 
 // Base URL for the Flask backend. Starts from the build-time env var, but can
@@ -78,11 +79,17 @@ export const api = {
   generate: (text: string, settings: GenerateSettings = {}) =>
     postJson<GenerateResponse>('/generate', { text, ...settings }),
 
+  startTextToVideoRun: (text: string, settings: GenerateSettings = {}) =>
+    postJson<BackendRunStartResponse>('/runs/text-to-video', { text, ...settings }),
+
   generateHtml: (html: string, settings: GenerateSettings = {}) =>
     postJson<GenerateResponse>('/generate-html', { html, ...settings }),
 
   cancel: (operationId: string) =>
     postJson<{ success: boolean; message: string }>(`/cancel/${encodeURIComponent(operationId)}`, {}),
+
+  cancelRun: (runId: string) =>
+    postJson<{ success: boolean; message: string }>(`/runs/${encodeURIComponent(runId)}/cancel`, {}),
 
   beautify: (html: string) => postJson<{ html: string; validation: unknown }>('/beautify', { html }),
   minify: (html: string) =>
@@ -226,6 +233,46 @@ export async function streamSse(path: string, opts: SseStreamOptions): Promise<v
       try {
         const parsed = JSON.parse(raw) as SseEvent
         opts.onEvent(parsed)
+      } catch {
+        // Ignore non-JSON keepalives / comments.
+      }
+    }
+  }
+}
+
+export async function streamSseGet(
+  path: string,
+  opts: Pick<SseStreamOptions, 'signal' | 'onEvent'>,
+): Promise<void> {
+  const res = await fetch(buildUrl(path), {
+    method: 'GET',
+    headers: { Accept: 'text/event-stream' },
+    signal: opts.signal,
+  })
+  if (!res.ok || !res.body) {
+    const text = !res.ok ? await res.text().catch(() => '') : ''
+    throw new Error(`SSE request failed: ${res.status} ${res.statusText} ${text.slice(0, 200)}`)
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const parts = buffer.split(/\r?\n\r?\n/)
+    buffer = parts.pop() ?? ''
+    for (const part of parts) {
+      const dataLines = part
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('data:'))
+        .map((l) => l.slice(5).trimStart())
+      if (dataLines.length === 0) continue
+      const raw = dataLines.join('\n')
+      try {
+        opts.onEvent(JSON.parse(raw) as SseEvent)
       } catch {
         // Ignore non-JSON keepalives / comments.
       }

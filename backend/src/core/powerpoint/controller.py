@@ -545,7 +545,9 @@ class PowerPointController:
         resolution: tuple = (3840, 2160),
         fps: int = 30,
         quality: int = 5,
-        base_slide_index: int = 3
+        base_slide_index: int = 3,
+        progress_callback=None,
+        cancel_event=None
     ) -> dict:
         """
         Full workflow: Create presentation from template + export to video.
@@ -596,7 +598,9 @@ class PowerPointController:
                 template_path=template_path,
                 image_files=image_files,
                 output_path=output_pptx_path,
-                base_slide_index=base_slide_index
+                base_slide_index=base_slide_index,
+                progress_callback=progress_callback,
+                cancel_event=cancel_event
             )
             result['presentation_path'] = output_pptx_path
             
@@ -612,9 +616,15 @@ class PowerPointController:
                 width=width,
                 height=height,
                 fps=fps,
-                quality=quality
+                quality=quality,
+                default_slide_duration=slide_duration,
+                progress_callback=progress_callback,
+                cancel_event=cancel_event
             )
-            result['video_path'] = output_video_path
+            if Path(output_video_path).exists() and Path(output_video_path).stat().st_size > 0:
+                result['video_path'] = output_video_path
+            else:
+                result['warning'] = "PowerPoint reported completion, but the MP4 file was not found."
             
             return result
             

@@ -169,7 +169,10 @@ class PowerPointExporter:
         width: int = 3840,
         height: int = 2160,
         fps: int = 30,
-        quality: int = 5
+        quality: int = 5,
+        default_slide_duration: float = 3.0,
+        progress_callback=None,
+        cancel_event=None
     ) -> None:
         """Export presentation to video using PowerPoint's native export.
         
@@ -181,7 +184,10 @@ class PowerPointExporter:
             width: Video width in pixels (default: 3840 for 4K)
             height: Video height in pixels (default: 2160 for 4K)
             fps: Frames per second (default: 30)
-            quality: Video quality 1-5, where 5 is highest (default: 5)
+            quality: Video quality 1-100, or legacy 1-5 (default: 5)
+            default_slide_duration: Fallback seconds per slide
+            progress_callback: Optional callback(dict) for progress updates
+            cancel_event: Optional threading.Event for cancellation
             
         Raises:
             RuntimeError: If no presentation is open or export fails
@@ -190,9 +196,14 @@ class PowerPointExporter:
         if self.presentation is None:
             raise RuntimeError("No presentation is open. Call open_presentation() first.")
         
-        # Validate quality parameter
-        if not 1 <= quality <= 5:
-            raise ValueError(f"Quality must be between 1 and 5, got: {quality}")
+        def _normalize_quality(q: int) -> int:
+            if 1 <= int(q) <= 5:
+                return {1: 20, 2: 40, 3: 60, 4: 80, 5: 100}[int(q)]
+            if 1 <= int(q) <= 100:
+                return int(q)
+            raise ValueError(f"Quality must be 1-100 (or legacy 1-5), got: {q}")
+
+        quality_100 = _normalize_quality(int(quality))
         
         # Ensure output directory exists
         output_dir = Path(output_path).parent
@@ -215,8 +226,11 @@ class PowerPointExporter:
         
         for attempt in range(max_retries):
             try:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeError("Operation cancelled")
                 # PowerPoint CreateVideo method parameters:
-                # CreateVideo(FileName, UseTimingsAndNarrations, VertResolution, 
+                # CreateVideo(FileName, UseTimingsAndNarrations,
+                #             DefaultSlideDuration, VertResolution,
                 #             FramesPerSecond, Quality)
                 # 
                 # UseTimingsAndNarrations: True to use slide timings
@@ -226,21 +240,42 @@ class PowerPointExporter:
                 
                 logger.info(
                     f"Starting video export: {abs_output_path} "
-                    f"({width}x{height}, {fps}fps, quality={quality})"
+                    f"({width}x{height}, {fps}fps, quality={quality_100})"
                 )
-                
-                self.presentation.CreateVideo(
-                    abs_output_path,
-                    True,  # Use timings and narrations
-                    height,  # Vertical resolution (PowerPoint uses vertical resolution)
-                    fps,
-                    quality
-                )
+                if progress_callback:
+                    progress_callback({
+                        "stage": "video_export",
+                        "progress": 95,
+                        "message": "Video export started",
+                        "output_path": abs_output_path,
+                    })
+
+                try:
+                    self.presentation.CreateVideo(
+                        abs_output_path,
+                        True,  # Use timings and narrations
+                        float(default_slide_duration),
+                        int(height),  # Vertical resolution (PowerPoint uses vertical resolution)
+                        int(fps),
+                        int(quality_100),
+                    )
+                except Exception:
+                    self.presentation.CreateVideo(
+                        abs_output_path,
+                        True,
+                        int(height),
+                        int(fps),
+                        int(quality_100),
+                    )
                 
                 # Wait for export to complete
                 # PowerPoint's CreateVideo is asynchronous, so we need to wait
                 # for the file to be created and finalized
-                self._wait_for_video_export(abs_output_path)
+                self._wait_for_video_export(
+                    abs_output_path,
+                    progress_callback=progress_callback,
+                    cancel_event=cancel_event,
+                )
                 
                 logger.info(f"Video export completed: {abs_output_path}")
                 return
@@ -262,7 +297,9 @@ class PowerPointExporter:
         self, 
         output_path: str, 
         timeout: int = 1800,
-        check_interval: int = 5
+        check_interval: int = 5,
+        progress_callback=None,
+        cancel_event=None
     ) -> None:
         """Wait for video export to complete.
         
@@ -281,11 +318,14 @@ class PowerPointExporter:
         last_size = 0
         stable_count = 0
         stable_threshold = 3  # Number of checks with same size to consider complete
+        status_done_seen = False
         
         logger.info(f"Waiting for video export to complete (timeout: {timeout}s)...")
         
         while True:
             elapsed = time.time() - start_time
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("Operation cancelled")
             
             # Check timeout
             if elapsed > timeout:
@@ -293,10 +333,32 @@ class PowerPointExporter:
                     f"Video export did not complete within {timeout} seconds"
                 )
             
+            try:
+                status = None
+                if self.presentation is not None and hasattr(self.presentation, "CreateVideoStatus"):
+                    status = int(self.presentation.CreateVideoStatus)
+                if status == 2:
+                    status_done_seen = True
+                if status == 3:
+                    raise RuntimeError("PowerPoint reported CreateVideoStatus=Failed")
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
+
             # Check if file exists and get size
             if os.path.exists(output_path):
                 try:
                     current_size = os.path.getsize(output_path)
+                    if progress_callback:
+                        progress_callback({
+                            "stage": "video_export",
+                            "progress": 97,
+                            "message": "Video export in progress",
+                            "elapsed_seconds": int(elapsed),
+                            "size_bytes": int(current_size),
+                            "output_path": output_path,
+                        })
                     
                     # Check if file size is stable (not growing)
                     if current_size == last_size and current_size > 0:
@@ -306,6 +368,14 @@ class PowerPointExporter:
                             logger.info(
                                 f"Video export complete. File size: {current_size} bytes"
                             )
+                            if progress_callback:
+                                progress_callback({
+                                    "stage": "video_complete",
+                                    "progress": 99,
+                                    "message": "Video export completed",
+                                    "size_bytes": int(current_size),
+                                    "output_path": output_path,
+                                })
                             return
                     else:
                         stable_count = 0
@@ -317,6 +387,14 @@ class PowerPointExporter:
                 except OSError as e:
                     # File might be locked during write
                     logger.debug(f"Could not check file size: {e}")
+            elif status_done_seen and progress_callback:
+                progress_callback({
+                    "stage": "video_export",
+                    "progress": 98,
+                    "message": "Finalizing video file...",
+                    "elapsed_seconds": int(elapsed),
+                    "output_path": output_path,
+                })
             
             # Wait before next check
             time.sleep(check_interval)
@@ -326,7 +404,9 @@ class PowerPointExporter:
         template_path: str,
         image_files: list,
         output_path: str,
-        base_slide_index: int = 3
+        base_slide_index: int = 3,
+        progress_callback=None,
+        cancel_event=None
     ) -> str:
         """
         Create presentation from template using COM automation.
@@ -393,6 +473,15 @@ class PowerPointExporter:
             total_slides = self.presentation.Slides.Count
             print(f"DEBUG: Template opened successfully. Total slides: {total_slides}")
             logger.info(f"Template opened: {total_slides} slides")
+            if progress_callback:
+                progress_callback({
+                    "stage": "powerpoint",
+                    "progress": 90,
+                    "message": "Template opened",
+                    "total_slides": int(total_slides),
+                })
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("Operation cancelled")
             
             if total_slides < base_slide_index:
                 raise ValueError(
@@ -406,6 +495,8 @@ class PowerPointExporter:
             if total_slides > base_slide_index + 1:
                 # Delete from the end backward to avoid index shifting
                 for i in range(total_slides - 1, base_slide_index, -1):
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RuntimeError("Operation cancelled")
                     try:
                         self.presentation.Slides(i).Delete()
                         logger.debug(f"Deleted old content slide at index {i}")
@@ -420,18 +511,22 @@ class PowerPointExporter:
             # Step 2: Duplicate base slide for each image
             # The base slide is at index base_slide_index (1-based)
             base_slide = self.presentation.Slides(base_slide_index)
+            slide_width = self.presentation.PageSetup.SlideWidth
+            slide_height = self.presentation.PageSetup.SlideHeight
+            self._clear_full_bleed_images(base_slide, slide_width, slide_height)
             
             # Duplicate (count - 1) times (base slide itself will get the first image)
             for i in range(len(sorted_images) - 1):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeError("Operation cancelled")
                 base_slide.Duplicate()
             
             logger.info(f"Duplicated base slide {len(sorted_images) - 1} times")
             
             # Step 3: Insert images into slides starting at base_slide_index
-            slide_width = self.presentation.PageSetup.SlideWidth
-            slide_height = self.presentation.PageSetup.SlideHeight
-            
             for i, img_path in enumerate(sorted_images):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeError("Operation cancelled")
                 slide_idx = base_slide_index + i
                 abs_img = str(Path(img_path).resolve())
                 
@@ -440,6 +535,7 @@ class PowerPointExporter:
                     continue
                 
                 slide = self.presentation.Slides(slide_idx)
+                self._clear_full_bleed_images(slide, slide_width, slide_height)
                 
                 print(f"DEBUG: Inserting image {abs_img} into slide {slide_idx}...")
                 # Add picture: msoFalse = 0, msoTrue = -1
@@ -456,6 +552,16 @@ class PowerPointExporter:
                 # Send image to back (behind watermark and other elements)
                 pic.ZOrder(1) # 1 = msoSendToBack
                 print(f"DEBUG: Image {i+1}/{len(sorted_images)} inserted successfully.")
+                if progress_callback:
+                    progress_callback({
+                        "stage": "powerpoint",
+                        "progress": 90 + int(((i + 1) / max(len(sorted_images), 1)) * 4),
+                        "message": f"Inserted screenshot {i+1}/{len(sorted_images)}",
+                        "screenshot_index": int(i + 1),
+                        "screenshots_total": int(len(sorted_images)),
+                        "slide_index": int(slide_idx),
+                        "filename": os.path.basename(img_path),
+                    })
                 
                 logger.debug(f"Inserted image {os.path.basename(img_path)} into slide {slide_idx}")
             
@@ -474,6 +580,13 @@ class PowerPointExporter:
             self.presentation.SaveAs(abs_output, save_format)
             print("DEBUG: Presentation saved successfully.")
             logger.info(f"Presentation saved: {abs_output}")
+            if progress_callback:
+                progress_callback({
+                    "stage": "powerpoint_complete",
+                    "progress": 94,
+                    "message": "Presentation saved",
+                    "presentation_path": abs_output,
+                })
             
             return output_path
             
@@ -481,6 +594,31 @@ class PowerPointExporter:
             logger.error(f"Error creating presentation from template: {e}")
             raise
     
+    def _clear_full_bleed_images(self, slide, slide_width: float, slide_height: float) -> None:
+        """Remove full-slide picture placeholders while preserving overlays."""
+        picture_types = {11, 13}  # msoLinkedPicture, msoPicture
+        tol_w = slide_width * 0.02
+        tol_h = slide_height * 0.02
+        for i in range(slide.Shapes.Count, 0, -1):
+            try:
+                shape = slide.Shapes(i)
+                if int(getattr(shape, "Type", -1)) not in picture_types:
+                    continue
+                left = float(shape.Left)
+                top = float(shape.Top)
+                width = float(shape.Width)
+                height = float(shape.Height)
+                full_bleed = (
+                    abs(left) <= tol_w and
+                    abs(top) <= tol_h and
+                    abs(width - slide_width) <= tol_w and
+                    abs(height - slide_height) <= tol_h
+                )
+                if full_bleed:
+                    shape.Delete()
+            except Exception:
+                continue
+
 
     
     def close_presentation(self, save: bool = False) -> None:

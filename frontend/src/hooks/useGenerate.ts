@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import { api, streamSse } from '../api/client'
+import { api, streamSse, streamSseGet } from '../api/client'
 import type { GenerateSettings, SseEvent } from '../api/types'
 
 export interface GenerationResult {
@@ -128,6 +128,7 @@ export function useGenerate() {
     },
     [],
   )
+  void runSseJson
 
   const runSseForm = useCallback(
     async (path: '/image-to-screenshots-sse', formData: FormData): Promise<GenerationResult | null> => {
@@ -201,10 +202,112 @@ export function useGenerate() {
     [],
   )
 
+  const runBackendTextRun = useCallback(
+    async (text: string, settings: GenerateSettings): Promise<GenerationResult | null> => {
+      abortRef.current?.abort()
+      const ctl = new AbortController()
+      abortRef.current = ctl
+      setState({ status: 'running', progress: 0, message: 'Creating backend run...', stage: 'queued' })
+
+      let started
+      try {
+        started = await api.startTextToVideoRun(text, settings)
+      } catch (err) {
+        setState({
+          status: 'error',
+          progress: 100,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return null
+      }
+
+      const runId = started.run_id
+      const opId = started.operation_id
+      opIdRef.current = opId
+      const result: GenerationResult = { screenshot_files: [], operation_id: opId }
+      setState({
+        status: 'running',
+        progress: 0,
+        stage: 'queued',
+        message: started.queue_position ? `Queued at position ${started.queue_position}` : 'Queued',
+        operationId: opId,
+      })
+
+      const handle = (ev: SseEvent) => {
+        if (ev.type === 'queued') {
+          setState((s) => ({
+            ...s,
+            stage: 'queued',
+            message: ev.message,
+            progress: ev.progress ?? s.progress,
+            operationId: ev.operation_id ?? s.operationId,
+          }))
+        } else if (ev.type === 'started') {
+          opIdRef.current = ev.operation_id ?? opId
+          setState((s) => ({
+            ...s,
+            operationId: ev.operation_id ?? opId,
+            stage: ev.stage ?? 'running',
+            message: ev.message ?? 'Process started',
+            etaSeconds: ev.estimated_total_seconds,
+            progress: ev.progress ?? s.progress,
+          }))
+        } else if (ev.type === 'progress') {
+          setState((s) => ({
+            ...s,
+            stage: ev.stage,
+            message: ev.message,
+            progress: ev.progress,
+            operationId: ev.operation_id ?? s.operationId,
+            etaSeconds: ev.eta_seconds ?? s.etaSeconds,
+          }))
+        } else if (ev.type === 'complete') {
+          const data = ev.data ?? {}
+          result.html_filename = ev.html_filename ?? data.html_filename ?? data.html_file ?? result.html_filename
+          result.html_content = ev.html_content ?? result.html_content
+          result.screenshot_files = ev.screenshot_files ?? data.screenshot_files ?? result.screenshot_files
+          result.screenshot_folder = ev.screenshot_folder ?? data.screenshot_folder
+          result.presentation_file = ev.presentation_file ?? data.presentation_file ?? data.presentation_path
+          result.video_file = ev.video_file ?? data.video_file ?? data.video_path
+          result.operation_id = ev.operation_id ?? opId
+          setState({
+            status: 'success',
+            progress: 100,
+            stage: 'complete',
+            message: ev.message ?? data.message ?? `Generated ${result.screenshot_files.length} screenshot(s)`,
+            result,
+            operationId: result.operation_id,
+          })
+        } else if (ev.type === 'error') {
+          setState({ status: 'error', progress: 100, error: ev.message, operationId: opId })
+        } else if (ev.type === 'cancelled') {
+          setState({ status: 'cancelled', progress: 100, message: ev.message, operationId: opId })
+        }
+      }
+
+      try {
+        await streamSseGet(`/runs/${encodeURIComponent(runId)}/events`, {
+          signal: ctl.signal,
+          onEvent: handle,
+        })
+      } catch (err) {
+        if ((err as { name?: string }).name !== 'AbortError') {
+          setState((s) => ({
+            ...s,
+            status: 'error',
+            error: err instanceof Error ? err.message : String(err),
+          }))
+        }
+        return null
+      }
+      return result
+    },
+    [],
+  )
+
   const generate = useCallback(
-    (text: string, settings: GenerateSettings) =>
-      runSseJson('/generate-sse', { text, ...settings }),
-    [runSseJson],
+    (text: string, settings: GenerateSettings) => runBackendTextRun(text, settings),
+    [runBackendTextRun],
   )
 
   const generateFromHtml = useCallback(
@@ -252,7 +355,7 @@ export function useGenerate() {
     const opId = opIdRef.current
     if (opId) {
       try {
-        await api.cancel(opId)
+        await api.cancelRun(opId).catch(() => api.cancel(opId))
       } catch {
         /* ignore — backend may already have finished */
       }
