@@ -1,4 +1,4 @@
-import { Download, Eye, Package } from 'lucide-react'
+import { Download, Eye, ImageOff, Package } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '../api/client'
 import { useToast } from '../store/toast'
@@ -24,8 +24,22 @@ export default function ScreenshotGallery(props: Props) {
 
   if (files.length === 0) {
     return (
-      <div className="card text-center text-sm text-slate-500">
-        No screenshots yet — generate some to see them here.
+      <div
+        className="card flex flex-col items-center justify-center gap-2 py-10 text-center"
+        role="status"
+      >
+        <div
+          aria-hidden="true"
+          className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400 dark:bg-white/5 dark:text-slate-500"
+        >
+          <ImageOff size={20} />
+        </div>
+        <div className="text-sm font-medium text-slate-700 dark:text-slate-200">
+          No screenshots yet
+        </div>
+        <div className="text-xs text-slate-500 dark:text-slate-400">
+          Start a run and finished screenshots will appear here.
+        </div>
       </div>
     )
   }
@@ -77,12 +91,23 @@ export default function ScreenshotGallery(props: Props) {
               key={filename}
               className="glass group overflow-hidden !p-0"
             >
-              <div className="relative aspect-video overflow-hidden bg-slate-50 dark:bg-white/[0.04]">
+              {/* `object-contain` so we never crop content; the checkered */}
+              {/* background makes letterboxed bars look intentional. */}
+              <div
+                className="relative aspect-video overflow-hidden"
+                style={{
+                  backgroundColor: 'rgb(var(--bg-muted))',
+                  backgroundImage:
+                    'linear-gradient(45deg, rgba(148,163,184,0.12) 25%, transparent 25%), linear-gradient(-45deg, rgba(148,163,184,0.12) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(148,163,184,0.12) 75%), linear-gradient(-45deg, transparent 75%, rgba(148,163,184,0.12) 75%)',
+                  backgroundSize: '16px 16px',
+                  backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0',
+                }}
+              >
                 <img
                   src={url}
                   alt={filename}
                   loading="lazy"
-                  className="h-full w-full cursor-zoom-in object-cover"
+                  className="h-full w-full cursor-zoom-in object-contain"
                   onClick={() => setPreview(url)}
                 />
               </div>

@@ -5,6 +5,7 @@ import type React from 'react'
 import ProgressBar from '../components/ProgressBar'
 import ScreenshotGallery from '../components/ScreenshotGallery'
 import SettingsPanel from '../components/SettingsPanel'
+import BackendRejectedBanner from '../components/BackendRejectedBanner'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import type { GenerateSettings } from '../api/types'
 
@@ -170,10 +171,16 @@ export default function ImageToVideo() {
               <StopCircle size={16} /> Cancel
             </button>
           )}
-          {state.status === 'error' && (
+          {state.status === 'error' && !state.rejectedReason && (
             <span className="text-sm text-red-600 dark:text-red-400">{state.error}</span>
           )}
         </div>
+        {state.status === 'error' && state.rejectedReason && (
+          <BackendRejectedBanner
+            reason={state.rejectedReason}
+            message={state.error ?? 'Backend rejected the run.'}
+          />
+        )}
       </form>
 
       {(running || state.status === 'success') && (

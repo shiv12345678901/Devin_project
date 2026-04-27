@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import ProgressBar from '../components/ProgressBar'
 import ScreenshotGallery from '../components/ScreenshotGallery'
 import SettingsPanel from '../components/SettingsPanel'
+import BackendRejectedBanner from '../components/BackendRejectedBanner'
 import { api } from '../api/client'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import { useToast } from '../store/toast'
@@ -128,10 +129,16 @@ export default function HtmlToVideo() {
           <button type="submit" className="btn-primary" disabled={!html.trim() || running}>
             <Play size={16} /> Generate screenshots
           </button>
-          {state.status === 'error' && (
+          {state.status === 'error' && !state.rejectedReason && (
             <span className="text-sm text-red-600 dark:text-red-400">{state.error}</span>
           )}
         </div>
+        {state.status === 'error' && state.rejectedReason && (
+          <BackendRejectedBanner
+            reason={state.rejectedReason}
+            message={state.error ?? 'Backend rejected the run.'}
+          />
+        )}
       </form>
 
       {(running || state.status === 'success') && (

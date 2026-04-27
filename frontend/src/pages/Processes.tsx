@@ -30,6 +30,7 @@ import { formatRelative, formatRuntime, useRuns } from '../store/runs'
 import type { Run, RunStatus, RunTool } from '../store/runs'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
+import EmptyState from '../components/EmptyState'
 import ProgressBar from '../components/ProgressBar'
 import { useGenerationQueue } from '../hooks/useTrackedGenerate'
 import type { QueueItem } from '../hooks/useTrackedGenerate'
@@ -891,10 +892,16 @@ export default function Processes() {
       <QueueCard items={queue.slice(1)} onCancelQueued={cancelQueued} />
 
       {runRows.length === 0 && historyRows.length === 0 && queue.length === 0 && liveState.status !== 'running' ? (
-        <div className="card text-center text-sm text-slate-500">
-          No runs yet. Head over to Text / HTML / Image to Video to generate your first one —
-          it'll show up here with input, runtime, and outputs side-by-side.
-        </div>
+        <EmptyState
+          icon={<Activity size={20} />}
+          title="No runs yet"
+          description="Generated jobs land here with input, runtime, and outputs side-by-side."
+          action={
+            <a className="btn-primary btn-sm" href="/workspace">
+              Start your first run
+            </a>
+          }
+        />
       ) : (
         <div className="space-y-3">
           {runRows.map((r) => (
