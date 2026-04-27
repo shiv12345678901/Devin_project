@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Activity,
   Check,
@@ -39,6 +39,7 @@ import ProgressBar from '../components/ProgressBar'
 import { useGenerationQueue } from '../hooks/useTrackedGenerate'
 import type { QueueItem } from '../hooks/useTrackedGenerate'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { PROCESS_EDIT_HANDOFF_KEY } from '../lib/processEditHandoff'
 
 type ToolLike = RunTool | 'regenerate' | 'text-to-image' | 'html-to-image' | 'image-to-screenshots' | string | undefined
 type EditableProcess = {
@@ -154,6 +155,10 @@ function RunRow({
     !!run.presentationFile ||
     !!run.videoFile
   const inputText = run.inputText || run.inputPreview || ''
+  const canRegenerate =
+    run.status !== 'running' &&
+    run.tool !== 'image-to-video' &&
+    inputText.trim().length > 0
   const screenshots = run.screenshotFiles ?? []
   const selectedScreenshot = screenshots[previewIndex]
   const selectedScreenshotUrl = selectedScreenshot ? api.screenshotUrl(selectedScreenshot) : null
@@ -457,7 +462,7 @@ function RunRow({
 
           {onRemove && (
             <div className="flex flex-wrap justify-end gap-2">
-              {(run.status === 'success' || run.status === 'error') && inputText && (
+              {canRegenerate && (
                 <>
                   <button className="btn-secondary btn-sm" onClick={() => onEditRegenerate?.(run)}>
                     <Pencil size={12} /> Edit
@@ -914,6 +919,7 @@ function ProcessEditModal({
 }
 
 export default function Processes() {
+  const nav = useNavigate()
   const { runs, clear, remove } = useRuns()
   const {
     queue,
@@ -1079,15 +1085,19 @@ export default function Processes() {
       toast.push({ variant: 'error', message: 'Image processes cannot be edited after the original file is gone.' })
       return
     }
-    setEditingProcess({
-      id: run.id,
-      title: 'Edit and regenerate process',
+    window.sessionStorage.setItem(PROCESS_EDIT_HANDOFF_KEY, JSON.stringify({
       tool: run.tool,
-      kind: run.tool === 'html-to-video' ? 'html' : 'text',
       text,
       settings: toGenerateSettings(run.settings),
-      mode: 'regenerate',
-    })
+      replaceTargets: {
+        runId: run.id,
+        htmlFilename: run.htmlFilename,
+        screenshotFiles: run.screenshotFiles ?? [],
+        presentationFile: run.presentationFile,
+        videoFile: run.videoFile,
+      },
+    }))
+    nav(run.tool === 'html-to-video' ? '/workspace/html' : '/workspace/text')
   }
 
   const saveEditedProcess = (process: EditableProcess) => {

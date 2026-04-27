@@ -1,5 +1,5 @@
 import { Play, Sparkles, Minimize2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ProgressBar from '../components/ProgressBar'
 import ScreenshotGallery from '../components/ScreenshotGallery'
@@ -9,6 +9,8 @@ import { api } from '../api/client'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import { useToast } from '../store/toast'
 import type { GenerateSettings } from '../api/types'
+import { consumeProcessEditHandoff } from '../lib/processEditHandoff'
+import type { ReplacementTargets } from '../lib/processEditHandoff'
 
 const defaultSettings: GenerateSettings = {
   zoom: 2.1,
@@ -21,15 +23,25 @@ const defaultSettings: GenerateSettings = {
 export default function HtmlToVideo() {
   const [html, setHtml] = useState('')
   const [settings, setSettings] = useState<GenerateSettings>(defaultSettings)
+  const [replaceTargets, setReplaceTargets] = useState<ReplacementTargets | null>(null)
   const { state, generateFromHtml } = useTrackedGenerate('html-to-video')
   const toast = useToast()
   const nav = useNavigate()
   const running = state.status === 'running'
 
+  useEffect(() => {
+    const draft = consumeProcessEditHandoff('html-to-video')
+    if (!draft) return
+    setHtml(draft.text)
+    setSettings((prev) => ({ ...prev, ...draft.settings }))
+    setReplaceTargets(draft.replaceTargets)
+  }, [])
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!html.trim()) return
-    const { queueId } = generateFromHtml(html, settings)
+    const { queueId } = generateFromHtml(html, settings, replaceTargets ? { replaceTargets } : undefined)
+    setReplaceTargets(null)
     nav(`/processes?queue=${encodeURIComponent(queueId)}`)
   }
 

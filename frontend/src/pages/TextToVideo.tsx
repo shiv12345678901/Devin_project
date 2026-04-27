@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -24,6 +24,8 @@ import { useBackendPlatform } from '../hooks/useBackendPlatform'
 import { api } from '../api/client'
 import { useSettings } from '../store/settings'
 import type { GenerateSettings, OutputFormat } from '../api/types'
+import { consumeProcessEditHandoff } from '../lib/processEditHandoff'
+import type { ReplacementTargets } from '../lib/processEditHandoff'
 
 // ─── Defaults ──────────────────────────────────────────────────────────────
 
@@ -270,12 +272,23 @@ export default function TextToVideo() {
   const [lastRunSnapshot, setLastRunSnapshot] = useState<LastRunSnapshot | null>(() =>
     readLastRunSnapshot(),
   )
+  const [replaceTargets, setReplaceTargets] = useState<ReplacementTargets | null>(null)
   const [stepId, setStepId] = useState<StepId>('project')
   const [showPreflight, setShowPreflight] = useState(false)
   const preflightProceedingRef = useRef(false)
   /** Step ids whose inline errors should be visible (only populated after the
    * user clicks Next on an invalid step). Silent until then. */
   const [erroredSteps, setErroredSteps] = useState<Set<StepId>>(new Set())
+
+  useEffect(() => {
+    const draft = consumeProcessEditHandoff('text-to-video')
+    if (!draft) return
+    setText(draft.text)
+    setSettings((prev) => ({ ...prev, ...draft.settings }))
+    setReplaceTargets(draft.replaceTargets)
+    setStepId('project')
+    setErroredSteps(new Set())
+  }, [])
 
   const set = <K extends keyof GenerateSettings>(key: K, v: GenerateSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: v }))
@@ -367,7 +380,8 @@ export default function TextToVideo() {
     // Enqueues and (if idle) kicks off immediately. Navigate right away so
     // the user sees either the running run or the queue entry without
     // staying on the wizard.
-    const { queueId } = generate(text, payload)
+    const { queueId } = generate(text, payload, replaceTargets ? { replaceTargets } : undefined)
+    setReplaceTargets(null)
     nav(`/processes?queue=${encodeURIComponent(queueId)}`)
   }
 

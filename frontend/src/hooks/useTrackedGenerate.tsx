@@ -29,6 +29,8 @@ import { useRuns } from '../store/runs'
 import type { Run, RunTool } from '../store/runs'
 import { useToast } from '../store/toast'
 import type { GenerateSettings } from '../api/types'
+import { api } from '../api/client'
+import type { ReplacementTargets } from '../lib/processEditHandoff'
 
 type PendingMeta = Omit<Run, 'id' | 'status' | 'startedAt'>
 
@@ -47,6 +49,7 @@ export interface QueueItem {
   html?: string
   formData?: FormData
   files?: File[]
+  replaceTargets?: ReplacementTargets
 }
 
 export interface EnqueueResult {
@@ -82,8 +85,18 @@ interface TrackedGenerationContextValue {
   reorderQueued: (queueId: string, targetQueueId: string) => void
   updateQueued: (queueId: string, patch: Partial<Pick<QueueItem, 'text' | 'html' | 'settings'>>) => void
   reset: () => void
-  enqueueText: (tool: RunTool, text: string, settings: GenerateSettings) => EnqueueResult
-  enqueueHtml: (tool: RunTool, html: string, settings: GenerateSettings) => EnqueueResult
+  enqueueText: (
+    tool: RunTool,
+    text: string,
+    settings: GenerateSettings,
+    options?: { replaceTargets?: ReplacementTargets },
+  ) => EnqueueResult
+  enqueueHtml: (
+    tool: RunTool,
+    html: string,
+    settings: GenerateSettings,
+    options?: { replaceTargets?: ReplacementTargets },
+  ) => EnqueueResult
   enqueueImage: (
     tool: RunTool,
     formData: FormData,
@@ -140,6 +153,23 @@ function sortedEntries(obj: Record<string, unknown>): Array<[string, unknown]> {
     .map((k) => [k, obj[k]] as [string, unknown])
 }
 
+async function cleanupReplacementTargets(targets: ReplacementTargets): Promise<void> {
+  const seen = new Set<string>()
+  const deletions: Array<Promise<unknown>> = []
+  const add = (type: Parameters<typeof api.deleteFile>[0], filename?: string) => {
+    if (!filename) return
+    const key = `${type}:${filename}`
+    if (seen.has(key)) return
+    seen.add(key)
+    deletions.push(api.deleteFile(type, filename).catch(() => undefined))
+  }
+  add('html', targets.htmlFilename)
+  for (const file of targets.screenshotFiles ?? []) add('screenshot', file)
+  add('presentation', targets.presentationFile)
+  add('video', targets.videoFile)
+  await Promise.all(deletions)
+}
+
 export function TrackedGenerationProvider({ children }: { children: ReactNode }) {
   const gen = useGenerate()
   const runs = useRuns()
@@ -161,6 +191,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   // cleared on terminal-state. Used by pushOrStart to client-side-dedupe
   // "user resubmits the same content" before we ever POST.
   const activeFingerprintRef = useRef<string | null>(null)
+  const activeReplaceTargetsRef = useRef<ReplacementTargets | null>(null)
   // Guards against accidentally dispatching the same queue id twice
   // (StrictMode re-invoking effects, duplicate auto-dequeue firings, etc).
   const dispatchedIdsRef = useRef<Set<string>>(new Set())
@@ -202,6 +233,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     if (!runIdRef.current) return
 
     if (s.status === 'success') {
+      const replacement = activeReplaceTargetsRef.current
       runs.finish(runIdRef.current, {
         status: 'success',
         htmlFilename: s.result?.html_filename,
@@ -211,6 +243,11 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         videoFile: s.result?.video_file,
         operationId: s.result?.operation_id ?? s.operationId,
       })
+      if (replacement) {
+        void cleanupReplacementTargets(replacement).then(() => {
+          if (replacement.runId) runs.remove(replacement.runId)
+        })
+      }
       runIdRef.current = null
     } else if (s.status === 'error') {
       runs.finish(runIdRef.current, { status: 'error', error: s.error })
@@ -260,6 +297,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       dispatchedIdsRef.current.add(item.id)
       activeQueueIdRef.current = item.id
       activeFingerprintRef.current = fingerprintItem(item)
+      activeReplaceTargetsRef.current = item.replaceTargets ?? null
       activeStartedRef.current = true
       if (item.kind === 'text' && item.text !== undefined && item.settings) {
         pendingRef.current = {
@@ -323,6 +361,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       activeStartedRef.current = false
       activeQueueIdRef.current = null
       activeFingerprintRef.current = null
+      activeReplaceTargetsRef.current = null
       if (paused) return
       if (rejected) {
         setPaused(true)
@@ -334,6 +373,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         const [next, ...rest] = prev
         activeQueueIdRef.current = next.id
         activeFingerprintRef.current = fingerprintItem(next)
+        activeReplaceTargetsRef.current = next.replaceTargets ?? null
         window.setTimeout(() => dispatch(next), 0)
         return rest
       })
@@ -394,6 +434,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         // for pending-only items now; the running one lives in the refs.
         activeQueueIdRef.current = item.id
         activeFingerprintRef.current = fp
+        activeReplaceTargetsRef.current = item.replaceTargets ?? null
         window.setTimeout(() => dispatch(item), 0)
         return { queueId: item.id, startedImmediately: true }
       }
@@ -404,7 +445,12 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   )
 
   const enqueueText = useCallback(
-    (tool: RunTool, text: string, settings: GenerateSettings): EnqueueResult =>
+    (
+      tool: RunTool,
+      text: string,
+      settings: GenerateSettings,
+      options?: { replaceTargets?: ReplacementTargets },
+    ): EnqueueResult =>
       pushOrStart({
         id: nextQueueId(),
         tool,
@@ -414,12 +460,18 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         queuedAt: Date.now(),
         text,
         settings,
+        replaceTargets: options?.replaceTargets,
       }),
     [pushOrStart],
   )
 
   const enqueueHtml = useCallback(
-    (tool: RunTool, html: string, settings: GenerateSettings): EnqueueResult =>
+    (
+      tool: RunTool,
+      html: string,
+      settings: GenerateSettings,
+      options?: { replaceTargets?: ReplacementTargets },
+    ): EnqueueResult =>
       pushOrStart({
         id: nextQueueId(),
         tool,
@@ -429,6 +481,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         queuedAt: Date.now(),
         html,
         settings,
+        replaceTargets: options?.replaceTargets,
       }),
     [pushOrStart],
   )
@@ -477,6 +530,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       const [next, ...rest] = prev
       activeQueueIdRef.current = next.id
       activeFingerprintRef.current = fingerprintItem(next)
+      activeReplaceTargetsRef.current = next.replaceTargets ?? null
       window.setTimeout(() => dispatch(next), 0)
       return rest
     })
@@ -574,9 +628,16 @@ export function useTrackedGenerate(tool: RunTool) {
       reset: ctx.reset,
       // Back-compat aliases so existing wizards keep working verbatim: all
       // three are now enqueues and return void (ignored by old callers).
-      generate: (text: string, settings: GenerateSettings) => ctx.enqueueText(tool, text, settings),
-      generateFromHtml: (html: string, settings: GenerateSettings) =>
-        ctx.enqueueHtml(tool, html, settings),
+      generate: (
+        text: string,
+        settings: GenerateSettings,
+        options?: { replaceTargets?: ReplacementTargets },
+      ) => ctx.enqueueText(tool, text, settings, options),
+      generateFromHtml: (
+        html: string,
+        settings: GenerateSettings,
+        options?: { replaceTargets?: ReplacementTargets },
+      ) => ctx.enqueueHtml(tool, html, settings, options),
       generateFromImage: (
         fd: FormData,
         meta?: { files?: File[]; settings?: GenerateSettings },
