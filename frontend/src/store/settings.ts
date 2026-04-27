@@ -155,6 +155,7 @@ export interface AppSettings {
   brandId: string
   defaultOutputFormat: 'html' | 'images' | 'pptx' | 'video'
   backendUrl: string
+  concurrentPipelineRuns: boolean
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -162,6 +163,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   brandId: 'indigo',
   defaultOutputFormat: 'images',
   backendUrl: '',
+  concurrentPipelineRuns: false,
 }
 
 export const SETTINGS_STORAGE_KEY = 'textbro:settings:v1'

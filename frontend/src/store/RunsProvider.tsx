@@ -88,12 +88,26 @@ export function RunsProvider({ children }: { children: ReactNode }) {
     )
   }, [])
 
+  const update = useCallback<RunsContextValue['update']>((id, patch) => {
+    setRuns((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              ...patch,
+              status: patch.status ?? r.status,
+            }
+          : r,
+      ),
+    )
+  }, [])
+
   const clear = useCallback(() => setRuns([]), [])
   const remove = useCallback((id: string) => setRuns((prev) => prev.filter((r) => r.id !== id)), [])
 
   const value = useMemo<RunsContextValue>(
-    () => ({ runs, start, finish, clear, remove }),
-    [runs, start, finish, clear, remove],
+    () => ({ runs, start, finish, update, clear, remove }),
+    [runs, start, finish, update, clear, remove],
   )
 
   return <RunsContext.Provider value={value}>{children}</RunsContext.Provider>

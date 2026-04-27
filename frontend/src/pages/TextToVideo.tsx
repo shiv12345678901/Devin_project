@@ -40,7 +40,6 @@ const DEFAULT_SETTINGS: GenerateSettings = {
   viewport_height: 1080,
   max_screenshots: 50,
   use_cache: true,
-  enable_verification: true,
   beautify_html: false,
   close_powerpoint_before_start: true,
   auto_timing_screenshot_slides: true,
@@ -374,6 +373,7 @@ export default function TextToVideo() {
     payload.class_name = (payload.class_name ?? '').trim() || undefined
     payload.subject = (payload.subject ?? '').trim() || undefined
     payload.title = (payload.title ?? '').trim() || undefined
+    payload.concurrent_pipeline_runs = appSettings.concurrentPipelineRuns
     // Snapshot the full wizard state (text + settings) so the next
     // session can restore everything via "Reuse previous run".
     setLastRunSnapshot(saveLastRunSnapshot(text, payload))
@@ -1297,12 +1297,6 @@ function AdvancedStep({
           description="Reuse AI output if the same input (+ model + system prompt) was generated before."
           checked={settings.use_cache ?? true}
           onChange={(v) => onChange('use_cache', v)}
-        />
-        <Toggle
-          label="Verify AI output"
-          description="Up to 3 verification + revision passes."
-          checked={settings.enable_verification ?? true}
-          onChange={(v) => onChange('enable_verification', v)}
         />
         <Toggle
           label="Beautify HTML"

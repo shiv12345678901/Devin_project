@@ -16,7 +16,6 @@ export interface RunSettings {
   max_screenshots?: number
   use_cache?: boolean
   model_choice?: string
-  enable_verification?: boolean
   class_name?: string
   subject?: string
   title?: string
@@ -37,6 +36,9 @@ export interface Run {
   status: RunStatus
   startedAt: number
   endedAt?: number
+  stage?: string
+  message?: string
+  progress?: number
   inputPreview: string
   inputText?: string
   settings?: RunSettings
@@ -70,6 +72,7 @@ export interface RunsContextValue {
       >
     >,
   ) => void
+  update: (id: string, patch: Partial<Omit<Run, 'id' | 'startedAt'>>) => void
   clear: () => void
   remove: (id: string) => void
 }

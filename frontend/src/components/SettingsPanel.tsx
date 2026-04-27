@@ -10,7 +10,7 @@ interface Props {
   showTextToImages?: boolean
   /** Show the "Images to Video" section (PowerPoint / MP4 export). */
   showImagesToVideo?: boolean
-  /** Shortcut: hide AI-specific fields (cache / verification / beautify / system prompt / model). */
+  /** Shortcut: hide AI-specific fields (cache / beautify / system prompt / model). */
   showAdvanced?: boolean
 }
 
@@ -119,12 +119,6 @@ export default function SettingsPanel({
                   description="Normalize AI HTML for cleaner screenshots"
                   checked={value.beautify_html ?? false}
                   onChange={(v) => set('beautify_html', v)}
-                />
-                <Toggle
-                  label="Verify AI Output"
-                  description="Up to 3 verification + revision passes"
-                  checked={value.enable_verification ?? true}
-                  onChange={(v) => set('enable_verification', v)}
                 />
               </div>
             )}

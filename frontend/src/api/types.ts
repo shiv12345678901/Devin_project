@@ -29,9 +29,9 @@ export interface GenerateSettings {
   max_screenshots?: number
   use_cache?: boolean
   beautify_html?: boolean
-  enable_verification?: boolean
   model_choice?: string
   system_prompt?: string
+  concurrent_pipeline_runs?: boolean
   // Output paths / names
   output_name?: string
   screenshot_folder?: string

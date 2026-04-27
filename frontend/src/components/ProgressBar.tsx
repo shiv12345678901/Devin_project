@@ -31,14 +31,19 @@ const STAGE_LABELS: Record<string, string> = {
   queued: 'Queued',
   running: 'Starting process',
   init: 'Warming up',
+  ai_waiting: 'Waiting for AI slot',
   ai: 'Generating HTML with AI',
-  ai_verify: 'Verifying completeness',
-  ai_verify_skip: 'Skipping verification',
-  ai_revision: 'Revising missing content',
   ai_done: 'AI response finalized',
   html_saved: 'HTML saved',
+  screenshot_waiting: 'Waiting for screenshot slot',
   screenshot: 'Capturing screenshots',
+  export_waiting: 'Waiting for export slot',
   export: 'Exporting video',
+  video_export: 'Exporting MP4 video',
+  video_complete: 'Video export finalized',
+  powerpoint_cleanup: 'Preparing PowerPoint',
+  powerpoint: 'Building PowerPoint deck',
+  powerpoint_complete: 'PowerPoint deck saved',
   screenshots_done: 'Screenshots ready',
   complete: 'Complete',
 }
@@ -47,15 +52,19 @@ const ENGAGEMENT_MESSAGES: Record<string, string[]> = {
   queued: ['Waiting for the backend slot...', 'Preparing the run...', 'Keeping your job in line...'],
   running: ['Starting the backend process...', 'Opening the workflow...', 'Preparing the workspace...'],
   init: ['Sending request...', 'Checking settings...', 'Preparing files...'],
+  ai_waiting: ['Waiting for another AI phase...', 'Holding this job ready...', 'Watching for an AI slot...'],
   ai: ['Sending request to AI...', 'Analyzing your text...', 'Writing the HTML...', 'Checking content structure...'],
-  ai_verify: ['Checking AI output...', 'Looking for missing content...', 'Verifying the lesson flow...'],
-  ai_revision: ['Revising the content...', 'Filling missing parts...', 'Polishing the generated HTML...'],
   html_saved: ['Saving generated HTML...', 'Preparing browser render...', 'Moving to screenshots...'],
+  screenshot_waiting: ['Waiting for video export to finish...', 'Holding screenshots until the lane is free...', 'Keeping generated HTML ready...'],
   screenshot: ['Launching browser...', 'Rendering pages...', 'Capturing screenshots...', 'Checking screenshot output...'],
   screenshots_done: ['Screenshots found...', 'Preparing export...', 'Collecting generated files...'],
+  export_waiting: ['Waiting for screenshot capture to finish...', 'Holding export until PowerPoint is free...', 'Preparing the deck handoff...'],
   export: ['Opening PowerPoint...', 'Building slides...', 'Exporting video...', 'Waiting for MP4 file...'],
+  video_export: ['PowerPoint is encoding...', 'Watching the MP4 grow...', 'Checking export status...', 'Waiting for finalization...'],
+  video_complete: ['Verifying MP4 output...', 'Collecting video file...', 'Preparing the final result...'],
   powerpoint_cleanup: ['Closing old PowerPoint sessions...', 'Clearing export conflicts...', 'Preparing PowerPoint...'],
   powerpoint: ['Building presentation...', 'Applying slide timing...', 'Exporting video...', 'Waiting for MP4 file...'],
+  powerpoint_complete: ['Deck saved...', 'Preparing video export...', 'Moving to MP4 rendering...'],
 }
 
 const ACTIVITY_STEPS: Record<string, string[]> = {
@@ -125,6 +134,13 @@ const ACTIVITY_STEPS: Record<string, string[]> = {
     'Preparing content structure',
     'Sending everything to the model',
   ],
+  ai_waiting: [
+    'Waiting for AI slot',
+    'Keeping run ready',
+    'Checking active AI jobs',
+    'Holding project details',
+    'Preparing prompt handoff',
+  ],
   ai: [
     'Sending request to AI',
     'Waiting for AI response',
@@ -152,54 +168,9 @@ const ACTIVITY_STEPS: Record<string, string[]> = {
     'Waiting for final tokens',
     'Collecting the AI response',
     'Finishing the HTML draft',
-    'Preparing the next verification step',
     'Keeping the stream alive',
     'Still receiving content',
     'Almost done with AI generation',
-  ],
-  ai_verify: [
-    'Reading generated HTML',
-    'Checking coverage',
-    'Verifying output',
-    'Comparing against input text',
-    'Looking for missing sections',
-    'Checking answer completeness',
-    'Reviewing chapter structure',
-    'Checking headings',
-    'Checking explanation flow',
-    'Looking for broken markup',
-    'Checking important details',
-    'Reviewing generated content',
-    'Checking if revision is needed',
-    'Validating lesson order',
-    'Scanning for skipped parts',
-    'Checking source coverage',
-    'Reviewing HTML quality',
-    'Confirming content is usable',
-    'Preparing feedback if needed',
-    'Finishing verification',
-  ],
-  ai_revision: [
-    'Applying feedback',
-    'Rewriting gaps',
-    'Polishing HTML',
-    'Adding missing content',
-    'Fixing incomplete sections',
-    'Improving explanations',
-    'Rechecking structure',
-    'Cleaning repeated content',
-    'Repairing markup',
-    'Improving readability',
-    'Balancing sections',
-    'Updating headings',
-    'Refining answers',
-    'Strengthening lesson flow',
-    'Completing missing details',
-    'Preparing revised HTML',
-    'Checking revision result',
-    'Merging improvements',
-    'Finalizing revised content',
-    'Preparing to save HTML',
   ],
   html_saved: [
     'Saving HTML',
@@ -223,6 +194,16 @@ const ACTIVITY_STEPS: Record<string, string[]> = {
     'Preparing visual output',
     'HTML is ready for capture',
   ],
+  screenshot_waiting: [
+    'Waiting for screenshot slot',
+    'Checking video export status',
+    'Keeping HTML ready',
+    'Waiting for browser lane',
+    'Watching screenshot resources',
+    'Preparing capture settings',
+    'Holding until export finishes',
+    'Ready to capture next',
+  ],
   export: [
     'Preparing video export',
     'Opening PowerPoint',
@@ -244,6 +225,45 @@ const ACTIVITY_STEPS: Record<string, string[]> = {
     'Preparing download link',
     'Finishing MP4 output',
     'Almost ready with video',
+  ],
+  export_waiting: [
+    'Waiting for export slot',
+    'Checking PowerPoint lane',
+    'Waiting for screenshot capture',
+    'Keeping deck settings ready',
+    'Preparing export paths',
+    'Holding video handoff',
+    'Watching shared resources',
+    'Ready to export next',
+  ],
+  video_export: [
+    'Starting MP4 export',
+    'Handing slides to PowerPoint',
+    'Applying saved timings',
+    'Checking video resolution',
+    'Setting frame rate',
+    'Setting export quality',
+    'PowerPoint is encoding frames',
+    'Waiting for rendered frames',
+    'Watching the MP4 file grow',
+    'Checking file size',
+    'Keeping PowerPoint active',
+    'Waiting for CreateVideo status',
+    'Checking export health',
+    'Finalizing video container',
+    'Waiting for file lock release',
+    'Verifying MP4 output',
+    'Collecting video file',
+    'Preparing download link',
+    'Almost done exporting',
+    'Finishing video step',
+  ],
+  video_complete: [
+    'Video export finished',
+    'Verifying final file',
+    'Collecting MP4 output',
+    'Preparing result summary',
+    'Almost ready',
   ],
   powerpoint_cleanup: [
     'Checking PowerPoint sessions',
@@ -289,17 +309,26 @@ const ACTIVITY_STEPS: Record<string, string[]> = {
     'Collecting video file',
     'Almost done exporting',
   ],
+  powerpoint_complete: [
+    'Presentation saved',
+    'Checking deck output',
+    'Preparing export handoff',
+    'Getting video renderer ready',
+    'Moving to MP4 export',
+  ],
 }
 
 function progressCeiling(progress: number, stage: string | undefined): number {
   if (progress >= 100) return 100
   if (!stage) return 96
   if (stage === 'queued') return Math.max(progress, 12)
+  if (stage === 'ai_waiting') return Math.max(progress, 8)
   if (stage === 'ai' || stage.startsWith('ai_')) return Math.max(progress, 34)
   if (stage === 'html_saved') return Math.max(progress, 42)
+  if (stage === 'screenshot_waiting') return Math.max(progress, 34)
   if (stage === 'screenshot') return Math.max(progress, 88)
   if (stage === 'screenshots_done') return Math.max(progress, 94)
-  if (stage === 'export' || stage.startsWith('powerpoint')) return 99
+  if (stage === 'export_waiting' || stage === 'export' || stage.startsWith('powerpoint') || stage.startsWith('video_')) return 99
   return 98
 }
 
@@ -318,7 +347,16 @@ function activitySteps(stage: string | undefined): string[] {
 }
 
 function isExportStage(stage: string | undefined): boolean {
-  return stage === 'export' || stage === 'powerpoint_cleanup' || stage === 'powerpoint'
+  return (
+    stage === 'export' ||
+    stage === 'export_waiting' ||
+    stage === 'screenshot_waiting' ||
+    stage === 'powerpoint_cleanup' ||
+    stage === 'powerpoint' ||
+    stage === 'powerpoint_complete' ||
+    stage === 'video_export' ||
+    stage === 'video_complete'
+  )
 }
 
 function prettyStage(stage: string | undefined): string {

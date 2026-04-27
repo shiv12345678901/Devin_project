@@ -31,6 +31,7 @@ import { useToast } from '../store/toast'
 import type { GenerateSettings } from '../api/types'
 import { api } from '../api/client'
 import type { ReplacementTargets } from '../lib/processEditHandoff'
+import { useSettings } from '../store/settings'
 
 type PendingMeta = Omit<Run, 'id' | 'status' | 'startedAt'>
 
@@ -174,6 +175,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   const gen = useGenerate()
   const runs = useRuns()
   const toast = useToast()
+  const { settings: appSettings } = useSettings()
   const runIdRef = useRef<string | null>(null)
   const pendingRef = useRef<PendingMeta | null>(null)
   // Queue holds ONLY pending items (never the currently-executing one).
@@ -231,6 +233,15 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     }
 
     if (!runIdRef.current) return
+
+    if (s.status === 'running') {
+      runs.update(runIdRef.current, {
+        stage: s.stage,
+        message: s.message,
+        progress: s.progress,
+        operationId: s.operationId,
+      })
+    }
 
     if (s.status === 'success') {
       const replacement = activeReplaceTargetsRef.current
@@ -327,6 +338,84 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       }
     },
     [gen],
+  )
+
+  const dispatchBackgroundText = useCallback(
+    (item: QueueItem): EnqueueResult => {
+      if (item.kind !== 'text' || !item.text || !item.settings) {
+        return { queueId: item.id, startedImmediately: false }
+      }
+      if (dispatchedIdsRef.current.has(item.id)) {
+        return { queueId: item.id, startedImmediately: false, duplicateOf: 'active' }
+      }
+      dispatchedIdsRef.current.add(item.id)
+      const localRunId = runs.start({
+        tool: item.tool,
+        inputPreview: item.inputPreview,
+        inputText: item.inputText ?? item.text,
+        settings: item.settings,
+      })
+      const replacement = item.replaceTargets ?? null
+
+      void (async () => {
+        try {
+          const started = await api.startTextToVideoRun(item.text!, item.settings!)
+          let done = false
+          while (!done) {
+            await new Promise((resolve) => window.setTimeout(resolve, 1500))
+            const detail = await api.getRun(started.run_id)
+            const run = detail.run
+            const status = String(run.status ?? '')
+            if (status === 'queued' || status === 'running') {
+              runs.update(localRunId, {
+                stage: run.stage,
+                message: run.message,
+                progress: run.progress,
+                operationId: run.operation_id ?? started.operation_id,
+              })
+            }
+            if (status === 'completed') {
+              const outputs = run.outputs ?? {}
+              runs.finish(localRunId, {
+                status: 'success',
+                htmlFilename: outputs.html_filename ?? outputs.html_file,
+                screenshotFiles: outputs.screenshot_files,
+                screenshotFolder: outputs.screenshot_folder,
+                presentationFile: outputs.presentation_file ?? outputs.presentation_path,
+                videoFile: outputs.video_file ?? outputs.video_path,
+                operationId: run.operation_id ?? started.operation_id,
+              })
+              if (replacement) {
+                await cleanupReplacementTargets(replacement)
+                if (replacement.runId) runs.remove(replacement.runId)
+              }
+              done = true
+            } else if (status === 'failed') {
+              runs.finish(localRunId, {
+                status: 'error',
+                error: run.message ?? 'Process failed',
+                operationId: run.operation_id ?? started.operation_id,
+              })
+              done = true
+            } else if (status === 'cancelled') {
+              runs.finish(localRunId, {
+                status: 'cancelled',
+                operationId: run.operation_id ?? started.operation_id,
+              })
+              done = true
+            }
+          }
+        } catch (err) {
+          runs.finish(localRunId, {
+            status: 'error',
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      })()
+
+      return { queueId: item.id, startedImmediately: true }
+    },
+    [runs],
   )
 
   // Auto-dequeue: when the current run terminates, pop the next queue
@@ -427,6 +516,14 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         gen.state.status === 'success' ||
         gen.state.status === 'error' ||
         gen.state.status === 'cancelled'
+      if (
+        appSettings.concurrentPipelineRuns &&
+        item.kind === 'text' &&
+        item.tool === 'text-to-video' &&
+        !idleNow
+      ) {
+        return dispatchBackgroundText(item)
+      }
       if (idleNow && !activeQueueIdRef.current) {
         // Claim the active slot *synchronously* so a rapid second submission
         // in the same tick doesn't also see `activeQueueIdRef` as empty and
@@ -441,7 +538,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       setQueue((prev) => [...prev, item])
       return { queueId: item.id, startedImmediately: false }
     },
-    [dispatch, gen.state.status, paused, queue, toast],
+    [appSettings.concurrentPipelineRuns, dispatch, dispatchBackgroundText, gen.state.status, paused, queue, toast],
   )
 
   const enqueueText = useCallback(

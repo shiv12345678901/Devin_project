@@ -12,7 +12,6 @@ const TOOLS = [
     accent: 'brand',
     highlights: [
       'AI content generation',
-      '3-pass verification',
       'Full wizard + preflight',
     ],
   },

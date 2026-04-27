@@ -275,7 +275,7 @@ export default function Home() {
           <ProcessStep
             n="02"
             title="Render"
-            body="Generate semantic HTML with a configurable LLM, run a 3-pass verification, then render with Playwright at your chosen viewport."
+            body="Generate semantic HTML with a configurable LLM, then render with Playwright at your chosen viewport."
           />
           <ProcessStep
             n="03"

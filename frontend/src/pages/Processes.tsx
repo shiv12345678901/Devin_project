@@ -273,6 +273,12 @@ function RunRow({
                 label="Ended"
                 value={run.endedAt ? new Date(run.endedAt).toLocaleString() : '—'}
               />
+              {run.status === 'running' && run.message && (
+                <KV label="Current" value={run.message} />
+              )}
+              {run.status === 'running' && run.progress != null && (
+                <KV label="Progress" value={`${Math.round(run.progress)}%`} />
+              )}
               <KV label="Duration" value={formatRuntime(runtime)} />
               {run.settings?.model_choice && (
                 <KV label="Model" value={run.settings.model_choice} />

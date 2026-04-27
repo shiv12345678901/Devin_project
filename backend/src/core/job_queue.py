@@ -21,10 +21,11 @@ class QueuedJob:
     fn: Callable[[WorkflowContext], None]
     cancel_event: threading.Event
     label: str = "workflow"
+    pipeline_enabled: bool = False
 
 
 _QUEUE: deque[QueuedJob] = deque()
-_CURRENT: QueuedJob | None = None
+_CURRENT: dict[str, QueuedJob] = {}
 _CONDITION = threading.Condition()
 _STARTED = False
 
@@ -94,32 +95,34 @@ def _publish_queue_positions() -> None:
 
 
 def _worker_loop() -> None:
-    global _CURRENT
     while True:
         with _CONDITION:
             while not _QUEUE:
                 _CONDITION.wait()
             job = _QUEUE.popleft()
-            _CURRENT = job
+            _CURRENT[job.run_id] = job
             _publish_queue_positions()
 
+        _run_job(job)
+
+
+def _run_job(job: QueuedJob) -> None:
         ctx = WorkflowContext(job.run_id, job.operation_id, job.cancel_event)
-        # Hold the global single-flight slot for the duration of the job.
-        # Without this a queued text-to-video would happily run alongside a
-        # `/generate-sse` (or `/generate-html`, `/image-to-screenshots-sse`)
-        # request, doubling load on the Playwright pool / AI quota. The
-        # route used here (`/job-queue`) and run_id payload guarantee a
-        # unique fingerprint so we never trip the dedup window.
+        # In classic mode, hold the global single-flight slot for the
+        # duration of the job. Pipeline mode deliberately releases that
+        # coarse lock and lets the workflow's own phase locks protect
+        # screenshots / PowerPoint while AI can overlap.
         slot_held = False
         sleep_guard = False
         try:
             sleep_guard = _prevent_sleep()
-            try:
-                begin_run(job.operation_id, "/job-queue", {"run_id": job.run_id})
-                slot_held = True
-            except RunRejected as rr:
-                ctx.fail(f"Backend busy: {rr.message}")
-                continue
+            if not job.pipeline_enabled:
+                try:
+                    begin_run(job.operation_id, "/job-queue", {"run_id": job.run_id})
+                    slot_held = True
+                except RunRejected as rr:
+                    ctx.fail(f"Backend busy: {rr.message}")
+                    return
             if job.cancel_event.is_set():
                 ctx.cancel()
             else:
@@ -136,7 +139,7 @@ def _worker_loop() -> None:
             if slot_held:
                 end_run(job.operation_id)
             with _CONDITION:
-                _CURRENT = None
+                _CURRENT.pop(job.run_id, None)
                 _publish_queue_positions()
 
 
@@ -156,10 +159,27 @@ def enqueue(
     fn: Callable[[WorkflowContext], None],
     cancel_event: threading.Event,
     label: str = "workflow",
+    pipeline_enabled: bool = False,
 ) -> int:
+    job = QueuedJob(
+        run_id=run_id,
+        operation_id=operation_id,
+        fn=fn,
+        cancel_event=cancel_event,
+        label=label,
+        pipeline_enabled=pipeline_enabled,
+    )
+    if pipeline_enabled:
+        with _CONDITION:
+            _CURRENT[job.run_id] = job
+            _publish_queue_positions()
+        thread = threading.Thread(target=_run_job, args=(job,), daemon=True, name=f"workflow-{run_id}")
+        thread.start()
+        return 1
+
     _ensure_worker()
     with _CONDITION:
-        _QUEUE.append(QueuedJob(run_id=run_id, operation_id=operation_id, fn=fn, cancel_event=cancel_event, label=label))
+        _QUEUE.append(job)
         position = len(_QUEUE)
         _publish_queue_positions()
         _CONDITION.notify()
@@ -183,20 +203,24 @@ def cancel_job(run_id: str) -> bool:
                 _publish_queue_positions()
                 return True
 
-        if _CURRENT and (_CURRENT.run_id == run_id or _CURRENT.operation_id == run_id):
-            _CURRENT.cancel_event.set()
-            current_run = run_manager.get_run(_CURRENT.run_id) or {}
+        current = next(
+            (job for job in _CURRENT.values() if job.run_id == run_id or job.operation_id == run_id),
+            None,
+        )
+        if current:
+            current.cancel_event.set()
+            current_run = run_manager.get_run(current.run_id) or {}
             run_manager.update_run(
-                _CURRENT.run_id,
+                current.run_id,
                 status="running",
                 stage="cancelling",
                 message="Cancellation requested. Waiting for the running step to stop.",
                 progress=None,
             )
-            publish_run_event(_CURRENT.run_id, {
+            publish_run_event(current.run_id, {
                 "type": "progress",
-                "run_id": _CURRENT.run_id,
-                "operation_id": _CURRENT.operation_id,
+                "run_id": current.run_id,
+                "operation_id": current.operation_id,
                 "message": "Cancellation requested",
                 "stage": "cancelling",
                 "progress": current_run.get("progress", 0),
@@ -208,12 +232,22 @@ def cancel_job(run_id: str) -> bool:
 
 def get_queue_snapshot() -> dict:
     with _CONDITION:
+        running = list(_CURRENT.values())
         return {
             "running": {
-                "run_id": _CURRENT.run_id,
-                "operation_id": _CURRENT.operation_id,
-                "label": _CURRENT.label,
-            } if _CURRENT else None,
+                "run_id": running[0].run_id,
+                "operation_id": running[0].operation_id,
+                "label": running[0].label,
+            } if running else None,
+            "running_all": [
+                {
+                    "run_id": job.run_id,
+                    "operation_id": job.operation_id,
+                    "label": job.label,
+                    "pipeline_enabled": job.pipeline_enabled,
+                }
+                for job in running
+            ],
             "queued": [
                 {
                     "run_id": job.run_id,

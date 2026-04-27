@@ -2,6 +2,7 @@ import { useState } from 'react'
 import {
   AlertCircle,
   Check,
+  GitBranch,
   Monitor,
   Moon,
   Paintbrush,
@@ -165,7 +166,42 @@ export default function Settings() {
 
       {/* ─── Backend ────────────────────────────────────────────────────── */}
       <Section title="Backend" icon={<Server size={16} />}>
-        <div>
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-4 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 dark:border-white/10 dark:bg-white/[0.03]">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-200">
+                <GitBranch size={16} />
+              </span>
+              <div>
+                <div className="text-sm font-medium text-slate-800 dark:text-slate-100">
+                  Concurrent pipeline runs
+                </div>
+                <div className="mt-0.5 max-w-xl text-xs text-slate-500 dark:text-slate-400">
+                  Starts queued text jobs sooner. AI generation can overlap, while screenshot capture and PowerPoint/video export stay single-lane.
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={settings.concurrentPipelineRuns}
+              onClick={() => update({ concurrentPipelineRuns: !settings.concurrentPipelineRuns })}
+              className={
+                'relative h-7 w-12 rounded-full transition-colors ' +
+                (settings.concurrentPipelineRuns
+                  ? 'bg-brand-500'
+                  : 'bg-slate-300 dark:bg-slate-700')
+              }
+            >
+              <span
+                className={
+                  'absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ' +
+                  (settings.concurrentPipelineRuns ? 'translate-x-6' : 'translate-x-1')
+                }
+              />
+            </button>
+          </div>
+
           <label htmlFor="backend-url" className="label">
             Backend URL override
           </label>

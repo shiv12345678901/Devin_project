@@ -19,6 +19,7 @@ from core.ai_client import (
     unregister_operation,
 )
 from core.job_queue import cancel_job, enqueue, get_queue_snapshot
+from core.pipeline_scheduler import ai_slot, export_slot, screenshot_slot
 from core.powerpoint.controller import ExportError, PowerPointController, PowerPointNotFoundError, TemplateError
 from core.run_manager import (
     create_run,
@@ -234,6 +235,7 @@ def start_text_to_video():
     width, height = _resolution_tuple(str(data.get("resolution") or "1080p"))
     fps = int(data.get("fps") or 30)
     quality = _ppt_quality(data.get("video_quality", 85))
+    concurrent_pipeline_runs = _bool_value(data.get("concurrent_pipeline_runs"), False)
 
     fingerprint_payload = {
         "text": text.strip(),
@@ -261,6 +263,7 @@ def start_text_to_video():
         "resolution": [width, height],
         "fps": fps,
         "quality": quality,
+        "concurrent_pipeline_runs": concurrent_pipeline_runs,
     }
     input_fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -300,7 +303,7 @@ def start_text_to_video():
             "operation_id": recent.get("operation_id"),
         }), 409
 
-    operation_id = f"text_video_{int(time.time() * 1000)}"
+    operation_id = f"text_video_{time.time_ns()}"
     cancel_event = register_operation(operation_id)
     settings = dict(data)
     settings.update({
@@ -334,45 +337,46 @@ def start_text_to_video():
                 if estimated_total_seconds is not None
                 else None
             )
-            ctx.progress("ai", 5, f"Generating HTML with model {model_choice}...", data=progress_data)
             ai_started = time.time()
-            ai_q: Queue[dict] = Queue()
-            ai_holder: dict = {"content": None, "error": None}
+            with ai_slot(ctx, concurrent_pipeline_runs):
+                ctx.progress("ai", 5, f"Generating HTML with model {model_choice}...", data=progress_data)
+                ai_q: Queue[dict] = Queue()
+                ai_holder: dict = {"content": None, "error": None}
 
-            def _ai_worker() -> None:
-                try:
-                    ai_holder["content"] = get_ai_response(
-                        ai_input_text,
-                        use_cache=use_cache,
-                        cancel_event=ctx.cancel_event,
-                        model_choice=model_choice,
-                        system_prompt=system_prompt or None,
-                    )
-                except Exception as exc:
-                    ai_holder["error"] = exc
-                finally:
-                    ai_q.put({"kind": "_done"})
+                def _ai_worker() -> None:
+                    try:
+                        ai_holder["content"] = get_ai_response(
+                            ai_input_text,
+                            use_cache=use_cache,
+                            cancel_event=ctx.cancel_event,
+                            model_choice=model_choice,
+                            system_prompt=system_prompt or None,
+                        )
+                    except Exception as exc:
+                        ai_holder["error"] = exc
+                    finally:
+                        ai_q.put({"kind": "_done"})
 
-            ai_thread = threading.Thread(target=_ai_worker, daemon=True, name=f"{operation_id}-ai")
-            ai_thread.start()
-            while True:
-                try:
-                    msg = ai_q.get(timeout=1)
-                except Empty:
-                    if ctx.cancel_event.is_set():
-                        ai_thread.join(timeout=10)
-                        ctx.check_cancelled()
-                    elapsed = int(time.time() - ai_started)
-                    progress = min(28, 5 + max(1, elapsed // 3))
-                    ctx.progress("ai", progress, f"AI is generating HTML... {elapsed}s elapsed")
-                    continue
-                if msg.get("kind") == "_done":
-                    break
+                ai_thread = threading.Thread(target=_ai_worker, daemon=True, name=f"{operation_id}-ai")
+                ai_thread.start()
+                while True:
+                    try:
+                        msg = ai_q.get(timeout=1)
+                    except Empty:
+                        if ctx.cancel_event.is_set():
+                            ai_thread.join(timeout=10)
+                            ctx.check_cancelled()
+                        elapsed = int(time.time() - ai_started)
+                        progress = min(28, 5 + max(1, elapsed // 3))
+                        ctx.progress("ai", progress, f"AI is generating HTML... {elapsed}s elapsed")
+                        continue
+                    if msg.get("kind") == "_done":
+                        break
 
-            ai_thread.join(timeout=10)
-            if ai_holder["error"]:
-                raise ai_holder["error"]
-            html_content = ai_holder["content"]
+                ai_thread.join(timeout=10)
+                if ai_holder["error"]:
+                    raise ai_holder["error"]
+                html_content = ai_holder["content"]
             ctx.check_cancelled()
             if not html_content:
                 ctx.fail("Failed to generate HTML", progress=10)
@@ -387,7 +391,7 @@ def start_text_to_video():
                 except Exception:
                     pass
 
-            html_filename, _ = save_html(html_content, folder="output/html")
+            html_filename, _ = save_html(html_content, prefix=operation_id, folder="output/html")
             ctx.output("html_file", html_filename)
             ctx.progress("html_saved", 30, "HTML saved")
 
@@ -403,27 +407,31 @@ def start_text_to_video():
                 return
 
             batch_id = get_next_batch_id()
-            screenshot_folder = _rel(Path(OUTPUT_FOLDER) / f"batch {batch_id}")
+            screenshot_folder = f"batch {batch_id}"
             ctx.output("screenshot_folder", screenshot_folder)
-            ctx.progress("screenshot", 35, "Starting browser screenshots...")
             screenshot_started = time.time()
 
             def _screenshot_progress(message: str, pct: int = 0) -> None:
                 p = max(0, min(100, int(pct or 0)))
                 ctx.progress("screenshot", 35 + int((p / 100.0) * 50), str(message))
 
-            screenshot_files, screenshot_names = take_screenshots(
-                html_content,
-                screenshot_name=batch_id,
-                screenshot_folder=screenshot_folder,
-                zoom=zoom,
-                overlap=overlap,
-                viewport_width=viewport_width,
-                viewport_height=viewport_height,
-                max_screenshots=max_screenshots,
-                progress_callback=_screenshot_progress,
-                cancel_event=ctx.cancel_event,
-            )
+            with screenshot_slot(ctx, concurrent_pipeline_runs):
+                ctx.progress("screenshot", 35, "Starting browser screenshots...")
+                screenshot_files, screenshot_names = take_screenshots(
+                    html_content,
+                    screenshot_name=batch_id,
+                    screenshot_folder=OUTPUT_FOLDER,
+                    zoom=zoom,
+                    overlap=overlap,
+                    viewport_width=viewport_width,
+                    viewport_height=viewport_height,
+                    max_screenshots=max_screenshots,
+                    progress_callback=_screenshot_progress,
+                    cancel_event=ctx.cancel_event,
+                )
+            expected_screenshot_prefix = f"{screenshot_folder}/"
+            if any(not str(name).startswith(expected_screenshot_prefix) for name in screenshot_names):
+                raise RuntimeError("Screenshot output path mismatch; refusing to attach files from another run")
             ctx.check_cancelled()
             ctx.metrics({
                 "screenshot_seconds": round(time.time() - screenshot_started, 2),
@@ -439,77 +447,78 @@ def start_text_to_video():
                     sys.path.insert(0, config_dir)
                 from config import POWERPOINT_OUTPUT_FOLDER, POWERPOINT_TEMPLATE_PATH, POWERPOINT_VIDEO_FOLDER  # type: ignore
 
-                if close_powerpoint:
-                    ctx.progress("powerpoint_cleanup", 88, "Closing existing PowerPoint instances...")
-                    _close_powerpoint_best_effort()
-                    time.sleep(1)
-                ctx.check_cancelled()
+                with export_slot(ctx, concurrent_pipeline_runs):
+                    if close_powerpoint:
+                        ctx.progress("powerpoint_cleanup", 88, "Closing existing PowerPoint instances...")
+                        _close_powerpoint_best_effort()
+                        time.sleep(1)
+                    ctx.check_cancelled()
 
-                pptx_path = _run_output_path(POWERPOINT_OUTPUT_FOLDER, output_name, operation_id, ".pptx")
-                video_path = _run_output_path(POWERPOINT_VIDEO_FOLDER, output_name, operation_id, ".mp4")
-                screenshot_slide_duration = (
-                    round(480.0 / max(len(screenshot_files), 1), 3)
-                    if auto_timing_screenshot_slides
-                    else fixed_seconds_per_screenshot_slide
-                )
-                intro_thumbnail_path = (
-                    _thumbnail_path(intro_thumbnail_filename)
-                    if intro_thumbnail_enabled
-                    else None
-                )
-                outro_thumbnail_path = (
-                    _thumbnail_path(outro_thumbnail_filename)
-                    if outro_thumbnail_enabled
-                    else None
-                )
-
-                def _ppt_progress(payload: dict) -> None:
-                    stage = str(payload.get("stage") or "powerpoint")
-                    raw_progress = payload.get("progress")
-                    try:
-                        progress = int(raw_progress)
-                    except Exception:
-                        progress = 90 if stage.startswith("powerpoint") else 95
-                    ctx.progress(stage, progress, str(payload.get("message") or "PowerPoint is working..."), data=payload)
-
-                controller = PowerPointController()
-                if output_format == "video":
-                    ctx.progress("powerpoint", 90, "Building presentation and exporting MP4...")
-                    result = controller.create_and_export_video(
-                        template_path=POWERPOINT_TEMPLATE_PATH,
-                        image_files=screenshot_files,
-                        output_pptx_path=pptx_path,
-                        output_video_path=video_path,
-                        resolution=(width, height),
-                        fps=fps,
-                        quality=quality,
-                        slide_duration=screenshot_slide_duration,
-                        intro_thumbnail_path=intro_thumbnail_path,
-                        intro_thumbnail_duration=intro_thumbnail_duration,
-                        outro_thumbnail_path=outro_thumbnail_path,
-                        outro_thumbnail_duration=outro_thumbnail_duration,
-                        progress_callback=_ppt_progress,
-                        cancel_event=ctx.cancel_event,
+                    pptx_path = _run_output_path(POWERPOINT_OUTPUT_FOLDER, output_name, operation_id, ".pptx")
+                    video_path = _run_output_path(POWERPOINT_VIDEO_FOLDER, output_name, operation_id, ".mp4")
+                    screenshot_slide_duration = (
+                        round(480.0 / max(len(screenshot_files), 1), 3)
+                        if auto_timing_screenshot_slides
+                        else fixed_seconds_per_screenshot_slide
                     )
-                    presentation_file = _rel(result.get("presentation_path"))
-                    video_file = _rel(result.get("video_path"))
-                    if not video_file or not Path(video_file).exists():
-                        raise RuntimeError(result.get("warning") or "PowerPoint did not produce an MP4 file")
-                else:
-                    ctx.progress("powerpoint", 90, "Building PowerPoint deck...")
-                    presentation_file = controller.create_template_presentation(
-                        template_path=POWERPOINT_TEMPLATE_PATH,
-                        output_pptx_path=pptx_path,
-                        image_files=screenshot_files,
-                        slide_duration=screenshot_slide_duration,
-                        intro_thumbnail_path=intro_thumbnail_path,
-                        intro_thumbnail_duration=intro_thumbnail_duration,
-                        outro_thumbnail_path=outro_thumbnail_path,
-                        outro_thumbnail_duration=outro_thumbnail_duration,
-                        progress_callback=_ppt_progress,
-                        cancel_event=ctx.cancel_event,
+                    intro_thumbnail_path = (
+                        _thumbnail_path(intro_thumbnail_filename)
+                        if intro_thumbnail_enabled
+                        else None
                     )
-                    presentation_file = _rel(presentation_file)
+                    outro_thumbnail_path = (
+                        _thumbnail_path(outro_thumbnail_filename)
+                        if outro_thumbnail_enabled
+                        else None
+                    )
+
+                    def _ppt_progress(payload: dict) -> None:
+                        stage = str(payload.get("stage") or "powerpoint")
+                        raw_progress = payload.get("progress")
+                        try:
+                            progress = int(raw_progress)
+                        except Exception:
+                            progress = 90 if stage.startswith("powerpoint") else 95
+                        ctx.progress(stage, progress, str(payload.get("message") or "PowerPoint is working..."), data=payload)
+
+                    controller = PowerPointController()
+                    if output_format == "video":
+                        ctx.progress("powerpoint", 90, "Building presentation and exporting MP4...")
+                        result = controller.create_and_export_video(
+                            template_path=POWERPOINT_TEMPLATE_PATH,
+                            image_files=screenshot_files,
+                            output_pptx_path=pptx_path,
+                            output_video_path=video_path,
+                            resolution=(width, height),
+                            fps=fps,
+                            quality=quality,
+                            slide_duration=screenshot_slide_duration,
+                            intro_thumbnail_path=intro_thumbnail_path,
+                            intro_thumbnail_duration=intro_thumbnail_duration,
+                            outro_thumbnail_path=outro_thumbnail_path,
+                            outro_thumbnail_duration=outro_thumbnail_duration,
+                            progress_callback=_ppt_progress,
+                            cancel_event=ctx.cancel_event,
+                        )
+                        presentation_file = _rel(result.get("presentation_path"))
+                        video_file = _rel(result.get("video_path"))
+                        if not video_file or not Path(video_file).exists():
+                            raise RuntimeError(result.get("warning") or "PowerPoint did not produce an MP4 file")
+                    else:
+                        ctx.progress("powerpoint", 90, "Building PowerPoint deck...")
+                        presentation_file = controller.create_template_presentation(
+                            template_path=POWERPOINT_TEMPLATE_PATH,
+                            output_pptx_path=pptx_path,
+                            image_files=screenshot_files,
+                            slide_duration=screenshot_slide_duration,
+                            intro_thumbnail_path=intro_thumbnail_path,
+                            intro_thumbnail_duration=intro_thumbnail_duration,
+                            outro_thumbnail_path=outro_thumbnail_path,
+                            outro_thumbnail_duration=outro_thumbnail_duration,
+                            progress_callback=_ppt_progress,
+                            cancel_event=ctx.cancel_event,
+                        )
+                        presentation_file = _rel(presentation_file)
 
             outputs = {
                 "html_filename": html_filename,
@@ -550,7 +559,14 @@ def start_text_to_video():
         finally:
             unregister_operation(operation_id)
 
-    position = enqueue(run_id, operation_id, worker, cancel_event, label="Text-to-video")
+    position = enqueue(
+        run_id,
+        operation_id,
+        worker,
+        cancel_event,
+        label="Text-to-video",
+        pipeline_enabled=concurrent_pipeline_runs,
+    )
     return jsonify({
         "success": True,
         "run_id": run_id,
