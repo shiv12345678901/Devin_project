@@ -209,6 +209,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   const [pausedReason, setPausedReason] = useState<
     'in_flight' | 'duplicate' | 'unknown' | null
   >(null)
+  const trackedRunInProgress = runs.runs.some((run) => run.status === 'running')
 
   // Connect generation events → runs store. Lifts the "run row" into
   // existence as soon as the SSE stream reports `running`, finishes it on
@@ -470,6 +471,36 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     return () => window.clearTimeout(timer)
   }, [dispatch, gen.state, paused])
 
+  // If a running backend job was restored from the process log, this hook can
+  // be idle while the backend is still busy. Keep new submissions pending until
+  // that tracked run finishes, then drain the queue.
+  useEffect(() => {
+    const idleNow =
+      gen.state.status === 'idle' ||
+      gen.state.status === 'success' ||
+      gen.state.status === 'error' ||
+      gen.state.status === 'cancelled'
+    if (!idleNow || paused || activeStartedRef.current || activeQueueIdRef.current) return
+    if (!appSettings.concurrentPipelineRuns && trackedRunInProgress) return
+
+    setQueue((prev) => {
+      if (prev.length === 0) return prev
+      const [next, ...rest] = prev
+      activeQueueIdRef.current = next.id
+      activeFingerprintRef.current = fingerprintItem(next)
+      activeReplaceTargetsRef.current = next.replaceTargets ?? null
+      window.setTimeout(() => dispatch(next), 0)
+      return rest
+    })
+  }, [
+    appSettings.concurrentPipelineRuns,
+    dispatch,
+    gen.state.status,
+    paused,
+    queue.length,
+    trackedRunInProgress,
+  ])
+
   const pushOrStart = useCallback(
     (item: QueueItem): EnqueueResult => {
       // Any new manual submission resumes a paused queue — we assume the
@@ -516,6 +547,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         gen.state.status === 'success' ||
         gen.state.status === 'error' ||
         gen.state.status === 'cancelled'
+      const backendSlotBusy = !appSettings.concurrentPipelineRuns && trackedRunInProgress
       if (
         appSettings.concurrentPipelineRuns &&
         item.kind === 'text' &&
@@ -524,7 +556,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       ) {
         return dispatchBackgroundText(item)
       }
-      if (idleNow && !activeQueueIdRef.current) {
+      if (idleNow && !activeQueueIdRef.current && !backendSlotBusy) {
         // Claim the active slot *synchronously* so a rapid second submission
         // in the same tick doesn't also see `activeQueueIdRef` as empty and
         // race to dispatch. The item is NOT appended to `queue` — queue is
@@ -538,7 +570,16 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       setQueue((prev) => [...prev, item])
       return { queueId: item.id, startedImmediately: false }
     },
-    [appSettings.concurrentPipelineRuns, dispatch, dispatchBackgroundText, gen.state.status, paused, queue, toast],
+    [
+      appSettings.concurrentPipelineRuns,
+      dispatch,
+      dispatchBackgroundText,
+      gen.state.status,
+      paused,
+      queue,
+      toast,
+      trackedRunInProgress,
+    ],
   )
 
   const enqueueText = useCallback(
@@ -623,6 +664,8 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     // identical to a fresh submission.
     setQueue((prev) => {
       if (activeQueueIdRef.current) return prev
+      if (gen.state.status === 'running') return prev
+      if (!appSettings.concurrentPipelineRuns && trackedRunInProgress) return prev
       if (prev.length === 0) return prev
       const [next, ...rest] = prev
       activeQueueIdRef.current = next.id
@@ -631,7 +674,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       window.setTimeout(() => dispatch(next), 0)
       return rest
     })
-  }, [dispatch])
+  }, [appSettings.concurrentPipelineRuns, dispatch, gen.state.status, trackedRunInProgress])
 
   const reorderQueued = useCallback((queueId: string, targetQueueId: string) => {
     if (queueId === targetQueueId) return

@@ -143,6 +143,156 @@ def runs_index():
     return jsonify({"success": True, "runs": list_runs()})
 
 
+def _first_text(*values) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _existing_output_file(value) -> str | None:
+    rel = _rel(value)
+    if not rel:
+        return None
+    try:
+        path = Path(rel)
+        if path.is_absolute():
+            return rel if path.is_file() else None
+        return rel if (Path.cwd() / path).is_file() else None
+    except Exception:
+        return None
+
+
+def _dedupe_key(item: dict) -> tuple[str, str, str]:
+    return (
+        str(item.get("class_name") or "").strip().casefold(),
+        str(item.get("subject") or "").strip().casefold(),
+        str(item.get("chapter_name") or "").strip().replace("_", " ").casefold(),
+    )
+
+
+def _youtube_video_item(summary: dict) -> dict | None:
+    outputs = summary.get("outputs") if isinstance(summary.get("outputs"), dict) else {}
+    if str(summary.get("status") or "").lower() != "completed":
+        return None
+
+    run_id = str(summary.get("run_id") or "")
+    detail = get_run(run_id, include_input=True) if run_id else None
+    settings = detail.get("settings", {}) if isinstance(detail, dict) else {}
+    if not isinstance(settings, dict):
+        settings = {}
+    detail_outputs = detail.get("outputs", {}) if isinstance(detail, dict) else {}
+    if isinstance(detail_outputs, dict):
+        outputs = {**outputs, **detail_outputs}
+    video_file = _existing_output_file(outputs.get("video_file") or outputs.get("video_path"))
+    if not video_file:
+        return None
+
+    intro_thumb = _first_text(settings.get("intro_thumbnail_filename"), settings.get("thumbnail_filename"))
+    outro_thumb = _first_text(settings.get("outro_thumbnail_filename"))
+    thumbnail = ""
+    thumbnail_role = None
+    if intro_thumb and _existing_output_file(Path("output") / "thumbnails" / intro_thumb):
+        thumbnail = intro_thumb
+        thumbnail_role = "intro"
+    if not thumbnail and outro_thumb and _existing_output_file(Path("output") / "thumbnails" / outro_thumb):
+        thumbnail = outro_thumb
+        thumbnail_role = "outro"
+    if not thumbnail:
+        return None
+    title = _first_text(settings.get("title"), summary.get("title"), run_id)
+
+    return {
+        "run_id": run_id,
+        "operation_id": summary.get("operation_id"),
+        "class_name": _first_text(settings.get("class_name"), "Unsorted"),
+        "subject": _first_text(settings.get("subject"), "General"),
+        "chapter_name": title,
+        "title": title,
+        "video_file": video_file,
+        "thumbnail_file": thumbnail or None,
+        "thumbnail_role": thumbnail_role,
+        "presentation_file": _rel(outputs.get("presentation_file") or outputs.get("presentation_path")),
+        "html_file": outputs.get("html_file") or outputs.get("html_filename"),
+        "screenshot_count": outputs.get("screenshot_count") or len(outputs.get("screenshot_files") or []),
+        "duration_seconds": summary.get("duration_seconds"),
+        "completed_at": summary.get("completed_at"),
+        "input_preview": summary.get("input_preview") or "",
+        "input_text": (detail.get("input") if isinstance(detail, dict) else "") or "",
+        "model_choice": summary.get("model_choice") or (detail.get("model_choice") if isinstance(detail, dict) else None),
+    }
+
+
+@runs_bp.route("/youtube/videos", methods=["GET"])
+def youtube_videos():
+    by_chapter: dict[tuple[str, str, str], dict] = {}
+    for summary in list_runs(limit=500):
+        item = _youtube_video_item(summary)
+        if item:
+            key = _dedupe_key(item)
+            existing = by_chapter.get(key)
+            if not existing or float(item.get("completed_at") or 0) > float(existing.get("completed_at") or 0):
+                by_chapter[key] = item
+    items = sorted(
+        by_chapter.values(),
+        key=lambda item: float(item.get("completed_at") or 0),
+        reverse=True,
+    )
+    return jsonify({"success": True, "videos": items})
+
+
+@runs_bp.route("/youtube/metadata", methods=["POST"])
+def youtube_metadata():
+    data = request.get_json(silent=True) or {}
+    run_id = str(data.get("run_id") or "").strip()
+    template = str(data.get("template") or "").strip()
+    language = str(data.get("language") or "English").strip() or "English"
+    if not run_id:
+        return jsonify({"success": False, "error": "run_id is required"}), 400
+
+    summary = next((item for item in list_runs(limit=500) if str(item.get("run_id") or "") == run_id), None)
+    item = _youtube_video_item(summary or {})
+    if not item:
+        return jsonify({"success": False, "error": "Publishable video run not found"}), 404
+
+    prompt = (
+        "Create YouTube upload metadata for an educational video.\n"
+        "Return ONLY valid JSON with keys: title, description, tags.\n"
+        "tags must be an array of 12 to 20 concise YouTube tags.\n"
+        "Use the user's template exactly where practical, replacing placeholders naturally.\n\n"
+        f"Language/style: {language}\n"
+        f"Class: {item['class_name']}\n"
+        f"Subject: {item['subject']}\n"
+        f"Chapter: {item['chapter_name']}\n"
+        f"Video path: {item['video_file']}\n"
+        f"Thumbnail path: {item.get('thumbnail_file') or 'No thumbnail selected'}\n\n"
+        f"Template:\n{template}\n\n"
+        f"Source notes preview:\n{item.get('input_text') or item.get('input_preview')}"
+    )
+    system_prompt = (
+        "You are a YouTube publishing assistant for educational videos. "
+        "Write accurate, search-friendly metadata. Do not invent facts beyond the provided class, subject, chapter, and notes."
+    )
+    try:
+        raw = get_ai_response(prompt, use_cache=False, system_prompt=system_prompt, model_choice=str(data.get("model_choice") or "default"))
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.strip("`")
+            if cleaned.lower().startswith("json"):
+                cleaned = cleaned[4:].strip()
+        parsed = json.loads(cleaned)
+        return jsonify({
+            "success": True,
+            "title": str(parsed.get("title") or item["title"]),
+            "description": str(parsed.get("description") or ""),
+            "tags": parsed.get("tags") if isinstance(parsed.get("tags"), list) else [],
+            "raw": raw,
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 @runs_bp.route("/runs/queue", methods=["GET"])
 def queue_status():
     return jsonify({"success": True, "queue": get_queue_snapshot()})

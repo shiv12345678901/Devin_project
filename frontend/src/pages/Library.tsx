@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 
 import { api } from '../api/client'
-import HtmlPreviewModal from '../components/HtmlPreviewModal'
+import AssetPreviewModal from '../components/AssetPreviewModal'
 import ErrorCard from '../components/ErrorCard'
 import EmptyState from '../components/EmptyState'
 import { useToast } from '../store/toast'
@@ -431,21 +431,19 @@ export default function Library() {
       </div>
 
       {preview && (
-        preview.kind === 'video' ? (
-          <VideoPreviewModal
-            src={urlFor(preview.filename)}
-            title={preview.filename.split('/').pop() ?? preview.filename}
-            onClose={() => setPreview(null)}
-          />
-        ) : (
-          <HtmlPreviewModal
-            kind={preview.kind === 'screenshot' ? 'image' : 'html'}
-            src={urlFor(preview.filename)}
-            title={preview.filename.split('/').pop() ?? preview.filename}
-            subtitle={preview.kind === 'html' ? 'HTML file' : preview.filename}
-            onClose={() => setPreview(null)}
-          />
-        )
+        <AssetPreviewModal
+          kind={preview.kind === 'screenshot' ? 'image' : preview.kind === 'html' ? 'html' : 'video'}
+          src={urlFor(preview.filename)}
+          title={preview.filename.split('/').pop() ?? preview.filename}
+          subtitle={
+            preview.kind === 'html'
+              ? 'HTML file'
+              : preview.kind === 'video'
+              ? 'MP4 video'
+              : preview.filename
+          }
+          onClose={() => setPreview(null)}
+        />
       )}
     </div>
   )
@@ -648,63 +646,6 @@ function GeneratedFileRow({
       <button type="button" onClick={onDownload} className="btn-ghost !px-2 !py-1" aria-label="Download">
         <Download size={14} />
       </button>
-    </div>
-  )
-}
-
-function VideoPreviewModal({
-  src,
-  title,
-  onClose,
-}: {
-  src: string
-  title: string
-  onClose: () => void
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      window.removeEventListener('keydown', onKey)
-      document.body.style.overflow = prev
-    }
-  }, [onClose])
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={onClose} aria-hidden />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        className="glass-strong relative flex h-full max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden"
-      >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-3 dark:border-white/10">
-          <div className="min-w-0">
-            <div className="truncate font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
-              {title}
-            </div>
-            <div className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">
-              Video file
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <a href={src} className="btn-secondary">
-              <Download size={14} /> Download
-            </a>
-            <button type="button" className="btn-ghost !px-2" onClick={onClose} aria-label="Close preview">
-              x
-            </button>
-          </div>
-        </div>
-        <div className="flex flex-1 items-center justify-center bg-slate-950 p-4">
-          <video src={src} controls autoPlay className="max-h-full max-w-full rounded-md bg-black" />
-        </div>
-      </div>
     </div>
   )
 }

@@ -5,8 +5,6 @@ import {
   Activity,
   Check,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   Code2,
   Copy,
@@ -34,12 +32,18 @@ import { formatRelative, formatRuntime, useRuns } from '../store/runs'
 import type { Run, RunStatus, RunTool } from '../store/runs'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
+import AssetPreviewModal from '../components/AssetPreviewModal'
 import EmptyState from '../components/EmptyState'
 import ProgressBar from '../components/ProgressBar'
 import { useGenerationQueue } from '../hooks/useTrackedGenerate'
 import type { QueueItem } from '../hooks/useTrackedGenerate'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { PROCESS_EDIT_HANDOFF_KEY } from '../lib/processEditHandoff'
+import {
+  readSelectedProcessId,
+  SELECTED_PROCESS_EVENT,
+  writeSelectedProcessId,
+} from '../lib/selectedProcess'
 
 type ToolLike = RunTool | 'regenerate' | 'text-to-image' | 'html-to-image' | 'image-to-screenshots' | string | undefined
 type EditableProcess = {
@@ -135,12 +139,16 @@ function RunRow({
   onRemove,
   onRegenerate,
   onEditRegenerate,
+  onSelectRunning,
+  selected = false,
   highlight = false,
 }: {
   run: Run
   onRemove?: (id: string) => void
   onRegenerate?: (run: Run) => void
   onEditRegenerate?: (run: Run) => void
+  onSelectRunning?: (run: Run) => void
+  selected?: boolean
   highlight?: boolean
 }) {
   const meta = toolMeta(run.tool)
@@ -151,8 +159,10 @@ function RunRow({
   // Derive `open` from (user click || highlight prop) so we don't need to
   // setState from an effect just because the prop flipped.
   const open = userOpen || highlight
+  const progress = Math.max(0, Math.min(100, run.progress ?? 0))
   const [preview, setPreview] = useState<string | null>(null)
   const [videoPreview, setVideoPreview] = useState(false)
+  const [htmlPreview, setHtmlPreview] = useState(false)
   const [previewIndex, setPreviewIndex] = useState(0)
   const [copiedInput, setCopiedInput] = useState(false)
   const toast = useToast()
@@ -211,7 +221,9 @@ function RunRow({
     <div
       ref={rowRef}
       className={
-        highlight
+        selected
+          ? 'glass overflow-hidden !p-0 ring-2 ring-brand-400 dark:ring-brand-500/60'
+          : highlight
           ? 'glass overflow-hidden !p-0 ring-2 ring-brand-400 dark:ring-brand-500/60'
           : 'glass overflow-hidden !p-0'
       }
@@ -219,7 +231,10 @@ function RunRow({
       <button
         type="button"
         className="flex w-full items-center gap-4 px-5 py-4 text-left transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.03]"
-        onClick={() => setUserOpen((o) => !o)}
+        onClick={() => {
+          if (run.status === 'running') onSelectRunning?.(run)
+          setUserOpen((o) => !o)
+        }}
       >
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300">
           <Icon size={18} />
@@ -238,6 +253,19 @@ function RunRow({
           <p className="mt-1 truncate text-sm text-slate-600 dark:text-slate-300">
             {run.inputPreview || '(no input)'}
           </p>
+          {run.status === 'running' && (
+            <div className="mt-2 flex items-center gap-2">
+              <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-white/[0.08]">
+                <div
+                  className="h-full rounded-full bg-brand-500 transition-[width] duration-500"
+                  style={{ width: `${Math.max(progress, 3)}%` }}
+                />
+              </div>
+              <span className="shrink-0 text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
+                {Math.round(progress)}%
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="hidden w-40 shrink-0 text-right sm:block">
@@ -323,15 +351,14 @@ function RunRow({
                 <p className="text-sm text-red-600 dark:text-red-300">{run.error}</p>
               )}
               {run.htmlFilename && (
-                <a
-                  href={api.htmlUrl(run.htmlFilename)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="block truncate text-xs text-brand-600 hover:underline dark:text-brand-300"
+                <button
+                  type="button"
+                  onClick={() => setHtmlPreview(true)}
+                  className="block max-w-full truncate text-left text-xs text-brand-600 hover:underline dark:text-brand-300"
                   title={run.htmlFilename}
                 >
                   HTML · {run.htmlFilename}
-                </a>
+                </button>
               )}
               {run.videoFile && (
                 <a
@@ -472,6 +499,16 @@ function RunRow({
             />
           )}
 
+          {htmlPreview && run.htmlFilename && (
+            <AssetPreviewModal
+              kind="html"
+              src={api.htmlUrl(run.htmlFilename)}
+              title={run.htmlFilename.split('/').pop() ?? run.htmlFilename}
+              subtitle="HTML file"
+              onClose={() => setHtmlPreview(false)}
+            />
+          )}
+
           {videoPreview && run.videoFile && (
             <AssetPreviewModal
               kind="video"
@@ -511,85 +548,6 @@ function formatHistoryTimestamp(ts: number | string | undefined): string {
     return new Date(num * 1000).toLocaleString()
   }
   return String(ts)
-}
-
-function AssetPreviewModal({
-  kind,
-  src,
-  title,
-  subtitle,
-  onClose,
-  onPrevious,
-  onNext,
-}: {
-  kind: 'image' | 'video'
-  src: string
-  title: string
-  subtitle?: string
-  onClose: () => void
-  onPrevious?: () => void
-  onNext?: () => void
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-      if (e.key === 'ArrowLeft') onPrevious?.()
-      if (e.key === 'ArrowRight') onNext?.()
-    }
-    window.addEventListener('keydown', onKey)
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      window.removeEventListener('keydown', onKey)
-      document.body.style.overflow = prev
-    }
-  }, [onClose, onNext, onPrevious])
-
-  const dialogRef = useFocusTrap<HTMLDivElement>(true)
-
-  return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-sm" onClick={onClose} aria-hidden />
-      <div
-        ref={dialogRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        className="glass-strong relative flex h-full max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden"
-      >
-        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-white/10">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-50">{title}</div>
-            {subtitle && <div className="text-xs text-slate-500 dark:text-slate-400">{subtitle}</div>}
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {kind === 'image' && onPrevious && (
-              <button type="button" className="btn-secondary btn-sm" onClick={onPrevious}>
-                <ChevronLeft size={12} /> Previous
-              </button>
-            )}
-            {kind === 'image' && onNext && (
-              <button type="button" className="btn-secondary btn-sm" onClick={onNext}>
-                Next <ChevronRight size={12} />
-              </button>
-            )}
-            <button type="button" className="btn-ghost !px-2" onClick={onClose} aria-label="Close preview">
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-        <div className="flex flex-1 items-center justify-center overflow-auto bg-slate-50 p-4 dark:bg-slate-950/40">
-          {kind === 'video' ? (
-            <video src={src} controls autoPlay className="max-h-full max-w-full rounded-md bg-black" />
-          ) : (
-            <img src={src} alt={title} className="max-h-full max-w-full rounded-md object-contain shadow-lg" />
-          )}
-        </div>
-      </div>
-    </div>,
-    document.body,
-  )
 }
 
 export function HistoryRow({ entry }: { entry: HistoryEntry }) {
@@ -679,13 +637,15 @@ function LiveRunCard({
   onCancel: () => void
 }) {
   const hasLiveState = liveState.status === 'running'
-  const source = hasLiveState ? liveState : trackedRun
+  const source = trackedRun ?? (hasLiveState ? liveState : undefined)
   if (!source) return null
-  const operationId = hasLiveState ? liveState.operationId : trackedRun?.operationId
-  const progress = hasLiveState ? liveState.progress : trackedRun?.progress ?? 0
-  const stage = hasLiveState ? liveState.stage : trackedRun?.stage
-  const message = hasLiveState ? liveState.message : trackedRun?.message
-  const etaSeconds = hasLiveState ? liveState.etaSeconds : undefined
+  const isLiveSelection =
+    hasLiveState && (!trackedRun || trackedRun.operationId === liveState.operationId)
+  const operationId = trackedRun?.operationId ?? liveState.operationId
+  const progress = trackedRun?.progress ?? liveState.progress ?? 0
+  const stage = trackedRun?.stage ?? liveState.stage
+  const message = trackedRun?.message ?? liveState.message
+  const etaSeconds = isLiveSelection ? liveState.etaSeconds : undefined
 
   return (
     <div className="card ring-2 ring-brand-400/40 dark:ring-brand-500/40">
@@ -704,7 +664,7 @@ function LiveRunCard({
             </code>
           )}
         </div>
-        {hasLiveState && (
+        {isLiveSelection && (
           <button type="button" className="btn-danger" onClick={onCancel}>
             <StopCircle size={14} /> Cancel run
           </button>
@@ -980,6 +940,7 @@ export default function Processes() {
   const [err, setErr] = useState<string | null>(null)
   const [filter, setFilter] = useState<'all' | RunTool>('all')
   const [editingProcess, setEditingProcess] = useState<EditableProcess | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(() => readSelectedProcessId())
   const toast = useToast()
   const confirmDialog = useConfirm()
   const runsRef = useRef(runs)
@@ -988,6 +949,16 @@ export default function Processes() {
   useEffect(() => {
     runsRef.current = runs
   }, [runs])
+
+  useEffect(() => {
+    const syncSelected = () => setSelectedRunId(readSelectedProcessId())
+    window.addEventListener(SELECTED_PROCESS_EVENT, syncSelected)
+    window.addEventListener('storage', syncSelected)
+    return () => {
+      window.removeEventListener(SELECTED_PROCESS_EVENT, syncSelected)
+      window.removeEventListener('storage', syncSelected)
+    }
+  }, [])
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -1266,7 +1237,15 @@ export default function Processes() {
   const totalRuntime = runs
     .filter((r) => r.endedAt)
     .reduce((sum, r) => sum + (r.endedAt! - r.startedAt), 0)
-  const currentRun = runs.find((r) => r.status === 'running')
+  const runningRuns = runs.filter((r) => r.status === 'running')
+  const currentRun =
+    runningRuns.find((r) => r.id === selectedRunId || r.operationId === selectedRunId) ??
+    runningRuns[0]
+
+  const selectRunningRun = (run: Run) => {
+    writeSelectedProcessId(run.id)
+    setSelectedRunId(run.id)
+  }
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
@@ -1413,6 +1392,12 @@ export default function Processes() {
               onRemove={remove}
               onRegenerate={regenerateRun}
               onEditRegenerate={editRegenerateRun}
+              onSelectRunning={selectRunningRun}
+              selected={
+                r.status === 'running' &&
+                !!currentRun &&
+                (r.id === currentRun.id || r.operationId === currentRun.operationId)
+              }
               highlight={
                 (!!highlightOp &&
                   (r.operationId === highlightOp || r.id === highlightOp)) ||

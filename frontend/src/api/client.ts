@@ -8,6 +8,8 @@ import type {
   SseEvent,
   BackendRunStartResponse,
   BackendRunDetail,
+  YoutubeMetadataResponse,
+  YoutubeVideosResponse,
 } from './types'
 
 // Base URL for the Flask backend. Starts from the build-time env var, but can
@@ -121,6 +123,9 @@ export const api = {
 
   list: () => getJson<ListResponse>('/list'),
   history: () => getJson<HistoryEntry[]>('/history'),
+  youtubeVideos: () => getJson<YoutubeVideosResponse>('/youtube/videos'),
+  youtubeMetadata: (payload: { run_id: string; template: string; language?: string; model_choice?: string }) =>
+    postJson<YoutubeMetadataResponse>('/youtube/metadata', payload),
   clearHistory: () => postJson<{ success: boolean; message: string }>('/history/clear', {}),
   deleteFile: async (type: 'screenshot' | 'html' | 'presentation' | 'video', filename: string) => {
     // Encode each path segment separately. encodeURIComponent would escape

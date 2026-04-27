@@ -8,6 +8,7 @@ import {
   LayoutGrid,
   Loader2,
   Menu,
+  UploadCloud,
   Settings as SettingsIcon,
   X,
 } from 'lucide-react'
@@ -16,6 +17,7 @@ import clsx from 'clsx'
 import { api } from '../api/client'
 import { useRuns } from '../store/runs'
 import { useGenerationQueue } from '../hooks/useTrackedGenerate'
+import { readSelectedProcessId, SELECTED_PROCESS_EVENT } from '../lib/selectedProcess'
 
 type NavItem = {
   to: string
@@ -34,6 +36,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { to: '/', label: 'Home', icon: HomeIcon, end: true },
       { to: '/workspace', label: 'New run', icon: LayoutGrid },
       { to: '/library', label: 'Library', icon: Library },
+      { to: '/publish', label: 'Publish', icon: UploadCloud },
     ],
   },
   {
@@ -54,6 +57,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/workspace/html': 'HTML → Video',
   '/workspace/image': 'Image → Video',
   '/library': 'Library',
+  '/publish': 'YouTube Publish',
   '/processes': 'Processes',
   '/settings': 'Settings',
 }
@@ -171,10 +175,10 @@ function SidebarNav() {
   // A run is "live" if at least one tracked entry is still in the running
   // state. Shown next to the Processes link so the user never loses sight
   // of an in-flight job when they navigate to Library / Settings / etc.
-  // The queue *includes* the currently-executing item, so pending = len-1
-  // when a run is live, or = len when idle.
+  // The queue contains pending-only items; the currently-executing run is
+  // tracked in the runs store / live generation state.
   const runningCount = runs.filter((r) => r.status === 'running').length
-  const queuedCount = Math.max(0, queue.length - (runningCount > 0 ? 1 : 0))
+  const queuedCount = queue.length
   const badgeCount = runningCount + queuedCount
   return (
     <nav className="flex-1 overflow-y-auto px-3 pb-4 pt-3">
@@ -258,14 +262,27 @@ function SidebarFooterWithProgress() {
   const status = useBackendStatus()
   const { runs } = useRuns()
   const { state } = useGenerationQueue()
-  const trackedRun = runs.find((r) => r.status === 'running')
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(() => readSelectedProcessId())
+  useEffect(() => {
+    const syncSelected = () => setSelectedRunId(readSelectedProcessId())
+    window.addEventListener(SELECTED_PROCESS_EVENT, syncSelected)
+    window.addEventListener('storage', syncSelected)
+    return () => {
+      window.removeEventListener(SELECTED_PROCESS_EVENT, syncSelected)
+      window.removeEventListener('storage', syncSelected)
+    }
+  }, [])
+  const runningRuns = runs.filter((r) => r.status === 'running')
+  const trackedRun =
+    runningRuns.find((r) => r.id === selectedRunId || r.operationId === selectedRunId) ??
+    runningRuns[0]
   const hasLiveState = state.status === 'running'
   const progress = Math.max(
     0,
-    Math.min(100, hasLiveState ? state.progress ?? 0 : trackedRun?.progress ?? 0),
+    Math.min(100, trackedRun?.progress ?? state.progress ?? 0),
   )
-  const stage = hasLiveState ? state.stage : trackedRun?.stage
-  const message = hasLiveState ? state.message : trackedRun?.message
+  const stage = trackedRun?.stage ?? state.stage
+  const message = trackedRun?.message ?? state.message
   const showCurrent = hasLiveState || !!trackedRun
   const label =
     status === 'online'

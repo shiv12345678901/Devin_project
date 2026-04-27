@@ -8,6 +8,7 @@ import ImageToVideo from './pages/ImageToVideo'
 import Library from './pages/Library'
 import Processes from './pages/Processes'
 import Settings from './pages/Settings'
+import YouTubePublish from './pages/YouTubePublish'
 
 function App() {
   return (
@@ -22,6 +23,8 @@ function App() {
           <Route path="workspace/image" element={<ImageToVideo />} />
 
           <Route path="library" element={<Library />} />
+          <Route path="publish" element={<YouTubePublish />} />
+          <Route path="publish/:runId" element={<YouTubePublish />} />
           <Route path="processes" element={<Processes />} />
           <Route path="settings" element={<Settings />} />
 

@@ -206,3 +206,38 @@ export interface CacheStats {
   misses?: number
   [k: string]: unknown
 }
+
+export interface YoutubeVideoItem {
+  run_id: string
+  operation_id?: string
+  class_name: string
+  subject: string
+  chapter_name: string
+  title: string
+  video_file: string
+  thumbnail_file?: string | null
+  thumbnail_role?: 'intro' | 'outro' | string | null
+  presentation_file?: string | null
+  html_file?: string | null
+  screenshot_count?: number
+  duration_seconds?: number
+  completed_at?: number
+  input_preview?: string
+  input_text?: string
+  model_choice?: string | null
+}
+
+export interface YoutubeVideosResponse {
+  success: boolean
+  videos: YoutubeVideoItem[]
+  error?: string
+}
+
+export interface YoutubeMetadataResponse {
+  success: boolean
+  title: string
+  description: string
+  tags: string[]
+  raw?: string
+  error?: string
+}
