@@ -38,6 +38,7 @@ export interface Run {
   startedAt: number
   endedAt?: number
   inputPreview: string
+  inputText?: string
   settings?: RunSettings
   /** For image-to-video: original filename(s) the user dropped in. */
   inputFiles?: string[]

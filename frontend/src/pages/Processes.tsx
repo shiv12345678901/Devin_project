@@ -2,11 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Activity,
+  Check,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Code2,
+  Copy,
   Database,
+  Download,
   FileText,
+  Film,
   ImageIcon,
   ListOrdered,
   Loader2,
@@ -101,6 +107,9 @@ function RunRow({
   // setState from an effect just because the prop flipped.
   const open = userOpen || highlight
   const [preview, setPreview] = useState<string | null>(null)
+  const [previewIndex, setPreviewIndex] = useState(0)
+  const [copiedInput, setCopiedInput] = useState(false)
+  const toast = useToast()
   const scrolled = useRef(false)
   const rowRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
@@ -114,6 +123,39 @@ function RunRow({
     !!run.htmlFilename ||
     !!run.presentationFile ||
     !!run.videoFile
+  const inputText = run.inputText || run.inputPreview || ''
+  const screenshots = run.screenshotFiles ?? []
+  const selectedScreenshot = screenshots[previewIndex]
+  const selectedScreenshotUrl = selectedScreenshot ? api.screenshotUrl(selectedScreenshot) : null
+
+  const copyInput = async (event: React.MouseEvent) => {
+    event.stopPropagation()
+    if (!inputText) return
+    try {
+      await navigator.clipboard.writeText(inputText)
+      setCopiedInput(true)
+      toast.push({ variant: 'success', message: 'Input copied to clipboard.' })
+      window.setTimeout(() => setCopiedInput(false), 1500)
+    } catch (e) {
+      toast.push({
+        variant: 'error',
+        title: 'Copy failed',
+        message: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
+
+  const openScreenshot = (index: number) => {
+    setPreviewIndex(index)
+    setPreview(api.screenshotUrl(screenshots[index]))
+  }
+
+  const movePreview = (direction: -1 | 1) => {
+    if (screenshots.length === 0) return
+    const next = (previewIndex + direction + screenshots.length) % screenshots.length
+    setPreviewIndex(next)
+    setPreview(api.screenshotUrl(screenshots[next]))
+  }
 
   return (
     <div
@@ -162,9 +204,25 @@ function RunRow({
         <div className="space-y-4 border-t border-slate-200 px-5 py-4 dark:border-white/10">
           <div className="grid gap-4 md:grid-cols-3">
             <Section title="Input">
-              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-200">
-                {run.inputPreview || '(empty)'}
-              </pre>
+              <div className="rounded-md border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/[0.03]">
+                <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2 dark:border-white/10">
+                  <span className="truncate text-xs font-medium text-slate-600 dark:text-slate-300">
+                    {inputText.length.toLocaleString()} characters
+                  </span>
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm"
+                    onClick={copyInput}
+                    disabled={!inputText}
+                  >
+                    {copiedInput ? <Check size={12} /> : <Copy size={12} />}
+                    {copiedInput ? 'Copied' : 'Copy all'}
+                  </button>
+                </div>
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] text-slate-700 dark:text-slate-200">
+                  {inputText || '(empty)'}
+                </pre>
+              </div>
               {run.inputFiles && run.inputFiles.length > 0 && (
                 <ul className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">
                   {run.inputFiles.map((f) => (
@@ -247,13 +305,76 @@ function RunRow({
             </Section>
           </div>
 
+          {run.videoFile && (
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Film size={16} className="shrink-0 text-brand-500" />
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      Video preview
+                    </div>
+                    <div className="truncate text-xs text-slate-600 dark:text-slate-300">
+                      {run.videoFile}
+                    </div>
+                  </div>
+                </div>
+                <a href={api.downloadUrl(run.videoFile)} className="btn-secondary btn-sm">
+                  <Download size={12} /> Download MP4
+                </a>
+              </div>
+              <video
+                src={api.downloadUrl(run.videoFile)}
+                controls
+                preload="metadata"
+                className="aspect-video w-full rounded-md bg-black"
+              />
+            </div>
+          )}
+
           {hasOutputs && run.screenshotFiles && run.screenshotFiles.length > 0 && (
             <div>
-              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                Screenshot preview ({run.screenshotFiles.length})
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Screenshot preview ({run.screenshotFiles.length})
+                </div>
+                {selectedScreenshotUrl && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={() => movePreview(-1)}
+                      disabled={screenshots.length < 2}
+                    >
+                      <ChevronLeft size={12} /> Previous
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={() => movePreview(1)}
+                      disabled={screenshots.length < 2}
+                    >
+                      Next <ChevronRight size={12} />
+                    </button>
+                  </div>
+                )}
               </div>
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-                {run.screenshotFiles.slice(0, 12).map((f) => {
+              {selectedScreenshotUrl && (
+                <button
+                  type="button"
+                  onClick={() => setPreview(selectedScreenshotUrl)}
+                  className="mb-3 block w-full overflow-hidden rounded-md border border-slate-200 bg-slate-50 text-left dark:border-white/10 dark:bg-white/[0.03]"
+                  title="Open screenshot preview"
+                >
+                  <img
+                    src={selectedScreenshotUrl}
+                    alt={selectedScreenshot ?? 'Screenshot'}
+                    className="max-h-80 w-full object-contain"
+                  />
+                </button>
+              )}
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-6 md:grid-cols-8">
+                {run.screenshotFiles.map((f, index) => {
                   // `f` is already a path relative to OUTPUT_FOLDER
                   // (e.g. "5(1).png" or "batch 3/5(1).png"). Do NOT prepend
                   // screenshotFolder — that double-prefixed the path and
@@ -264,8 +385,12 @@ function RunRow({
                     <button
                       key={f}
                       type="button"
-                      onClick={() => setPreview(url)}
-                      className="block aspect-video overflow-hidden rounded-md border border-slate-200 bg-slate-50 text-left transition-shadow hover:shadow-glass-lg dark:border-white/10 dark:bg-white/[0.03]"
+                      onClick={() => openScreenshot(index)}
+                      className={
+                        index === previewIndex
+                          ? 'block aspect-video overflow-hidden rounded-md border border-brand-400 bg-brand-50 text-left ring-2 ring-brand-400/30 dark:border-brand-400 dark:bg-brand-500/10'
+                          : 'block aspect-video overflow-hidden rounded-md border border-slate-200 bg-slate-50 text-left transition-shadow hover:shadow-glass-lg dark:border-white/10 dark:bg-white/[0.03]'
+                      }
                       title={`Preview ${f.split('/').pop() ?? f}`}
                     >
                       <img src={url} alt={f} loading="lazy" className="h-full w-full object-cover" />

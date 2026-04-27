@@ -38,6 +38,7 @@ export interface QueueItem {
   tool: RunTool
   kind: QueueItemKind
   inputPreview: string
+  inputText?: string
   queuedAt: number
   settings?: GenerateSettings
   // payload variants — only one of these is populated per item
@@ -129,15 +130,26 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     (item: QueueItem) => {
       activeQueueIdRef.current = item.id
       if (item.kind === 'text' && item.text !== undefined && item.settings) {
-        pendingRef.current = { tool: item.tool, inputPreview: item.inputPreview, settings: item.settings }
+        pendingRef.current = {
+          tool: item.tool,
+          inputPreview: item.inputPreview,
+          inputText: item.inputText ?? item.text,
+          settings: item.settings,
+        }
         void gen.generate(item.text, item.settings)
       } else if (item.kind === 'html' && item.html !== undefined && item.settings) {
-        pendingRef.current = { tool: item.tool, inputPreview: item.inputPreview, settings: item.settings }
+        pendingRef.current = {
+          tool: item.tool,
+          inputPreview: item.inputPreview,
+          inputText: item.inputText ?? item.html,
+          settings: item.settings,
+        }
         void gen.generateFromHtml(item.html, item.settings)
       } else if (item.kind === 'image' && item.formData) {
         pendingRef.current = {
           tool: item.tool,
           inputPreview: item.inputPreview,
+          inputText: item.inputText ?? item.inputPreview,
           inputFiles: item.files?.map((f) => f.name),
           settings: item.settings,
         }
@@ -201,6 +213,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         tool,
         kind: 'text',
         inputPreview: text.slice(0, 200),
+        inputText: text,
         queuedAt: Date.now(),
         text,
         settings,
@@ -215,6 +228,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         tool,
         kind: 'html',
         inputPreview: html.slice(0, 200),
+        inputText: html,
         queuedAt: Date.now(),
         html,
         settings,
@@ -233,6 +247,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         tool,
         kind: 'image',
         inputPreview: meta.files.length ? meta.files.map((f) => f.name).join(', ') : '(image/pdf)',
+        inputText: meta.files.length ? meta.files.map((f) => f.name).join('\n') : '(image/pdf)',
         queuedAt: Date.now(),
         formData,
         files: meta.files,

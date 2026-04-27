@@ -28,6 +28,7 @@ function migrateRun(value: unknown): Run | null {
     r.screenshotFiles = []
   }
   if (typeof r.inputPreview !== 'string') r.inputPreview = ''
+  if (r.inputText != null && typeof r.inputText !== 'string') r.inputText = String(r.inputText)
   return r as Run
 }
 
