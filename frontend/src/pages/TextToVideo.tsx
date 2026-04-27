@@ -53,44 +53,76 @@ const DEFAULT_SETTINGS: GenerateSettings = {
   outro_thumbnail_duration_sec: 5,
 }
 
-const PROJECT_DETAILS_STORAGE_KEY = 'textbro:text-to-video:project-details:v1'
+// New storage key (v2) captures the full wizard state so "Reuse previous
+// run" restores everything: text, all GenerateSettings (model choice,
+// system prompt, screenshot settings, video settings, thumbnails, …).
+// The old v1 key only stored {class_name, subject, title, output_format}
+// — we still read it as a fallback so users who ran at least once under
+// v1 don't lose the little that was saved.
+const LAST_RUN_STORAGE_KEY = 'textbro:text-to-video:last-run:v2'
+const LEGACY_PROJECT_DETAILS_STORAGE_KEY = 'textbro:text-to-video:project-details:v1'
 const CLASS_OPTIONS = ['Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12']
 const SUBJECT_OPTIONS = ['Nepali', 'English', 'Science', 'Math', 'Social', 'Model Question']
 
-type ProjectDetails = Pick<GenerateSettings, 'class_name' | 'subject' | 'title' | 'output_format'>
+type LegacyProjectDetails = Pick<GenerateSettings, 'class_name' | 'subject' | 'title' | 'output_format'>
 
-function readLastProjectDetails(): ProjectDetails | null {
+/** Full snapshot of the wizard — everything needed to restore a prior run. */
+interface LastRunSnapshot {
+  text: string
+  settings: GenerateSettings
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null
+}
+
+function readLastRunSnapshot(): LastRunSnapshot | null {
   if (typeof window === 'undefined') return null
   try {
-    const raw = window.localStorage.getItem(PROJECT_DETAILS_STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as ProjectDetails
-    if (!parsed || typeof parsed !== 'object') return null
-    return {
-      class_name: typeof parsed.class_name === 'string' ? parsed.class_name : undefined,
-      subject: typeof parsed.subject === 'string' ? parsed.subject : undefined,
-      title: typeof parsed.title === 'string' ? parsed.title : undefined,
-      output_format: parsed.output_format,
+    const raw = window.localStorage.getItem(LAST_RUN_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as unknown
+      if (isRecord(parsed) && isRecord(parsed.settings)) {
+        return {
+          text: typeof parsed.text === 'string' ? parsed.text : '',
+          settings: parsed.settings as GenerateSettings,
+        }
+      }
     }
+    // Fallback — legacy key only had the 4 project-info fields.
+    const legacyRaw = window.localStorage.getItem(LEGACY_PROJECT_DETAILS_STORAGE_KEY)
+    if (legacyRaw) {
+      const legacy = JSON.parse(legacyRaw) as LegacyProjectDetails
+      if (isRecord(legacy)) {
+        return {
+          text: '',
+          settings: {
+            class_name: typeof legacy.class_name === 'string' ? legacy.class_name : undefined,
+            subject: typeof legacy.subject === 'string' ? legacy.subject : undefined,
+            title: typeof legacy.title === 'string' ? legacy.title : undefined,
+            output_format: legacy.output_format,
+          },
+        }
+      }
+    }
+    return null
   } catch {
     return null
   }
 }
 
-function saveLastProjectDetails(settings: GenerateSettings): ProjectDetails | null {
+function saveLastRunSnapshot(text: string, settings: GenerateSettings): LastRunSnapshot | null {
   if (typeof window === 'undefined') return null
-  const details: ProjectDetails = {
-    class_name: settings.class_name,
-    subject: settings.subject,
-    title: settings.title,
-    output_format: settings.output_format,
-  }
+  const snapshot: LastRunSnapshot = { text, settings }
   try {
-    window.localStorage.setItem(PROJECT_DETAILS_STORAGE_KEY, JSON.stringify(details))
+    window.localStorage.setItem(LAST_RUN_STORAGE_KEY, JSON.stringify(snapshot))
+    // Clear the legacy key so the reuse button doesn't surface stale
+    // project-info that we've already superseded.
+    window.localStorage.removeItem(LEGACY_PROJECT_DETAILS_STORAGE_KEY)
   } catch {
     /* ignore storage failures */
   }
-  return details
+  return snapshot
 }
 
 type StepId = 'project' | 'content' | 'screenshot' | 'video' | 'thumbnail' | 'advanced'
@@ -235,8 +267,8 @@ export default function TextToVideo() {
     ...DEFAULT_SETTINGS,
     output_format: appSettings.defaultOutputFormat,
   })
-  const [lastProjectDetails, setLastProjectDetails] = useState<ProjectDetails | null>(() =>
-    readLastProjectDetails(),
+  const [lastRunSnapshot, setLastRunSnapshot] = useState<LastRunSnapshot | null>(() =>
+    readLastRunSnapshot(),
   )
   const [stepId, setStepId] = useState<StepId>('project')
   const [showPreflight, setShowPreflight] = useState(false)
@@ -307,13 +339,18 @@ export default function TextToVideo() {
     setShowPreflight(true)
   }
 
-  const reuseLastProjectDetails = () => {
-    if (!lastProjectDetails) return
-    setSettings((prev) => ({
-      ...prev,
-      ...lastProjectDetails,
-      output_format: lastProjectDetails.output_format ?? prev.output_format,
-    }))
+  const reuseLastRun = () => {
+    if (!lastRunSnapshot) return
+    // Full restore: text + every field the previous run set. Start from
+    // the current baseline so anything *not* captured in the snapshot
+    // (new settings added after the snapshot was saved) keeps its
+    // current value instead of becoming `undefined`.
+    setSettings((prev) => ({ ...prev, ...lastRunSnapshot.settings }))
+    if (typeof lastRunSnapshot.text === 'string') setText(lastRunSnapshot.text)
+    // After a restore, land the user back on the first step so they
+    // can quickly confirm the restored values before running.
+    setStepId('project')
+    setErroredSteps(new Set())
   }
 
   const onPreflightProceed = async () => {
@@ -324,7 +361,9 @@ export default function TextToVideo() {
     payload.class_name = (payload.class_name ?? '').trim() || undefined
     payload.subject = (payload.subject ?? '').trim() || undefined
     payload.title = (payload.title ?? '').trim() || undefined
-    setLastProjectDetails(saveLastProjectDetails(payload))
+    // Snapshot the full wizard state (text + settings) so the next
+    // session can restore everything via "Reuse previous run".
+    setLastRunSnapshot(saveLastRunSnapshot(text, payload))
     // Enqueues and (if idle) kicks off immediately. Navigate right away so
     // the user sees either the running run or the queue entry without
     // staying on the wizard.
@@ -396,8 +435,8 @@ export default function TextToVideo() {
           <ProjectStep
             settings={settings}
             onChange={set}
-            lastProjectDetails={lastProjectDetails}
-            onReuseLast={reuseLastProjectDetails}
+            lastRunSnapshot={lastRunSnapshot}
+            onReuseLast={reuseLastRun}
             running={running}
             errors={showCurrentErrors ? currentErrors : {}}
           />
@@ -649,19 +688,31 @@ function StepHeader({ title, subtitle }: { title: string; subtitle?: string }) {
 function ProjectStep({
   settings,
   onChange,
-  lastProjectDetails,
+  lastRunSnapshot,
   onReuseLast,
   running,
   errors,
 }: {
   settings: GenerateSettings
   onChange: Setter
-  lastProjectDetails: ProjectDetails | null
+  lastRunSnapshot: LastRunSnapshot | null
   onReuseLast: () => void
   running: boolean
   errors: FieldErrors
 }) {
-  const canReuse = Boolean(lastProjectDetails?.class_name || lastProjectDetails?.subject || lastProjectDetails?.title)
+  // "Reuse previous run" is offered whenever we have any captured
+  // signal from last time — project info, typed text, or non-default
+  // advanced settings. This is broader than the previous
+  // project-only gate.
+  const canReuse = Boolean(
+    lastRunSnapshot &&
+      (lastRunSnapshot.text?.trim() ||
+        lastRunSnapshot.settings?.class_name ||
+        lastRunSnapshot.settings?.subject ||
+        lastRunSnapshot.settings?.title ||
+        lastRunSnapshot.settings?.output_format ||
+        lastRunSnapshot.settings?.model_choice),
+  )
   return (
     <>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -675,8 +726,9 @@ function ProjectStep({
             className="btn-secondary"
             onClick={onReuseLast}
             disabled={running}
+            title="Restore the text, project info, and all settings from your last run"
           >
-            Reuse previous details
+            Reuse previous run
           </button>
         )}
       </div>
