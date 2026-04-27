@@ -60,6 +60,11 @@ def _rel(path: str | Path | None) -> str | None:
     return str(path).replace("\\", "/")
 
 
+def _run_output_path(folder: str, output_name: str, operation_id: str, suffix: str) -> str:
+    stem = _safe_name(output_name, "output")
+    return _rel(Path(folder) / f"{stem}_{operation_id}{suffix}") or ""
+
+
 def _close_powerpoint_best_effort() -> None:
     try:
         import win32com.client  # type: ignore
@@ -298,8 +303,8 @@ def start_text_to_video():
                     time.sleep(1)
                 ctx.check_cancelled()
 
-                pptx_path = _rel(Path(POWERPOINT_OUTPUT_FOLDER) / f"{output_name}.pptx")
-                video_path = _rel(Path(POWERPOINT_VIDEO_FOLDER) / f"{output_name}.mp4")
+                pptx_path = _run_output_path(POWERPOINT_OUTPUT_FOLDER, output_name, operation_id, ".pptx")
+                video_path = _run_output_path(POWERPOINT_VIDEO_FOLDER, output_name, operation_id, ".mp4")
 
                 def _ppt_progress(payload: dict) -> None:
                     stage = str(payload.get("stage") or "powerpoint")

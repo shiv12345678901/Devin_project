@@ -161,24 +161,16 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
 
     const timer = window.setTimeout(() => {
       setQueue((prev) => {
-        const next = prev.slice()
         const finishedId = activeQueueIdRef.current
-        if (finishedId) {
-          const idx = next.findIndex((q) => q.id === finishedId)
-          if (idx >= 0) next.splice(idx, 1)
-        }
         activeQueueIdRef.current = null
-        const head = next[0]
-        if (head) {
-          // Fire the next item on the next tick so state updates in
-          // gen.reset() / gen.generate() don't collide with this setState.
-          window.setTimeout(() => dispatch(head), 0)
+        if (finishedId) {
+          return prev.filter((q) => q.id !== finishedId)
         }
-        return next
+        return prev
       })
     }, 250)
     return () => window.clearTimeout(timer)
-  }, [gen.state, queue.length, dispatch])
+  }, [gen.state, queue.length])
 
   const pushOrStart = useCallback(
     (item: QueueItem): EnqueueResult => {
@@ -193,11 +185,10 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         // race to dispatch. The real work still defers one tick so React
         // has time to commit the new queue state.
         activeQueueIdRef.current = item.id
-        setQueue((q) => [...q, item])
         window.setTimeout(() => dispatch(item), 0)
         return { queueId: item.id, startedImmediately: true }
       }
-      setQueue((q) => [...q, item])
+      console.warn('A generation is already running; ignoring duplicate start request.')
       return { queueId: item.id, startedImmediately: false }
     },
     [dispatch, gen.state.status],

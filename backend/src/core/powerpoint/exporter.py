@@ -319,6 +319,7 @@ class PowerPointExporter:
         stable_count = 0
         stable_threshold = 3  # Number of checks with same size to consider complete
         status_done_seen = False
+        status_failed_seen_at = None
         
         logger.info(f"Waiting for video export to complete (timeout: {timeout}s)...")
         
@@ -340,9 +341,7 @@ class PowerPointExporter:
                 if status == 2:
                     status_done_seen = True
                 if status == 3:
-                    raise RuntimeError("PowerPoint reported CreateVideoStatus=Failed")
-            except RuntimeError:
-                raise
+                    status_failed_seen_at = status_failed_seen_at or time.time()
             except Exception:
                 pass
 
@@ -387,6 +386,8 @@ class PowerPointExporter:
                 except OSError as e:
                     # File might be locked during write
                     logger.debug(f"Could not check file size: {e}")
+            elif status_failed_seen_at is not None and time.time() - status_failed_seen_at > 30:
+                raise RuntimeError("PowerPoint reported CreateVideoStatus=Failed")
             elif status_done_seen and progress_callback:
                 progress_callback({
                     "stage": "video_export",
