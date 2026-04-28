@@ -2,7 +2,6 @@
 import json
 import os
 import queue
-import re
 import threading
 import time
 
@@ -17,57 +16,12 @@ from routes.helpers import (
     OUTPUT_FOLDER, HTML_FOLDER,
     build_ai_input_text, get_next_batch_id, sanitize_folder_path,
     take_screenshots, save_html, log_generation,
+    youtube_video_stem,
 )
 from utils.eta_tracker import eta_tracker
 
 generate_bp = Blueprint('generate', __name__)
 html_beautifier = HTMLBeautifier()
-
-
-def _safe_export_stem(output_name: str, fallback: str) -> str:
-    raw = (output_name or fallback).strip() or fallback
-    return re.sub(r'[^A-Za-z0-9._-]+', '_', raw)[:80].strip('._-') or fallback
-
-
-def _slug_part(value: str, fallback: str) -> str:
-    parts = re.findall(r'[A-Za-z0-9]+', str(value or '').lower())
-    return '_'.join(parts) or fallback
-
-
-def _first_number(*values: str) -> str:
-    for value in values:
-        text = str(value or '')
-        chapter = re.search(r'chapter\s*[_-]?\s*(\d+)', text, re.IGNORECASE)
-        if chapter:
-            return chapter.group(1)
-    for value in values:
-        number = re.search(r'\b(\d{1,2})\b', str(value or ''))
-        if number:
-            return number.group(1)
-    return 'unknown'
-
-
-def _chapter_number(*values: str) -> str:
-    for value in values:
-        chapter = re.search(r'chapter\s*[_-]?\s*(\d+)', str(value or ''), re.IGNORECASE)
-        if chapter:
-            return chapter.group(1)
-    for value in values[:2]:
-        number = re.search(r'\b(\d{1,2})\b', str(value or ''))
-        if number:
-            return number.group(1)
-    return 'unknown'
-
-
-def _youtube_video_stem(project_info: dict, output_name: str, input_text: str) -> str:
-    class_num = _first_number(str(project_info.get('class_name') or ''))
-    subject = _slug_part(str(project_info.get('subject') or ''), 'subject')
-    chapter = _chapter_number(
-        str(project_info.get('title') or ''),
-        output_name,
-        input_text[:2000],
-    )
-    return f'class_{class_num}_{subject}_chapter_{chapter}_exercise_2083'
 
 
 def _resolution_tuple(label: str) -> tuple[int, int]:
@@ -700,10 +654,13 @@ def generate_sse():
                     )
                     from core.powerpoint.controller import PowerPointController
 
-                    stem = _safe_export_stem(output_name, f"{operation_id}")
-                    video_stem = _youtube_video_stem(project_info, output_name, input_text)
+                    # MP4 and PPTX share the same canonical
+                    # ``class_X_subject_chapter_Y_exercise_2083`` stem so
+                    # the Process tab, Publish tab, and Library always
+                    # show a matched pair of artefacts for the same run.
+                    stem = youtube_video_stem(project_info, output_name, input_text)
                     pptx_path = os.path.join(POWERPOINT_OUTPUT_FOLDER, f"{stem}.pptx")
-                    video_path = os.path.join(POWERPOINT_VIDEO_FOLDER, f"{video_stem}.mp4")
+                    video_path = os.path.join(POWERPOINT_VIDEO_FOLDER, f"{stem}.mp4")
                     os.makedirs(POWERPOINT_OUTPUT_FOLDER, exist_ok=True)
                     os.makedirs(POWERPOINT_VIDEO_FOLDER, exist_ok=True)
                     screenshot_slide_duration = (
