@@ -237,6 +237,74 @@ def take_screenshots(html_content, screenshot_name, screenshot_folder=None,
     return screenshot_files, screenshot_names
 
 
+# ─── Canonical Output Filename ────────────────────────────────────────────
+#
+# Single source of truth for the YouTube/exercise output stem so every
+# artefact (MP4, PPTX) belonging to the same run shares the same base name.
+# The stem follows the format:
+#
+#     class_<class_number>_<subject>_chapter_<chapter_number>_exercise_<year>
+#
+# Example: ``class_10_nepali_chapter_1_exercise_2083``
+#
+# The Process tab, Publish tab, and Library tab all read filenames straight
+# from disk / run outputs — keeping every backend route on this helper is
+# how we guarantee MP4 ↔ PPTX pairs match and don't drift apart.
+
+# Default Bikram Sambat year used when the project metadata doesn't pin one
+# explicitly. Kept as a module-level constant so callers can override it
+# via ``project_info["exercise_year"]`` without touching the helper.
+DEFAULT_EXERCISE_YEAR = "2083"
+
+
+def _slug_part(value, fallback):
+    parts = re.findall(r"[A-Za-z0-9]+", str(value or "").lower())
+    return "_".join(parts) or fallback
+
+
+def _first_number(*values):
+    for value in values:
+        text = str(value or "")
+        chapter = re.search(r"chapter\s*[_-]?\s*(\d+)", text, re.IGNORECASE)
+        if chapter:
+            return chapter.group(1)
+    for value in values:
+        number = re.search(r"\b(\d{1,2})\b", str(value or ""))
+        if number:
+            return number.group(1)
+    return "unknown"
+
+
+def _chapter_number(*values):
+    for value in values:
+        chapter = re.search(r"chapter\s*[_-]?\s*(\d+)", str(value or ""), re.IGNORECASE)
+        if chapter:
+            return chapter.group(1)
+    for value in values[:2]:
+        number = re.search(r"\b(\d{1,2})\b", str(value or ""))
+        if number:
+            return number.group(1)
+    return "unknown"
+
+
+def youtube_video_stem(project_info=None, output_name="", input_text=""):
+    """Return the canonical ``class_X_subject_chapter_Y_exercise_<year>`` stem.
+
+    The same stem is used for the ``.mp4`` *and* the matching ``.pptx`` so
+    every UI surface (Process/Publish/Library) shows a consistent pair.
+    """
+    info = project_info or {}
+    class_num = _first_number(str(info.get("class_name") or ""))
+    subject = _slug_part(str(info.get("subject") or ""), "subject")
+    chapter = _chapter_number(
+        str(info.get("title") or ""),
+        output_name,
+        str(input_text or "")[:2000],
+    )
+    year = _slug_part(str(info.get("exercise_year") or ""), DEFAULT_EXERCISE_YEAR)
+    return f"class_{class_num}_{subject}_chapter_{chapter}_exercise_{year}"
+
+
 # ─── Save HTML ─────────────────────────────────────────────────────────────
 
 def save_html(html_content, prefix="html_notes", folder=None):

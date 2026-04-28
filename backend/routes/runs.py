@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import subprocess
 import threading
 import time
@@ -37,6 +36,7 @@ from routes.helpers import (
     log_generation,
     save_html,
     take_screenshots,
+    youtube_video_stem,
 )
 from utils.eta_tracker import eta_tracker
 
@@ -78,50 +78,16 @@ def _rel(path: str | Path | None) -> str | None:
     return str(path).replace("\\", "/")
 
 
-def _run_output_path(folder: str, output_name: str, operation_id: str, suffix: str) -> str:
-    stem = _safe_name(output_name, "output")
-    return _rel(Path(folder) / f"{stem}_{operation_id}{suffix}") or ""
+def _canonical_output_path(folder: str, project_info: dict, output_name: str, input_text: str, suffix: str) -> str:
+    """Return a path under *folder* using the canonical YouTube stem.
 
-
-def _slug_part(value: str, fallback: str) -> str:
-    parts = re.findall(r"[A-Za-z0-9]+", str(value or "").lower())
-    return "_".join(parts) or fallback
-
-
-def _first_number(*values: str) -> str:
-    for value in values:
-        text = str(value or "")
-        chapter = re.search(r"chapter\s*[_-]?\s*(\d+)", text, re.IGNORECASE)
-        if chapter:
-            return chapter.group(1)
-    for value in values:
-        number = re.search(r"\b(\d{1,2})\b", str(value or ""))
-        if number:
-            return number.group(1)
-    return "unknown"
-
-
-def _chapter_number(*values: str) -> str:
-    for value in values:
-        chapter = re.search(r"chapter\s*[_-]?\s*(\d+)", str(value or ""), re.IGNORECASE)
-        if chapter:
-            return chapter.group(1)
-    for value in values[:2]:
-        number = re.search(r"\b(\d{1,2})\b", str(value or ""))
-        if number:
-            return number.group(1)
-    return "unknown"
-
-
-def _youtube_video_output_path(folder: str, project_info: dict, output_name: str, input_text: str) -> str:
-    class_num = _first_number(str(project_info.get("class_name") or ""))
-    subject = _slug_part(str(project_info.get("subject") or ""), "subject")
-    chapter = _chapter_number(
-        str(project_info.get("title") or ""),
-        output_name,
-        input_text[:2000],
-    )
-    return _rel(Path(folder) / f"class_{class_num}_{subject}_chapter_{chapter}_exercise_2083.mp4") or ""
+    Both ``.mp4`` and ``.pptx`` outputs of the same run go through this so
+    the artefacts always come out as a matched pair (e.g. the MP4 the
+    Publish tab opens, the PPTX visible in the Process tab, and what the
+    Library lists on disk).
+    """
+    stem = youtube_video_stem(project_info, output_name, input_text)
+    return _rel(Path(folder) / f"{stem}{suffix}") or ""
 
 
 def _bool_value(value, default: bool = False) -> bool:
@@ -608,12 +574,14 @@ def start_text_to_video():
                         time.sleep(1)
                     ctx.check_cancelled()
 
-                    pptx_path = _run_output_path(POWERPOINT_OUTPUT_FOLDER, output_name, operation_id, ".pptx")
-                    video_path = _youtube_video_output_path(
-                        POWERPOINT_VIDEO_FOLDER,
-                        project_info,
-                        output_name,
-                        text,
+                    # MP4 and PPTX share the same canonical stem so the Process
+                    # tab, Publish tab, and Library all line up on the same
+                    # ``class_X_subject_chapter_Y_exercise_2083`` base name.
+                    pptx_path = _canonical_output_path(
+                        POWERPOINT_OUTPUT_FOLDER, project_info, output_name, text, ".pptx"
+                    )
+                    video_path = _canonical_output_path(
+                        POWERPOINT_VIDEO_FOLDER, project_info, output_name, text, ".mp4"
                     )
                     screenshot_count = max(len(screenshot_files), 1)
                     if output_format == "video":
