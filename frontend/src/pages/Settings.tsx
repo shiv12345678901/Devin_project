@@ -21,6 +21,11 @@ import { useRuns } from '../store/runs'
 import { BRAND_SWATCHES, useSettings, type ThemeMode } from '../store/settings'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
+import {
+  DEFAULT_YOUTUBE_TEMPLATE,
+  readYoutubeTemplate,
+  writeYoutubeTemplate,
+} from '../lib/youtubePublishTemplate'
 
 export default function Settings() {
   const { settings, update, reset } = useSettings()
@@ -33,6 +38,7 @@ export default function Settings() {
   const [backendHistory, setBackendHistory] = useState<HistoryEntry[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
+  const [youtubeTemplate, setYoutubeTemplate] = useState(() => readYoutubeTemplate())
 
   const pingBackend = async () => {
     setPingState('pinging')
@@ -58,6 +64,11 @@ export default function Settings() {
     } finally {
       setHistoryLoading(false)
     }
+  }
+
+  const saveYoutubeTemplate = (value: string) => {
+    setYoutubeTemplate(value)
+    writeYoutubeTemplate(value)
   }
 
   return (
@@ -155,6 +166,7 @@ export default function Settings() {
 
       {/* ─── Defaults ───────────────────────────────────────────────────── */}
       <Section title="Defaults" icon={<Check size={16} />}>
+        <div className="space-y-6">
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           <div>
             <label htmlFor="default-output" className="label">
@@ -183,6 +195,32 @@ export default function Settings() {
               Pre-selected on the Text → Video wizard. PowerPoint / MP4 require Windows.
             </p>
           </div>
+        </div>
+        <div className="border-t border-slate-100 pt-5 dark:border-white/5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-slate-800 dark:text-slate-100">
+                YouTube publish format
+              </div>
+              <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Used by the Publish page to generate titles, descriptions, queries, and tags locally.
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={() => saveYoutubeTemplate(DEFAULT_YOUTUBE_TEMPLATE)}
+            >
+              <RotateCcw size={12} /> Reset format
+            </button>
+          </div>
+          <textarea
+            className="textarea min-h-72 font-mono text-xs"
+            value={youtubeTemplate}
+            onChange={(e) => saveYoutubeTemplate(e.target.value)}
+            spellCheck={false}
+          />
+        </div>
         </div>
       </Section>
 

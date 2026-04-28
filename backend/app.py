@@ -397,7 +397,6 @@ _API_EXACT = {
     '/runs',
     '/runs/queue',
     '/youtube/videos',
-    '/youtube/metadata',
     '/upload-thumbnail',
 }
 _API_PATH_PREFIXES = (

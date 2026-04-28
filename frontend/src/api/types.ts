@@ -215,7 +215,9 @@ export interface YoutubeVideoItem {
   chapter_name: string
   title: string
   video_file: string
+  video_abs_path?: string | null
   thumbnail_file?: string | null
+  thumbnail_abs_path?: string | null
   thumbnail_role?: 'intro' | 'outro' | string | null
   presentation_file?: string | null
   html_file?: string | null
@@ -230,14 +232,5 @@ export interface YoutubeVideoItem {
 export interface YoutubeVideosResponse {
   success: boolean
   videos: YoutubeVideoItem[]
-  error?: string
-}
-
-export interface YoutubeMetadataResponse {
-  success: boolean
-  title: string
-  description: string
-  tags: string[]
-  raw?: string
   error?: string
 }

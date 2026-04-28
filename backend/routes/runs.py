@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -80,6 +81,47 @@ def _rel(path: str | Path | None) -> str | None:
 def _run_output_path(folder: str, output_name: str, operation_id: str, suffix: str) -> str:
     stem = _safe_name(output_name, "output")
     return _rel(Path(folder) / f"{stem}_{operation_id}{suffix}") or ""
+
+
+def _slug_part(value: str, fallback: str) -> str:
+    parts = re.findall(r"[A-Za-z0-9]+", str(value or "").lower())
+    return "_".join(parts) or fallback
+
+
+def _first_number(*values: str) -> str:
+    for value in values:
+        text = str(value or "")
+        chapter = re.search(r"chapter\s*[_-]?\s*(\d+)", text, re.IGNORECASE)
+        if chapter:
+            return chapter.group(1)
+    for value in values:
+        number = re.search(r"\b(\d{1,2})\b", str(value or ""))
+        if number:
+            return number.group(1)
+    return "unknown"
+
+
+def _chapter_number(*values: str) -> str:
+    for value in values:
+        chapter = re.search(r"chapter\s*[_-]?\s*(\d+)", str(value or ""), re.IGNORECASE)
+        if chapter:
+            return chapter.group(1)
+    for value in values[:2]:
+        number = re.search(r"\b(\d{1,2})\b", str(value or ""))
+        if number:
+            return number.group(1)
+    return "unknown"
+
+
+def _youtube_video_output_path(folder: str, project_info: dict, output_name: str, input_text: str) -> str:
+    class_num = _first_number(str(project_info.get("class_name") or ""))
+    subject = _slug_part(str(project_info.get("subject") or ""), "subject")
+    chapter = _chapter_number(
+        str(project_info.get("title") or ""),
+        output_name,
+        input_text[:2000],
+    )
+    return _rel(Path(folder) / f"class_{class_num}_{subject}_chapter_{chapter}_exercise_2083.mp4") or ""
 
 
 def _bool_value(value, default: bool = False) -> bool:
@@ -164,6 +206,16 @@ def _existing_output_file(value) -> str | None:
         return None
 
 
+def _absolute_display_path(value) -> str | None:
+    rel = _rel(value)
+    if not rel:
+        return None
+    path = Path(rel)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return str(path.resolve())
+
+
 def _dedupe_key(item: dict) -> tuple[str, str, str]:
     return (
         str(item.get("class_name") or "").strip().casefold(),
@@ -211,7 +263,9 @@ def _youtube_video_item(summary: dict) -> dict | None:
         "chapter_name": title,
         "title": title,
         "video_file": video_file,
+        "video_abs_path": _absolute_display_path(video_file),
         "thumbnail_file": thumbnail or None,
+        "thumbnail_abs_path": _absolute_display_path(Path("output") / "thumbnails" / thumbnail) if thumbnail else None,
         "thumbnail_role": thumbnail_role,
         "presentation_file": _rel(outputs.get("presentation_file") or outputs.get("presentation_path")),
         "html_file": outputs.get("html_file") or outputs.get("html_filename"),
@@ -240,57 +294,6 @@ def youtube_videos():
         reverse=True,
     )
     return jsonify({"success": True, "videos": items})
-
-
-@runs_bp.route("/youtube/metadata", methods=["POST"])
-def youtube_metadata():
-    data = request.get_json(silent=True) or {}
-    run_id = str(data.get("run_id") or "").strip()
-    template = str(data.get("template") or "").strip()
-    language = str(data.get("language") or "English").strip() or "English"
-    if not run_id:
-        return jsonify({"success": False, "error": "run_id is required"}), 400
-
-    summary = next((item for item in list_runs(limit=500) if str(item.get("run_id") or "") == run_id), None)
-    item = _youtube_video_item(summary or {})
-    if not item:
-        return jsonify({"success": False, "error": "Publishable video run not found"}), 404
-
-    prompt = (
-        "Create YouTube upload metadata for an educational video.\n"
-        "Return ONLY valid JSON with keys: title, description, tags.\n"
-        "tags must be an array of 12 to 20 concise YouTube tags.\n"
-        "Use the user's template exactly where practical, replacing placeholders naturally.\n\n"
-        f"Language/style: {language}\n"
-        f"Class: {item['class_name']}\n"
-        f"Subject: {item['subject']}\n"
-        f"Chapter: {item['chapter_name']}\n"
-        f"Video path: {item['video_file']}\n"
-        f"Thumbnail path: {item.get('thumbnail_file') or 'No thumbnail selected'}\n\n"
-        f"Template:\n{template}\n\n"
-        f"Source notes preview:\n{item.get('input_text') or item.get('input_preview')}"
-    )
-    system_prompt = (
-        "You are a YouTube publishing assistant for educational videos. "
-        "Write accurate, search-friendly metadata. Do not invent facts beyond the provided class, subject, chapter, and notes."
-    )
-    try:
-        raw = get_ai_response(prompt, use_cache=False, system_prompt=system_prompt, model_choice=str(data.get("model_choice") or "default"))
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.strip("`")
-            if cleaned.lower().startswith("json"):
-                cleaned = cleaned[4:].strip()
-        parsed = json.loads(cleaned)
-        return jsonify({
-            "success": True,
-            "title": str(parsed.get("title") or item["title"]),
-            "description": str(parsed.get("description") or ""),
-            "tags": parsed.get("tags") if isinstance(parsed.get("tags"), list) else [],
-            "raw": raw,
-        })
-    except Exception as exc:
-        return jsonify({"success": False, "error": str(exc)}), 500
 
 
 @runs_bp.route("/runs/queue", methods=["GET"])
@@ -606,7 +609,12 @@ def start_text_to_video():
                     ctx.check_cancelled()
 
                     pptx_path = _run_output_path(POWERPOINT_OUTPUT_FOLDER, output_name, operation_id, ".pptx")
-                    video_path = _run_output_path(POWERPOINT_VIDEO_FOLDER, output_name, operation_id, ".mp4")
+                    video_path = _youtube_video_output_path(
+                        POWERPOINT_VIDEO_FOLDER,
+                        project_info,
+                        output_name,
+                        text,
+                    )
                     screenshot_count = max(len(screenshot_files), 1)
                     if output_format == "video":
                         auto_duration = round(MIN_VIDEO_SECONDS / screenshot_count, 3)
