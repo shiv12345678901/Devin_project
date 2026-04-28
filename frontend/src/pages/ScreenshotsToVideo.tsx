@@ -1,5 +1,5 @@
 import { Play, Upload, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type React from 'react'
 
@@ -43,9 +43,21 @@ export default function ScreenshotsToVideo() {
   const [settings, setSettings] = useState<GenerateSettings>(DEFAULT_SETTINGS)
   const [dragActive, setDragActive] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [reorderDragKey, setReorderDragKey] = useState<string | null>(null)
+  const [reorderOverKey, setReorderOverKey] = useState<string | null>(null)
+  const [previewKey, setPreviewKey] = useState<string | null>(null)
   const toast = useToast()
   const runs = useRuns()
   const nav = useNavigate()
+
+  useEffect(() => {
+    if (!previewKey) return
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setPreviewKey(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [previewKey])
 
   const totalBytes = useMemo(() => entries.reduce((s, e) => s + e.file.size, 0), [entries])
 
@@ -81,6 +93,19 @@ export default function ScreenshotsToVideo() {
       const next = prev.slice()
       const [item] = next.splice(idx, 1)
       next.splice(target, 0, item)
+      return next
+    })
+  }
+
+  const reorderTo = (sourceKey: string, targetKey: string) => {
+    if (sourceKey === targetKey) return
+    setEntries((prev) => {
+      const from = prev.findIndex((e) => e.key === sourceKey)
+      const to = prev.findIndex((e) => e.key === targetKey)
+      if (from === -1 || to === -1) return prev
+      const next = prev.slice()
+      const [item] = next.splice(from, 1)
+      next.splice(to, 0, item)
       return next
     })
   }
@@ -226,16 +251,61 @@ export default function ScreenshotsToVideo() {
           </label>
 
           {entries.length > 0 && (
-            <ol className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            <>
+              <div className="mt-3 text-[11px] text-muted">
+                Drag tiles to reorder. Double-click any tile to preview at full size.
+              </div>
+              <ol className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
               {entries.map((entry, index) => (
                 <li
                   key={entry.key}
-                  className="group relative overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
+                  draggable={!submitting}
+                  onDragStart={(e) => {
+                    if (submitting) return
+                    setReorderDragKey(entry.key)
+                    e.dataTransfer.effectAllowed = 'move'
+                    try {
+                      e.dataTransfer.setData('text/plain', entry.key)
+                    } catch {
+                      /* some browsers throw on certain drag types */
+                    }
+                  }}
+                  onDragOver={(e) => {
+                    if (!reorderDragKey) return
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = 'move'
+                    if (reorderOverKey !== entry.key) setReorderOverKey(entry.key)
+                  }}
+                  onDragLeave={() => {
+                    if (reorderOverKey === entry.key) setReorderOverKey(null)
+                  }}
+                  onDrop={(e) => {
+                    if (!reorderDragKey) return
+                    e.preventDefault()
+                    e.stopPropagation()
+                    reorderTo(reorderDragKey, entry.key)
+                    setReorderDragKey(null)
+                    setReorderOverKey(null)
+                  }}
+                  onDragEnd={() => {
+                    setReorderDragKey(null)
+                    setReorderOverKey(null)
+                  }}
+                  className={
+                    'group relative overflow-hidden rounded-md border bg-white shadow-sm transition dark:bg-white/5 ' +
+                    (reorderOverKey === entry.key && reorderDragKey && reorderDragKey !== entry.key
+                      ? 'border-brand-500 ring-2 ring-brand-400/50 '
+                      : 'border-slate-200 dark:border-white/10 ') +
+                    (reorderDragKey === entry.key ? 'opacity-50 ' : '') +
+                    (submitting ? '' : 'cursor-grab active:cursor-grabbing')
+                  }
                 >
                   <img
                     src={entry.url}
                     alt={entry.file.name}
-                    className="h-24 w-full object-cover"
+                    className="h-24 w-full cursor-zoom-in object-cover"
+                    onDoubleClick={() => setPreviewKey(entry.key)}
+                    title="Double-click to preview"
                   />
                   <div className="px-2 pb-1 pt-1 text-xs">
                     <div className="truncate font-medium text-slate-700 dark:text-slate-200">
@@ -274,9 +344,33 @@ export default function ScreenshotsToVideo() {
                   </div>
                 </li>
               ))}
-            </ol>
+              </ol>
+            </>
           )}
         </div>
+
+        <ThumbnailSlot
+          kind="intro"
+          title="Intro thumbnail"
+          position="Inserted on slide 2"
+          enabled={settings.intro_thumbnail_enabled ?? false}
+          filename={settings.intro_thumbnail_filename ?? ''}
+          durationSec={settings.intro_thumbnail_duration_sec}
+          onEnabledChange={(v) => set('intro_thumbnail_enabled', v)}
+          onFilenameChange={(v) => set('intro_thumbnail_filename', v)}
+          onDurationChange={(v) => set('intro_thumbnail_duration_sec', v)}
+        />
+        <ThumbnailSlot
+          kind="outro"
+          title="Outro thumbnail"
+          position="Inserted on the 2nd-to-last slide"
+          enabled={settings.outro_thumbnail_enabled ?? false}
+          filename={settings.outro_thumbnail_filename ?? ''}
+          durationSec={settings.outro_thumbnail_duration_sec}
+          onEnabledChange={(v) => set('outro_thumbnail_enabled', v)}
+          onFilenameChange={(v) => set('outro_thumbnail_filename', v)}
+          onDurationChange={(v) => set('outro_thumbnail_duration_sec', v)}
+        />
 
         <div className="card grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
@@ -437,6 +531,173 @@ export default function ScreenshotsToVideo() {
           </span>
         </div>
       </form>
+
+      {previewKey && (() => {
+        const entry = entries.find((e) => e.key === previewKey)
+        if (!entry) return null
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Preview ${entry.file.name}`}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+            onClick={() => setPreviewKey(null)}
+          >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                setPreviewKey(null)
+              }}
+              className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20"
+              aria-label="Close preview"
+            >
+              <X size={20} />
+            </button>
+            <div
+              className="flex max-h-full max-w-full flex-col items-center gap-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <img
+                src={entry.url}
+                alt={entry.file.name}
+                className="max-h-[85vh] max-w-[90vw] rounded-md object-contain shadow-2xl"
+              />
+              <div className="truncate text-sm text-white/90">{entry.file.name}</div>
+            </div>
+          </div>
+        )
+      })()}
+    </div>
+  )
+}
+
+function ThumbnailSlot({
+  kind,
+  title,
+  position,
+  enabled,
+  filename,
+  durationSec,
+  onEnabledChange,
+  onFilenameChange,
+  onDurationChange,
+}: {
+  kind: 'intro' | 'outro'
+  title: string
+  position: string
+  enabled: boolean
+  filename: string
+  durationSec: number | undefined
+  onEnabledChange: (v: boolean) => void
+  onFilenameChange: (v: string) => void
+  onDurationChange: (v: number) => void
+}) {
+  const [uploading, setUploading] = useState(false)
+  const [uploadErr, setUploadErr] = useState<string | null>(null)
+  const trimmed = filename.trim()
+
+  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    setUploadErr(null)
+    try {
+      const { filename: stored } = await api.uploadThumbnail(file)
+      onFilenameChange(stored)
+    } catch (err) {
+      setUploadErr(err instanceof Error ? err.message : String(err))
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-slate-900 dark:text-slate-50">{title}</div>
+          <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{position}</div>
+        </div>
+        <label className="inline-flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => onEnabledChange(e.target.checked)}
+          />
+          Enabled
+        </label>
+      </div>
+
+      {enabled && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="label">Image</label>
+            <label
+              className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-5 text-sm text-slate-600 transition-colors hover:bg-slate-100 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300"
+            >
+              <Upload size={16} />
+              {uploading ? 'Uploading…' : trimmed ? 'Replace image' : 'Upload image'}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/bmp"
+                className="hidden"
+                onChange={onPickFile}
+                disabled={uploading}
+              />
+            </label>
+            {trimmed && (
+              <div className="mt-2 flex items-center gap-3 rounded-md border border-slate-200 bg-white p-2 dark:border-white/10 dark:bg-white/[0.03]">
+                <img
+                  src={api.thumbnailUrl(trimmed)}
+                  alt={`${title} preview`}
+                  className="h-14 w-20 shrink-0 rounded object-cover"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs font-medium text-slate-800 dark:text-slate-200">
+                    {trimmed}
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Stored on backend
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary !px-2 !py-1 text-xs"
+                  onClick={() => onFilenameChange('')}
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+            {uploadErr && (
+              <div className="mt-1 text-xs text-rose-600 dark:text-rose-400">{uploadErr}</div>
+            )}
+          </div>
+
+          <div>
+            <label className="label" htmlFor={`s2v-${kind}-duration`}>
+              Duration (seconds)
+            </label>
+            <input
+              id={`s2v-${kind}-duration`}
+              type="number"
+              step={0.5}
+              min={0.5}
+              className="input"
+              value={durationSec ?? ''}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                if (!Number.isNaN(v)) onDurationChange(v)
+              }}
+            />
+            <div className="mt-1 text-[11px] text-muted">
+              How long this {kind === 'intro' ? 'intro' : 'outro'} thumbnail stays on screen.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
