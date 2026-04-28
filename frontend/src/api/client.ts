@@ -98,6 +98,50 @@ export const api = {
   startTextToVideoRun: (text: string, settings: GenerateSettings = {}) =>
     postJson<BackendRunStartResponse>('/runs/text-to-video', { text, ...settings }),
 
+  /**
+   * Submit pre-captured screenshots to the same MP4/PPTX export pipeline
+   * used by Text → Video. The screenshots are uploaded as
+   * ``screenshots[]`` parts; ``settings`` (resolution, fps, project info,
+   * thumbnails, …) ride along as form fields so the backend can apply
+   * the canonical ``class_X_subject_chapter_Y_exercise_<year>`` filename
+   * scheme used everywhere else.
+   */
+  startScreenshotsToVideoRun: async (
+    screenshots: File[],
+    settings: GenerateSettings = {},
+  ): Promise<BackendRunStartResponse> => {
+    const fd = new FormData()
+    for (const f of screenshots) fd.append('screenshots[]', f, f.name)
+    for (const [key, value] of Object.entries(settings)) {
+      if (value === undefined || value === null) continue
+      if (typeof value === 'boolean') fd.append(key, value ? '1' : '0')
+      else fd.append(key, String(value))
+    }
+    const res = await fetch(buildUrl('/runs/screenshots-to-video'), {
+      method: 'POST',
+      body: fd,
+    })
+    const text = await res.text()
+    if (!res.ok && res.status === 409) {
+      const rejected = tryParseRejection(text)
+      if (rejected) throw rejected
+    }
+    if (!text) {
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+      return {} as BackendRunStartResponse
+    }
+    let data: BackendRunStartResponse & { error?: string }
+    try {
+      data = JSON.parse(text) as BackendRunStartResponse & { error?: string }
+    } catch {
+      throw new Error(`Invalid JSON response (${res.status}): ${text.slice(0, 200)}`)
+    }
+    if (!res.ok || data.error) {
+      throw new Error(data.error || `${res.status} ${res.statusText}`)
+    }
+    return data
+  },
+
   getRun: (runId: string) =>
     getJson<BackendRunDetail>(`/runs/${encodeURIComponent(runId)}`),
 

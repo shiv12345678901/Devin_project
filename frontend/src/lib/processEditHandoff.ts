@@ -12,7 +12,7 @@ export interface ReplacementTargets {
 }
 
 export interface ProcessEditHandoff {
-  tool: Exclude<RunTool, 'image-to-video'>
+  tool: Exclude<RunTool, 'image-to-video' | 'screenshots-to-video'>
   text: string
   settings: GenerateSettings
   replaceTargets: ReplacementTargets

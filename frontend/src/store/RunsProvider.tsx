@@ -13,7 +13,7 @@ function migrateRun(value: unknown): Run | null {
   if (!value || typeof value !== 'object') return null
   const r = value as Partial<Run>
   if (typeof r.id !== 'string' || typeof r.tool !== 'string') return null
-  if (!['text-to-video', 'html-to-video', 'image-to-video'].includes(r.tool)) return null
+  if (!['text-to-video', 'html-to-video', 'image-to-video', 'screenshots-to-video'].includes(r.tool)) return null
   if (typeof r.startedAt !== 'number') return null
   if (!['running', 'success', 'error', 'cancelled'].includes(r.status as string)) {
     r.status = 'error'

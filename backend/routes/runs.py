@@ -121,6 +121,152 @@ def _thumbnail_path(filename: str | None) -> str | None:
     return str(candidate) if candidate.is_file() else None
 
 
+def _run_powerpoint_export(
+    ctx,
+    *,
+    output_format: str,
+    screenshot_files: list[str],
+    project_info: dict,
+    output_name: str,
+    input_text: str,
+    close_powerpoint: bool,
+    concurrent_pipeline_runs: bool,
+    auto_timing_screenshot_slides: bool,
+    fixed_seconds_per_screenshot_slide: float,
+    width: int,
+    height: int,
+    fps: int,
+    quality: int,
+    intro_thumbnail_filename: str,
+    intro_thumbnail_enabled: bool,
+    intro_thumbnail_duration: float,
+    outro_thumbnail_filename: str,
+    outro_thumbnail_enabled: bool,
+    outro_thumbnail_duration: float,
+    starting_progress: int = 88,
+) -> tuple[str | None, str | None]:
+    """Run the shared PowerPoint export half of the pipeline.
+
+    Both ``text-to-video`` and ``screenshots-to-video`` need exactly the
+    same MP4/PPTX export step (canonical filename, slot scheduling, intro
+    /outro thumbnail handling, …). Pulling it out keeps the two callers
+    in lockstep so a fix in one path automatically benefits the other.
+    """
+    if output_format not in {"pptx", "video"}:
+        return None, None
+
+    import sys
+    config_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config"))
+    if config_dir not in sys.path:
+        sys.path.insert(0, config_dir)
+    from config import (  # type: ignore
+        POWERPOINT_OUTPUT_FOLDER,
+        POWERPOINT_TEMPLATE_PATH,
+        POWERPOINT_VIDEO_FOLDER,
+    )
+
+    presentation_file: str | None = None
+    video_file: str | None = None
+
+    with export_slot(ctx, concurrent_pipeline_runs):
+        if close_powerpoint:
+            ctx.progress("powerpoint_cleanup", starting_progress, "Closing existing PowerPoint instances...")
+            _close_powerpoint_best_effort()
+            time.sleep(1)
+        ctx.check_cancelled()
+
+        # MP4 and PPTX share the same canonical stem so the Process tab,
+        # Publish tab, and Library all line up on the same
+        # ``class_X_subject_chapter_Y_exercise_2083`` base name regardless
+        # of which tool produced them.
+        pptx_path = _canonical_output_path(
+            POWERPOINT_OUTPUT_FOLDER, project_info, output_name, input_text, ".pptx"
+        )
+        video_path = _canonical_output_path(
+            POWERPOINT_VIDEO_FOLDER, project_info, output_name, input_text, ".mp4"
+        )
+        screenshot_count = max(len(screenshot_files), 1)
+        if output_format == "video":
+            auto_duration = round(MIN_VIDEO_SECONDS / screenshot_count, 3)
+            fixed_total = fixed_seconds_per_screenshot_slide * screenshot_count
+            if auto_timing_screenshot_slides or fixed_total < MIN_VIDEO_SECONDS:
+                screenshot_slide_duration = auto_duration
+                if not auto_timing_screenshot_slides:
+                    ctx.progress(
+                        "powerpoint",
+                        starting_progress + 1,
+                        (
+                            "Fixed timing was shorter than 500 seconds; "
+                            f"using {auto_duration}s per screenshot slide."
+                        ),
+                    )
+            else:
+                screenshot_slide_duration = fixed_seconds_per_screenshot_slide
+        else:
+            screenshot_slide_duration = (
+                round(MIN_VIDEO_SECONDS / screenshot_count, 3)
+                if auto_timing_screenshot_slides
+                else fixed_seconds_per_screenshot_slide
+            )
+
+        intro_thumbnail_path = (
+            _thumbnail_path(intro_thumbnail_filename) if intro_thumbnail_enabled else None
+        )
+        outro_thumbnail_path = (
+            _thumbnail_path(outro_thumbnail_filename) if outro_thumbnail_enabled else None
+        )
+
+        def _ppt_progress(payload: dict) -> None:
+            stage = str(payload.get("stage") or "powerpoint")
+            raw_progress = payload.get("progress")
+            try:
+                progress = int(raw_progress)
+            except Exception:
+                progress = 90 if stage.startswith("powerpoint") else 95
+            ctx.progress(stage, progress, str(payload.get("message") or "PowerPoint is working..."), data=payload)
+
+        controller = PowerPointController()
+        if output_format == "video":
+            ctx.progress("powerpoint", 90, "Building presentation and exporting MP4...")
+            result = controller.create_and_export_video(
+                template_path=POWERPOINT_TEMPLATE_PATH,
+                image_files=screenshot_files,
+                output_pptx_path=pptx_path,
+                output_video_path=video_path,
+                resolution=(width, height),
+                fps=fps,
+                quality=quality,
+                slide_duration=screenshot_slide_duration,
+                intro_thumbnail_path=intro_thumbnail_path,
+                intro_thumbnail_duration=intro_thumbnail_duration,
+                outro_thumbnail_path=outro_thumbnail_path,
+                outro_thumbnail_duration=outro_thumbnail_duration,
+                progress_callback=_ppt_progress,
+                cancel_event=ctx.cancel_event,
+            )
+            presentation_file = _rel(result.get("presentation_path"))
+            video_file = _rel(result.get("video_path"))
+            if not video_file or not Path(video_file).exists():
+                raise RuntimeError(result.get("warning") or "PowerPoint did not produce an MP4 file")
+        else:
+            ctx.progress("powerpoint", 90, "Building PowerPoint deck...")
+            presentation_file = controller.create_template_presentation(
+                template_path=POWERPOINT_TEMPLATE_PATH,
+                output_pptx_path=pptx_path,
+                image_files=screenshot_files,
+                slide_duration=screenshot_slide_duration,
+                intro_thumbnail_path=intro_thumbnail_path,
+                intro_thumbnail_duration=intro_thumbnail_duration,
+                outro_thumbnail_path=outro_thumbnail_path,
+                outro_thumbnail_duration=outro_thumbnail_duration,
+                progress_callback=_ppt_progress,
+                cancel_event=ctx.cancel_event,
+            )
+            presentation_file = _rel(presentation_file)
+
+    return presentation_file, video_file
+
+
 def _close_powerpoint_best_effort() -> None:
     try:
         import win32com.client  # type: ignore
@@ -573,109 +719,28 @@ def start_text_to_video():
             ctx.progress("screenshots_done", 86, f"Captured {len(screenshot_files)} screenshot(s)")
 
             if output_format in {"pptx", "video"}:
-                import sys
-                config_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config"))
-                if config_dir not in sys.path:
-                    sys.path.insert(0, config_dir)
-                from config import POWERPOINT_OUTPUT_FOLDER, POWERPOINT_TEMPLATE_PATH, POWERPOINT_VIDEO_FOLDER  # type: ignore
-
-                with export_slot(ctx, concurrent_pipeline_runs):
-                    if close_powerpoint:
-                        ctx.progress("powerpoint_cleanup", 88, "Closing existing PowerPoint instances...")
-                        _close_powerpoint_best_effort()
-                        time.sleep(1)
-                    ctx.check_cancelled()
-
-                    # MP4 and PPTX share the same canonical stem so the Process
-                    # tab, Publish tab, and Library all line up on the same
-                    # ``class_X_subject_chapter_Y_exercise_2083`` base name.
-                    pptx_path = _canonical_output_path(
-                        POWERPOINT_OUTPUT_FOLDER, project_info, output_name, text, ".pptx"
-                    )
-                    video_path = _canonical_output_path(
-                        POWERPOINT_VIDEO_FOLDER, project_info, output_name, text, ".mp4"
-                    )
-                    screenshot_count = max(len(screenshot_files), 1)
-                    if output_format == "video":
-                        auto_duration = round(MIN_VIDEO_SECONDS / screenshot_count, 3)
-                        fixed_total = fixed_seconds_per_screenshot_slide * screenshot_count
-                        if auto_timing_screenshot_slides or fixed_total < MIN_VIDEO_SECONDS:
-                            screenshot_slide_duration = auto_duration
-                            if not auto_timing_screenshot_slides:
-                                ctx.progress(
-                                    "powerpoint",
-                                    89,
-                                    (
-                                        "Fixed timing was shorter than 500 seconds; "
-                                        f"using {auto_duration}s per screenshot slide."
-                                    ),
-                                )
-                        else:
-                            screenshot_slide_duration = fixed_seconds_per_screenshot_slide
-                    else:
-                        screenshot_slide_duration = (
-                            round(MIN_VIDEO_SECONDS / screenshot_count, 3)
-                            if auto_timing_screenshot_slides
-                            else fixed_seconds_per_screenshot_slide
-                        )
-                    intro_thumbnail_path = (
-                        _thumbnail_path(intro_thumbnail_filename)
-                        if intro_thumbnail_enabled
-                        else None
-                    )
-                    outro_thumbnail_path = (
-                        _thumbnail_path(outro_thumbnail_filename)
-                        if outro_thumbnail_enabled
-                        else None
-                    )
-
-                    def _ppt_progress(payload: dict) -> None:
-                        stage = str(payload.get("stage") or "powerpoint")
-                        raw_progress = payload.get("progress")
-                        try:
-                            progress = int(raw_progress)
-                        except Exception:
-                            progress = 90 if stage.startswith("powerpoint") else 95
-                        ctx.progress(stage, progress, str(payload.get("message") or "PowerPoint is working..."), data=payload)
-
-                    controller = PowerPointController()
-                    if output_format == "video":
-                        ctx.progress("powerpoint", 90, "Building presentation and exporting MP4...")
-                        result = controller.create_and_export_video(
-                            template_path=POWERPOINT_TEMPLATE_PATH,
-                            image_files=screenshot_files,
-                            output_pptx_path=pptx_path,
-                            output_video_path=video_path,
-                            resolution=(width, height),
-                            fps=fps,
-                            quality=quality,
-                            slide_duration=screenshot_slide_duration,
-                            intro_thumbnail_path=intro_thumbnail_path,
-                            intro_thumbnail_duration=intro_thumbnail_duration,
-                            outro_thumbnail_path=outro_thumbnail_path,
-                            outro_thumbnail_duration=outro_thumbnail_duration,
-                            progress_callback=_ppt_progress,
-                            cancel_event=ctx.cancel_event,
-                        )
-                        presentation_file = _rel(result.get("presentation_path"))
-                        video_file = _rel(result.get("video_path"))
-                        if not video_file or not Path(video_file).exists():
-                            raise RuntimeError(result.get("warning") or "PowerPoint did not produce an MP4 file")
-                    else:
-                        ctx.progress("powerpoint", 90, "Building PowerPoint deck...")
-                        presentation_file = controller.create_template_presentation(
-                            template_path=POWERPOINT_TEMPLATE_PATH,
-                            output_pptx_path=pptx_path,
-                            image_files=screenshot_files,
-                            slide_duration=screenshot_slide_duration,
-                            intro_thumbnail_path=intro_thumbnail_path,
-                            intro_thumbnail_duration=intro_thumbnail_duration,
-                            outro_thumbnail_path=outro_thumbnail_path,
-                            outro_thumbnail_duration=outro_thumbnail_duration,
-                            progress_callback=_ppt_progress,
-                            cancel_event=ctx.cancel_event,
-                        )
-                        presentation_file = _rel(presentation_file)
+                presentation_file, video_file = _run_powerpoint_export(
+                    ctx,
+                    output_format=output_format,
+                    screenshot_files=screenshot_files,
+                    project_info=project_info,
+                    output_name=output_name,
+                    input_text=text,
+                    close_powerpoint=close_powerpoint,
+                    concurrent_pipeline_runs=concurrent_pipeline_runs,
+                    auto_timing_screenshot_slides=auto_timing_screenshot_slides,
+                    fixed_seconds_per_screenshot_slide=fixed_seconds_per_screenshot_slide,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    quality=quality,
+                    intro_thumbnail_filename=intro_thumbnail_filename,
+                    intro_thumbnail_enabled=intro_thumbnail_enabled,
+                    intro_thumbnail_duration=intro_thumbnail_duration,
+                    outro_thumbnail_filename=outro_thumbnail_filename,
+                    outro_thumbnail_enabled=outro_thumbnail_enabled,
+                    outro_thumbnail_duration=outro_thumbnail_duration,
+                )
 
             outputs = {
                 "html_filename": html_filename,
@@ -728,6 +793,390 @@ def start_text_to_video():
         worker,
         cancel_event,
         label="Text-to-video",
+        pipeline_enabled=concurrent_pipeline_runs,
+    )
+    return jsonify({
+        "success": True,
+        "run_id": run_id,
+        "operation_id": operation_id,
+        "queue_position": position,
+    })
+
+
+# ─── Screenshots → Video ─────────────────────────────────────────────────────
+#
+# Runs the *export* half of the text-to-video pipeline against screenshots
+# the user already captured (or rendered elsewhere). Skips AI generation
+# and Playwright screenshotting entirely, so all the user provides is the
+# ordered list of PNG/JPG files plus the same project metadata + export
+# settings as ``/runs/text-to-video``.
+#
+# Why share so much with the text-to-video flow?
+#  * Same canonical ``class_X_subject_chapter_Y_exercise_<year>`` filename
+#    so MP4/PPTX line up across Process tab, Publish tab, and Library.
+#  * Same run-manager record + queueing so the Processes tab handles it
+#    transparently (cancel, replay, history, etc.).
+#  * Same ETA tracker buckets (resolution + concurrent flag) so concurrent
+#    screenshot-to-video exports influence future predictions correctly.
+
+_SCREENSHOT_FIELD_NAMES = ("screenshots", "screenshots[]", "screenshot", "files", "files[]")
+_ALLOWED_SCREENSHOT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+
+
+def _collect_uploaded_screenshots() -> list:
+    """Return all uploaded screenshot files regardless of which field
+    name the client used (``screenshots[]`` is the canonical one but we
+    accept a few common aliases for resilience).
+    """
+    found: list = []
+    for name in _SCREENSHOT_FIELD_NAMES:
+        if name in request.files:
+            found.extend(request.files.getlist(name))
+    return [f for f in found if getattr(f, "filename", "")]
+
+
+def _save_uploaded_screenshots_to_batch(uploads: list, batch_id: str) -> tuple[list[str], list[str], str]:
+    """Persist uploaded screenshots into ``output/screenshots/batch <id>/``.
+
+    Returns ``(absolute_paths, relative_names, batch_folder)`` where the
+    relative names round-trip through the existing
+    ``/screenshots/<path:filename>`` endpoint that the frontend already
+    knows how to render.
+    """
+    folder = OUTPUT_FOLDER
+    os.makedirs(folder, exist_ok=True)
+    batch_subdir = f"batch {batch_id}"
+    batch_folder = os.path.join(folder, batch_subdir)
+    os.makedirs(batch_folder, exist_ok=True)
+
+    abs_paths: list[str] = []
+    rel_names: list[str] = []
+    for index, upload in enumerate(uploads, start=1):
+        original = str(upload.filename or f"screenshot_{index}.png")
+        ext = os.path.splitext(original)[1].lower()
+        if ext not in _ALLOWED_SCREENSHOT_EXTS:
+            raise ValueError(f"Unsupported screenshot type: {original}")
+        # 4-digit zero-padded prefix preserves the user's drop-order so
+        # PowerPoint slides come out in the same sequence the user sees in
+        # the upload list.
+        target_name = f"{batch_id}({index:04d}){ext}"
+        target_path = os.path.join(batch_folder, target_name)
+        upload.save(target_path)
+        abs_paths.append(target_path.replace("\\", "/"))
+        rel_names.append(f"{batch_subdir}/{target_name}".replace("\\", "/"))
+    return abs_paths, rel_names, batch_subdir
+
+
+def _form_value(data, key: str, default=None):
+    """Read a value from JSON body OR multipart form. Multipart wins so
+    drag-drop forms don't have to JSON-encode every option.
+    """
+    if request.form and key in request.form:
+        return request.form.get(key)
+    if isinstance(data, dict) and key in data:
+        return data.get(key)
+    return default
+
+
+@runs_bp.route("/runs/screenshots-to-video", methods=["POST"])
+def start_screenshots_to_video():
+    # The frontend uploads multipart for the files + form fields, but we
+    # also accept a JSON-only body that points at existing screenshots
+    # (``screenshot_files`` = list of paths under ``output/screenshots``).
+    data = request.get_json(silent=True) or {}
+    uploads = _collect_uploaded_screenshots()
+
+    project_info = {
+        "class_name": str(_form_value(data, "class_name") or "").strip(),
+        "subject": str(_form_value(data, "subject") or "").strip(),
+        "title": str(_form_value(data, "title") or "").strip(),
+    }
+
+    output_format = str(_form_value(data, "output_format") or "video")
+    if output_format not in {"pptx", "video"}:
+        return jsonify({
+            "success": False,
+            "error": "output_format must be 'pptx' or 'video'",
+        }), 400
+
+    output_name = _safe_name(
+        str(_form_value(data, "output_name") or _form_value(data, "title") or ""),
+        f"screenshots_{int(time.time() * 1000)}",
+    )
+    close_powerpoint = _bool_value(_form_value(data, "close_powerpoint_before_start"), True)
+    auto_timing_screenshot_slides = _bool_value(
+        _form_value(data, "auto_timing_screenshot_slides"), True
+    )
+    fixed_seconds_per_screenshot_slide = _positive_float(
+        _form_value(data, "fixed_seconds_per_screenshot_slide"), 5.0
+    )
+    intro_thumbnail_enabled = _bool_value(
+        _form_value(
+            data,
+            "intro_thumbnail_enabled",
+            _form_value(data, "thumbnail_enabled", _form_value(data, "thumbnail_on_slide_2")),
+        ),
+        False,
+    )
+    outro_thumbnail_enabled = _bool_value(_form_value(data, "outro_thumbnail_enabled"), False)
+    intro_thumbnail_filename = str(
+        _form_value(data, "intro_thumbnail_filename") or _form_value(data, "thumbnail_filename") or ""
+    )
+    outro_thumbnail_filename = str(_form_value(data, "outro_thumbnail_filename") or "")
+    intro_thumbnail_duration = _positive_float(
+        _form_value(data, "intro_thumbnail_duration_sec", _form_value(data, "thumbnail_duration_sec")),
+        5.0,
+    )
+    outro_thumbnail_duration = _positive_float(
+        _form_value(data, "outro_thumbnail_duration_sec"), 5.0
+    )
+    resolution_label = str(_form_value(data, "resolution") or "1080p")
+    width, height = _resolution_tuple(resolution_label)
+    try:
+        fps = int(_form_value(data, "fps") or 30)
+    except (TypeError, ValueError):
+        fps = 30
+    quality = _ppt_quality(_form_value(data, "video_quality", 85))
+    concurrent_pipeline_runs = _bool_value(_form_value(data, "concurrent_pipeline_runs"), False)
+    model_choice = "screenshots-to-video"
+
+    # Resolve the screenshot list — either uploads we just received or a
+    # JSON ``screenshot_files`` array of paths under ``output/screenshots``.
+    screenshot_abs: list[str] = []
+    screenshot_names: list[str] = []
+    screenshot_folder: str | None = None
+    batch_id: str | None = None
+
+    if uploads:
+        try:
+            batch_id = get_next_batch_id()
+            screenshot_abs, screenshot_names, screenshot_folder = (
+                _save_uploaded_screenshots_to_batch(uploads, batch_id)
+            )
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+    else:
+        provided = data.get("screenshot_files") or data.get("screenshots")
+        if isinstance(provided, list) and provided:
+            for raw in provided:
+                rel = str(raw or "").strip().replace("\\", "/")
+                if not rel:
+                    continue
+                # Only accept paths under output/screenshots — defense in
+                # depth against path traversal.
+                candidate = (Path(OUTPUT_FOLDER) / rel).resolve() if not rel.startswith(OUTPUT_FOLDER) else Path(rel).resolve()
+                base = Path(OUTPUT_FOLDER).resolve()
+                try:
+                    candidate.relative_to(base)
+                except ValueError:
+                    return jsonify({
+                        "success": False,
+                        "error": f"Screenshot path escapes output folder: {rel}",
+                    }), 400
+                if not candidate.is_file():
+                    return jsonify({
+                        "success": False,
+                        "error": f"Screenshot not found: {rel}",
+                    }), 400
+                screenshot_abs.append(str(candidate).replace("\\", "/"))
+                # Store the path relative to OUTPUT_FOLDER so the existing
+                # /screenshots/<path:filename> endpoint can serve it.
+                screenshot_names.append(str(candidate.relative_to(base)).replace(os.sep, "/"))
+
+    if not screenshot_abs:
+        return jsonify({
+            "success": False,
+            "error": "At least one screenshot is required (upload via 'screenshots[]' or pass 'screenshot_files').",
+        }), 400
+
+    # ETA: there is no AI input text for this flow, so we feed the tracker
+    # a synthetic char count proportional to the number of screenshots.
+    # That keeps predictions sensible across runs of different lengths
+    # without leaking unrelated text-to-video variance into them.
+    synthetic_char_count = max(len(screenshot_abs) * 250, 1)
+    estimated_total_seconds = eta_tracker.predict_process_time(
+        model_choice,
+        synthetic_char_count,
+        resolution=resolution_label,
+        concurrent=concurrent_pipeline_runs,
+    )
+
+    fingerprint_payload = {
+        "tool": "screenshots-to-video",
+        "class_name": project_info["class_name"],
+        "subject": project_info["subject"],
+        "title": project_info["title"],
+        "output_format": output_format,
+        "output_name": output_name,
+        "screenshot_count": len(screenshot_abs),
+        # Order+content of the saved files defines the run; using basenames
+        # is enough since each upload batch lands in its own folder.
+        "screenshots": [Path(p).name for p in screenshot_abs],
+        "intro_thumbnail_enabled": intro_thumbnail_enabled,
+        "intro_thumbnail_filename": intro_thumbnail_filename,
+        "intro_thumbnail_duration": intro_thumbnail_duration,
+        "outro_thumbnail_enabled": outro_thumbnail_enabled,
+        "outro_thumbnail_filename": outro_thumbnail_filename,
+        "outro_thumbnail_duration": outro_thumbnail_duration,
+        "resolution": [width, height],
+        "fps": fps,
+        "quality": quality,
+        "auto_timing_screenshot_slides": auto_timing_screenshot_slides,
+        "fixed_seconds_per_screenshot_slide": fixed_seconds_per_screenshot_slide,
+        "concurrent_pipeline_runs": concurrent_pipeline_runs,
+    }
+    input_fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    duplicate = find_active_run_by_fingerprint("screenshots-to-video", input_fingerprint)
+    if duplicate:
+        return jsonify({
+            "success": False,
+            "error": f"This exact job is already {duplicate.get('status')}.",
+            "reason": "duplicate",
+            "duplicate_run_id": duplicate.get("run_id"),
+            "operation_id": duplicate.get("operation_id"),
+        }), 409
+
+    operation_id = f"screenshots_video_{time.time_ns()}"
+    cancel_event = register_operation(operation_id)
+    settings = {
+        "class_name": project_info["class_name"],
+        "subject": project_info["subject"],
+        "title": project_info["title"],
+        "output_format": output_format,
+        "output_name": output_name,
+        "screenshot_folder": screenshot_folder,
+        "screenshot_files": screenshot_names,
+        "screenshot_count": len(screenshot_abs),
+        "intro_thumbnail_enabled": intro_thumbnail_enabled,
+        "intro_thumbnail_filename": intro_thumbnail_filename,
+        "intro_thumbnail_duration_sec": intro_thumbnail_duration,
+        "outro_thumbnail_enabled": outro_thumbnail_enabled,
+        "outro_thumbnail_filename": outro_thumbnail_filename,
+        "outro_thumbnail_duration_sec": outro_thumbnail_duration,
+        "resolution": resolution_label,
+        "fps": fps,
+        "video_quality": quality,
+        "auto_timing_screenshot_slides": auto_timing_screenshot_slides,
+        "fixed_seconds_per_screenshot_slide": fixed_seconds_per_screenshot_slide,
+        "close_powerpoint_before_start": close_powerpoint,
+        "concurrent_pipeline_runs": concurrent_pipeline_runs,
+        "input_fingerprint": input_fingerprint,
+    }
+    run = create_run(
+        tool="screenshots-to-video",
+        title=output_name,
+        # No raw text input — record the screenshot count instead so the
+        # Process tab still has a sensible "input preview" to render.
+        input_text=f"[{len(screenshot_abs)} screenshots]",
+        settings=settings,
+        model_choice=model_choice,
+        operation_id=operation_id,
+        run_id=operation_id,
+        status="queued",
+        input_fingerprint=input_fingerprint,
+    )
+    run_id = run["run_id"]
+
+    def worker(ctx: WorkflowContext) -> None:
+        process_started = time.time()
+        presentation_file: str | None = None
+        video_file: str | None = None
+        try:
+            progress_data = (
+                {"eta_seconds": estimated_total_seconds}
+                if estimated_total_seconds is not None
+                else None
+            )
+            ctx.progress(
+                "screenshots_ready",
+                10,
+                f"Loaded {len(screenshot_abs)} screenshot(s)",
+                data=progress_data,
+            )
+            if screenshot_folder:
+                ctx.output("screenshot_folder", screenshot_folder)
+            ctx.output("screenshot_files", screenshot_names)
+            ctx.metrics({"screenshot_count": len(screenshot_abs)})
+            ctx.check_cancelled()
+
+            presentation_file, video_file = _run_powerpoint_export(
+                ctx,
+                output_format=output_format,
+                screenshot_files=screenshot_abs,
+                project_info=project_info,
+                output_name=output_name,
+                # No HTML/text source — the canonical filename helper still
+                # falls back to the project metadata + output_name fields.
+                input_text=output_name,
+                close_powerpoint=close_powerpoint,
+                concurrent_pipeline_runs=concurrent_pipeline_runs,
+                auto_timing_screenshot_slides=auto_timing_screenshot_slides,
+                fixed_seconds_per_screenshot_slide=fixed_seconds_per_screenshot_slide,
+                width=width,
+                height=height,
+                fps=fps,
+                quality=quality,
+                intro_thumbnail_filename=intro_thumbnail_filename,
+                intro_thumbnail_enabled=intro_thumbnail_enabled,
+                intro_thumbnail_duration=intro_thumbnail_duration,
+                outro_thumbnail_filename=outro_thumbnail_filename,
+                outro_thumbnail_enabled=outro_thumbnail_enabled,
+                outro_thumbnail_duration=outro_thumbnail_duration,
+                starting_progress=20,
+            )
+
+            outputs = {
+                "screenshot_folder": screenshot_folder,
+                "screenshot_files": screenshot_names,
+                "screenshot_count": len(screenshot_abs),
+                "presentation_file": presentation_file,
+                "presentation_path": presentation_file,
+                "video_file": video_file,
+                "video_path": video_file,
+            }
+            log_generation({
+                "tool": "screenshots-to-video",
+                "input_preview": f"{len(screenshot_abs)} screenshots",
+                "output_name": output_name,
+                "screenshot_folder": screenshot_folder,
+                "screenshot_count": len(screenshot_abs),
+                "presentation_file": presentation_file,
+                "video_file": video_file,
+                "operation_id": operation_id,
+                "settings": settings,
+            })
+            final = (
+                "Successfully generated MP4 video"
+                if output_format == "video"
+                else "Successfully generated PowerPoint deck"
+            )
+            ctx.complete(final, outputs=outputs, metrics={"screenshot_count": len(screenshot_abs)})
+            eta_tracker.record_process_completion(
+                model_choice,
+                synthetic_char_count,
+                time.time() - process_started,
+                resolution=resolution_label,
+                concurrent=concurrent_pipeline_runs,
+            )
+        except (CancelledError, Exception) as exc:
+            if ctx.cancel_event.is_set() or isinstance(exc, CancelledError):
+                _close_powerpoint_best_effort()
+                ctx.cancel("Operation cancelled")
+            elif isinstance(exc, (PowerPointNotFoundError, TemplateError, ExportError)):
+                ctx.fail(str(exc))
+            else:
+                ctx.fail(str(exc))
+        finally:
+            unregister_operation(operation_id)
+
+    position = enqueue(
+        run_id,
+        operation_id,
+        worker,
+        cancel_event,
+        label="Screenshots-to-video",
         pipeline_enabled=concurrent_pipeline_runs,
     )
     return jsonify({
