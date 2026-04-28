@@ -330,7 +330,6 @@ def start_text_to_video():
         "title": str(data.get("title") or "").strip(),
     }
     ai_input_text = build_ai_input_text(text, project_info)
-    estimated_total_seconds = eta_tracker.predict_process_time(model_choice, len(ai_input_text))
 
     zoom = float(data.get("zoom") or 2.1)
     overlap = int(data.get("overlap") or 15)
@@ -352,10 +351,17 @@ def start_text_to_video():
         5.0,
     )
     outro_thumbnail_duration = _positive_float(data.get("outro_thumbnail_duration_sec"), 5.0)
-    width, height = _resolution_tuple(str(data.get("resolution") or "1080p"))
+    resolution_label = str(data.get("resolution") or "1080p")
+    width, height = _resolution_tuple(resolution_label)
     fps = int(data.get("fps") or 30)
     quality = _ppt_quality(data.get("video_quality", 85))
     concurrent_pipeline_runs = _bool_value(data.get("concurrent_pipeline_runs"), False)
+    estimated_total_seconds = eta_tracker.predict_process_time(
+        model_choice,
+        len(ai_input_text),
+        resolution=resolution_label,
+        concurrent=concurrent_pipeline_runs,
+    )
 
     fingerprint_payload = {
         "text": text.strip(),
@@ -523,7 +529,13 @@ def start_text_to_video():
                     "screenshot_count": 0,
                 }
                 ctx.complete("Successfully generated HTML file", outputs=outputs)
-                eta_tracker.record_process_completion(model_choice, len(ai_input_text), time.time() - process_started)
+                eta_tracker.record_process_completion(
+                    model_choice,
+                    len(ai_input_text),
+                    time.time() - process_started,
+                    resolution=resolution_label,
+                    concurrent=concurrent_pipeline_runs,
+                )
                 return
 
             batch_id = get_next_batch_id()
@@ -692,7 +704,13 @@ def start_text_to_video():
                 "Successfully generated PowerPoint deck" if output_format == "pptx" else f"Successfully generated {len(screenshot_files)} screenshot(s)"
             )
             ctx.complete(final, outputs=outputs, metrics={"screenshot_count": len(screenshot_files)})
-            eta_tracker.record_process_completion(model_choice, len(ai_input_text), time.time() - process_started)
+            eta_tracker.record_process_completion(
+                model_choice,
+                len(ai_input_text),
+                time.time() - process_started,
+                resolution=resolution_label,
+                concurrent=concurrent_pipeline_runs,
+            )
         except (CancelledError, Exception) as exc:
             if ctx.cancel_event.is_set() or isinstance(exc, CancelledError):
                 _close_powerpoint_best_effort()
