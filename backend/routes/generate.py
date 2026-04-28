@@ -116,8 +116,12 @@ def generate():
         model_choice = data.get('model_choice', 'default')
         enable_verification = data.get('enable_verification', True)
 
-        # Predict ETA
-        estimated_total_seconds = eta_tracker.predict_process_time(model_choice, len(ai_input_text))
+        # Predict ETA — the legacy /generate endpoint is screenshots-only,
+        # so resolution doesn't apply and concurrency is always off here.
+        estimated_total_seconds = eta_tracker.predict_process_time(
+            model_choice,
+            len(ai_input_text),
+        )
 
         # AI request
         ai_operation_id = f"{operation_id}_ai"
@@ -212,7 +216,11 @@ def generate():
         )
         total_metrics = metrics_tracker.get_metrics(operation_id)
         total_time = total_metrics.get('duration_seconds', 0) if total_metrics else 0
-        eta_tracker.record_process_completion(model_choice, len(ai_input_text), total_time)
+        eta_tracker.record_process_completion(
+            model_choice,
+            len(ai_input_text),
+            total_time,
+        )
 
         return jsonify({
             'success': True,
@@ -350,7 +358,16 @@ def generate_sse():
         try:
             model_choice = data.get('model_choice', 'default')
             enable_verification = data.get('enable_verification', True)
-            estimated_total_seconds = eta_tracker.predict_process_time(model_choice, len(ai_input_text))
+            estimated_total_seconds = eta_tracker.predict_process_time(
+                model_choice,
+                len(ai_input_text),
+                resolution=video_export_settings.get('resolution'),
+                concurrent=_bool_value(
+                    data.get('concurrent_pipeline_runs')
+                    or video_export_settings.get('concurrent_pipeline_runs'),
+                    False,
+                ),
+            )
             run_logger.info(
                 f"Predicted total: ~{estimated_total_seconds}s  "
                 f"model={model_choice} verify={enable_verification}"
@@ -769,7 +786,17 @@ def generate_sse():
             )
             total_metrics = metrics_tracker.get_metrics(operation_id)
             total_time = total_metrics.get('duration_seconds', 0) if total_metrics else 0
-            eta_tracker.record_process_completion(model_choice, len(ai_input_text), total_time)
+            eta_tracker.record_process_completion(
+                model_choice,
+                len(ai_input_text),
+                total_time,
+                resolution=video_export_settings.get('resolution'),
+                concurrent=_bool_value(
+                    data.get('concurrent_pipeline_runs')
+                    or video_export_settings.get('concurrent_pipeline_runs'),
+                    False,
+                ),
+            )
 
             yield f"data: {json.dumps({'type': 'complete', 'success': True, 'message': final_message, 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': screenshot_names, 'screenshot_count': len(screenshot_files), 'screenshot_folder': screenshot_folder, 'presentation_file': presentation_file, 'video_file': video_file, 'operation_id': operation_id})}\n\n"
 

@@ -20,9 +20,11 @@ class ETAData(TypedDict):
     screenshots: ScreenshotSpeed
     verification: VerificationSpeed
 
-class ProcessEstimateSample(TypedDict):
+class ProcessEstimateSample(TypedDict, total=False):
     input_chars: int
     seconds: float
+    resolution: str
+    concurrent: bool
 
 class ProcessEstimateModel(TypedDict):
     seconds_per_char: float
@@ -32,6 +34,77 @@ class ProcessEstimateModel(TypedDict):
 class ProcessEstimateData(TypedDict):
     min_samples: int
     models: Dict[str, ProcessEstimateModel]
+
+# ─── Resolution & concurrency feature engineering ───────────────────────────
+#
+# Video export time scales roughly with pixel count, while AI/screenshot
+# stages don't. The factors below are *priors* — they're only used when a
+# bucket has fewer than ``_BUCKET_MIN_SAMPLES`` real observations. As more
+# data comes in, the factors are computed empirically per (model, resolution).
+
+RESOLUTION_ALIASES: Dict[str, str] = {
+    "720": "720p",
+    "720p": "720p",
+    "hd": "720p",
+    "1080": "1080p",
+    "1080p": "1080p",
+    "fhd": "1080p",
+    "1440": "1440p",
+    "1440p": "1440p",
+    "qhd": "1440p",
+    "2k": "1440p",
+    "4k": "4k",
+    "2160": "4k",
+    "2160p": "4k",
+    "uhd": "4k",
+}
+
+# Default multipliers vs 1080p baseline, tuned to typical PowerPoint MP4
+# export costs. These are only consulted as priors; the tracker will
+# replace them with observed data once a (model, resolution) bucket has
+# enough samples.
+_RESOLUTION_PRIOR_FACTOR: Dict[str, float] = {
+    "720p": 0.7,
+    "1080p": 1.0,
+    "1440p": 1.6,
+    "4k": 2.5,
+}
+
+# Concurrency slowdown prior — running two pipelines in parallel roughly
+# 1.5x's a single run because the AI/PowerPoint stages contend for the
+# same resources.
+_CONCURRENCY_PRIOR_FACTOR = 1.5
+
+_BUCKET_MIN_SAMPLES = 3  # smallest bucket that overrides the prior
+DEFAULT_RESOLUTION = "1080p"
+
+
+def normalize_resolution(label) -> str:
+    """Canonicalize a user-supplied resolution string to a known bucket.
+
+    Falls back to ``"1080p"`` so legacy samples without an explicit
+    resolution land in the same bucket as the modal default — which is
+    what the user asked for when they said *label existing data as
+    1080p*.
+    """
+    if isinstance(label, (list, tuple)) and len(label) >= 2:
+        # Stored as ``[width, height]`` in the run settings — map back to
+        # the closest named bucket by total pixel count.
+        try:
+            pixels = int(label[0]) * int(label[1])
+        except (TypeError, ValueError):
+            return DEFAULT_RESOLUTION
+        if pixels >= 3840 * 2160 * 0.9:
+            return "4k"
+        if pixels >= 2560 * 1440 * 0.9:
+            return "1440p"
+        if pixels >= 1920 * 1080 * 0.9:
+            return "1080p"
+        return "720p"
+    text = str(label or "").strip().lower()
+    if not text:
+        return DEFAULT_RESOLUTION
+    return RESOLUTION_ALIASES.get(text, DEFAULT_RESOLUTION)
 
 class ETATracker:
     """Tracks and predicts completion times based on historical runs."""
@@ -44,8 +117,13 @@ class ETATracker:
         self.storage_path = storage_path
         self.process_storage_path = process_storage_path
         self._lock = threading.Lock()
+        self._migrated_on_load = False
         self.data: ETAData = self._load_data()
         self.process_data: ProcessEstimateData = self._load_process_data()
+        # Persist the resolution/concurrent backfill so we don't re-do it
+        # on every boot and so the on-disk file matches the in-memory shape.
+        if self._migrated_on_load:
+            self._save_process_data()
         
     def _load_data(self) -> ETAData:
         """Load historical timing data from disk, or initialize defaults."""
@@ -81,10 +159,26 @@ class ETATracker:
                     data = json.load(f)
                 data.setdefault("min_samples", 10)
                 data.setdefault("models", {})
+                # Backfill the new resolution/concurrent fields onto pre-
+                # existing samples — per the user's request, runs without
+                # an explicit resolution count as 1080p (the modal default
+                # and what the existing data was almost certainly captured
+                # at).
+                migrated = False
+                for model_data in data["models"].values():
+                    for run in model_data.get("runs", []) or []:
+                        if "resolution" not in run:
+                            run["resolution"] = DEFAULT_RESOLUTION
+                            migrated = True
+                        if "concurrent" not in run:
+                            run["concurrent"] = False
+                            migrated = True
+                self._migrated_on_load = migrated
                 return cast(ProcessEstimateData, data)
             except Exception as e:
                 print(f"Warning: Error loading process ETA data: {e}")
 
+        self._migrated_on_load = False
         return cast(ProcessEstimateData, {"min_samples": 10, "models": {}})
         
     def _save_data(self):
@@ -169,12 +263,22 @@ class ETATracker:
         if updated:
             self._save_data()
 
-    def record_process_completion(self, model_choice: str, input_chars: int, total_seconds: float) -> None:
+    def record_process_completion(
+        self,
+        model_choice: str,
+        input_chars: int,
+        total_seconds: float,
+        resolution: Optional[object] = None,
+        concurrent: bool = False,
+    ) -> None:
         """Record a successful end-to-end process sample.
 
-        User-facing estimates intentionally use only the selected model and
-        input character count. Predictions stay hidden until a model has at
-        least ``min_samples`` successful process runs.
+        ``resolution`` and ``concurrent`` get folded into per-bucket
+        statistics so the predictor can charge a 4K run more time than a
+        1080p one and bake in the concurrent-pipeline slowdown rather
+        than averaging it away. Older callers that don't pass the new
+        kwargs land in the ``1080p`` / non-concurrent bucket — the same
+        bucket pre-existing samples migrate into.
         """
         if input_chars <= 0 or total_seconds <= 0:
             return
@@ -183,6 +287,8 @@ class ETATracker:
         sample: ProcessEstimateSample = {
             "input_chars": int(input_chars),
             "seconds": round(float(total_seconds), 3),
+            "resolution": normalize_resolution(resolution),
+            "concurrent": bool(concurrent),
         }
 
         with self._lock:
@@ -205,8 +311,55 @@ class ETATracker:
             model_data["seconds_per_char"] = total_time / total_chars if total_chars > 0 else 0.0
             self._save_process_data()
 
-    def predict_process_time(self, model_choice: str, input_chars: int) -> Optional[int]:
-        """Predict process seconds once the selected model has enough samples."""
+    def _bucket_seconds_per_char(self, runs: List[ProcessEstimateSample], **filters) -> Optional[float]:
+        """Mean seconds-per-character across ``runs`` matching ``filters``.
+
+        Returns ``None`` when fewer than ``_BUCKET_MIN_SAMPLES`` runs match
+        — caller falls back to a wider bucket or a prior multiplier.
+        """
+        matched = [
+            r for r in runs
+            if all(r.get(key) == value for key, value in filters.items())
+        ]
+        if len(matched) < _BUCKET_MIN_SAMPLES:
+            return None
+        chars = sum(max(0, int(r.get("input_chars", 0))) for r in matched)
+        secs = sum(max(0.0, float(r.get("seconds", 0))) for r in matched)
+        if chars <= 0:
+            return None
+        return secs / chars
+
+    def _resolution_factor(self, runs: List[ProcessEstimateSample], resolution: str) -> float:
+        """Multiplier vs the 1080p baseline, observed-or-prior."""
+        if resolution == DEFAULT_RESOLUTION:
+            return 1.0
+        baseline = self._bucket_seconds_per_char(runs, resolution=DEFAULT_RESOLUTION)
+        observed = self._bucket_seconds_per_char(runs, resolution=resolution)
+        if baseline and observed and baseline > 0:
+            return observed / baseline
+        return _RESOLUTION_PRIOR_FACTOR.get(resolution, 1.0)
+
+    def _concurrency_factor(self, runs: List[ProcessEstimateSample]) -> float:
+        """Multiplier for concurrent vs solo pipeline runs, observed-or-prior."""
+        solo = self._bucket_seconds_per_char(runs, concurrent=False)
+        concurrent = self._bucket_seconds_per_char(runs, concurrent=True)
+        if solo and concurrent and solo > 0:
+            return concurrent / solo
+        return _CONCURRENCY_PRIOR_FACTOR
+
+    def predict_process_time(
+        self,
+        model_choice: str,
+        input_chars: int,
+        resolution: Optional[object] = None,
+        concurrent: bool = False,
+    ) -> Optional[int]:
+        """Predict process seconds factoring in resolution and concurrency.
+
+        Stays silent (returns ``None``) until the selected model has at
+        least ``min_samples`` total runs — matches the user's ask of
+        "only show ETA after 10 processes".
+        """
         if input_chars <= 0:
             return None
 
@@ -214,12 +367,40 @@ class ETATracker:
         if not model_data:
             return None
         min_samples = int(self.process_data.get("min_samples", 10))
-        if int(model_data.get("samples", 0)) < min_samples:
+        runs = model_data.get("runs", []) or []
+        if len(runs) < min_samples:
             return None
-        seconds_per_char = float(model_data.get("seconds_per_char", 0.0))
-        if seconds_per_char <= 0:
+
+        target_resolution = normalize_resolution(resolution)
+        is_concurrent = bool(concurrent)
+
+        # Use the most specific bucket that has enough samples; fall back
+        # to multiplying the broader bucket by an observed-or-prior factor.
+        bucket_filters: List[Dict[str, object]] = [
+            {"resolution": target_resolution, "concurrent": is_concurrent},
+            {"resolution": target_resolution},
+            {"concurrent": is_concurrent},
+            {},
+        ]
+        spc: Optional[float] = None
+        used_filters: Dict[str, object] = {}
+        for filt in bucket_filters:
+            spc = self._bucket_seconds_per_char(runs, **filt)
+            if spc is not None:
+                used_filters = filt
+                break
+        if spc is None or spc <= 0:
+            spc = float(model_data.get("seconds_per_char", 0.0))
+        if spc <= 0:
             return None
-        return max(5, round(input_chars * seconds_per_char))
+
+        predicted = spc * input_chars
+        if "resolution" not in used_filters and target_resolution != DEFAULT_RESOLUTION:
+            predicted *= self._resolution_factor(runs, target_resolution)
+        if "concurrent" not in used_filters and is_concurrent:
+            predicted *= self._concurrency_factor(runs)
+
+        return max(5, round(predicted))
             
     def predict_total_time(self, model_choice, input_chars, estimated_screenshots=10, use_cache=False, enable_verification=True):
         """
