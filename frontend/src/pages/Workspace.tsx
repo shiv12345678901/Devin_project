@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ArrowRight, Code2, FileText, Image as ImageIcon, Info } from 'lucide-react'
+import { ArrowRight, Code2, FileText, Image as ImageIcon, Images, Info } from 'lucide-react'
 
 const TOOLS = [
   {
@@ -35,6 +35,16 @@ const TOOLS = [
     accent: 'violet',
     highlights: ['OCR via Vision AI', 'PDF support', 'Automatic cleanup'],
   },
+  {
+    to: '/workspace/screenshots',
+    title: 'Screenshots → Video',
+    tagline: 'Skip AI + capture',
+    description:
+      'Upload screenshots you already have and run only the MP4 / PPTX export. Same canonical filename + queue + ETA tracking as Text → Video.',
+    icon: Images,
+    accent: 'amber',
+    highlights: ['Drag-drop multiple PNG/JPG', 'Same export pipeline', 'Canonical filenames'],
+  },
 ] as const
 
 const ACCENT_CLASSES: Record<
@@ -59,6 +69,12 @@ const ACCENT_CLASSES: Record<
     text: 'text-violet-700 dark:text-violet-200',
     ring: 'group-hover:ring-violet-200 dark:group-hover:ring-violet-500/30',
   },
+  amber: {
+    border: 'border-amber-200 dark:border-amber-500/30',
+    bg: 'bg-amber-50 dark:bg-amber-500/10',
+    text: 'text-amber-700 dark:text-amber-200',
+    ring: 'group-hover:ring-amber-200 dark:group-hover:ring-amber-500/30',
+  },
 }
 
 export default function Workspace() {
@@ -71,12 +87,12 @@ export default function Workspace() {
         </div>
         <h1 className="mt-3 h-page">Pick a tool to start a run</h1>
         <p className="mt-2 max-w-2xl text-[14.5px] text-muted">
-          All three tools share the same screenshot engine — they only differ
-          in how source content gets to it.
+          All four tools share the same MP4 / PPTX export pipeline — they only differ in
+          how the screenshots are produced (or, for Screenshots → Video, where they come from).
         </p>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {TOOLS.map((t) => {
           const c = ACCENT_CLASSES[t.accent]
           return (

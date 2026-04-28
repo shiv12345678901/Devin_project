@@ -5,7 +5,11 @@
  */
 import { createContext, useContext } from 'react'
 
-export type RunTool = 'text-to-video' | 'html-to-video' | 'image-to-video'
+export type RunTool =
+  | 'text-to-video'
+  | 'html-to-video'
+  | 'image-to-video'
+  | 'screenshots-to-video'
 export type RunStatus = 'running' | 'success' | 'error' | 'cancelled'
 
 export interface RunSettings {

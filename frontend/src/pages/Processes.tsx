@@ -78,6 +78,7 @@ const TOOL_META: Record<string, { label: string; icon: typeof FileText }> = {
   'html-to-image': { label: 'HTML → Video', icon: Code2 },
   'image-to-video': { label: 'Image → Video', icon: ImageIcon },
   'image-to-screenshots': { label: 'Image → Video', icon: ImageIcon },
+  'screenshots-to-video': { label: 'Screenshots → Video', icon: ImageIcon },
   regenerate: { label: 'Regenerate', icon: Wand2 },
 }
 
@@ -183,6 +184,7 @@ function RunRow({
   const canRegenerate =
     run.status !== 'running' &&
     run.tool !== 'image-to-video' &&
+    run.tool !== 'screenshots-to-video' &&
     inputText.trim().length > 0
   const screenshots = run.screenshotFiles ?? []
   const selectedScreenshot = screenshots[previewIndex]
@@ -1114,6 +1116,7 @@ export default function Processes() {
         if (filter === 'text-to-video') return t === 'text-to-image' || t === 'text-to-video'
         if (filter === 'html-to-video') return t === 'html-to-image' || t === 'html-to-video'
         if (filter === 'image-to-video') return t === 'image-to-screenshots' || t === 'image-to-video'
+        if (filter === 'screenshots-to-video') return t === 'screenshots-to-video'
         return false
       })
       .slice()
@@ -1170,6 +1173,9 @@ export default function Processes() {
       enqueueHtml(run.tool, text, settings)
     } else if (run.tool === 'text-to-video') {
       enqueueText(run.tool, text, settings)
+    } else if (run.tool === 'screenshots-to-video') {
+      toast.push({ variant: 'error', message: 'Screenshots → Video processes need their original uploads, so regenerate is unavailable.' })
+      return
     } else {
       toast.push({ variant: 'error', message: 'Image processes cannot be regenerated after the original file is gone.' })
       return
@@ -1185,6 +1191,10 @@ export default function Processes() {
     }
     if (run.tool === 'image-to-video') {
       toast.push({ variant: 'error', message: 'Image processes cannot be edited after the original file is gone.' })
+      return
+    }
+    if (run.tool === 'screenshots-to-video') {
+      toast.push({ variant: 'error', message: 'Screenshots → Video processes cannot be edited after the originals are gone.' })
       return
     }
     window.sessionStorage.setItem(PROCESS_EDIT_HANDOFF_KEY, JSON.stringify({
@@ -1232,6 +1242,7 @@ export default function Processes() {
     { key: 'text-to-video', label: 'Text' },
     { key: 'html-to-video', label: 'HTML' },
     { key: 'image-to-video', label: 'Image' },
+    { key: 'screenshots-to-video', label: 'Screenshots' },
   ]
 
   const totalRuntime = runs

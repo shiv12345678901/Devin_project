@@ -37,6 +37,11 @@ const TOOL_META: Record<
     icon: ImageIcon,
     tint: 'text-violet-700 dark:text-violet-200',
   },
+  'screenshots-to-video': {
+    label: 'Screenshots → Video',
+    icon: ImageIcon,
+    tint: 'text-amber-700 dark:text-amber-200',
+  },
 }
 
 export default function Home() {

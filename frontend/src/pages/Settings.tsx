@@ -452,6 +452,7 @@ function BackendHistoryRow({ entry }: { entry: HistoryEntry }) {
 function historyToolLabel(tool: string | undefined): string {
   if (tool === 'html-to-video' || tool === 'html-to-image') return 'HTML to Video'
   if (tool === 'image-to-video' || tool === 'image-to-screenshots') return 'Image to Video'
+  if (tool === 'screenshots-to-video') return 'Screenshots to Video'
   return 'Text to Video'
 }
 
