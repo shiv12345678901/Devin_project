@@ -2,8 +2,8 @@
     "min_samples": 10,
     "models": {
         "default": {
-            "seconds_per_char": 0.041569181990421845,
-            "samples": 15,
+            "seconds_per_char": 0.03894296297732871,
+            "samples": 17,
             "runs": [
                 {
                     "input_chars": 11155,
@@ -94,6 +94,30 @@
                     "seconds": 289.312,
                     "resolution": "1080p",
                     "concurrent": true
+                },
+                {
+                    "input_chars": 13814,
+                    "seconds": 200.663,
+                    "resolution": "1080p",
+                    "concurrent": true
+                },
+                {
+                    "input_chars": 11401,
+                    "seconds": 305.841,
+                    "resolution": "4k",
+                    "concurrent": true
+                }
+            ]
+        },
+        "screenshots-to-video": {
+            "seconds_per_char": 0.06457352380952382,
+            "samples": 1,
+            "runs": [
+                {
+                    "input_chars": 5250,
+                    "seconds": 339.011,
+                    "resolution": "4k",
+                    "concurrent": false
                 }
             ]
         }
