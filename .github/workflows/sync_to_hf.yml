@@ -15,4 +15,16 @@ jobs:
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push --force https://shiva0013:$HF_TOKEN@huggingface.co/spaces/shiva0013/YT-AI-Automation main:main
+        run: |
+          mkdir hf-export
+          rsync -a ./ hf-export/ \
+            --exclude .git \
+            --exclude hf-export \
+            --exclude backend/templates/powerpoint/default.pptm
+          cd hf-export
+          git init -b main
+          git config user.email "actions@github.com"
+          git config user.name "github-actions"
+          git add .
+          git commit -m "Sync Docker Space"
+          git push --force https://shiva0013:$HF_TOKEN@huggingface.co/spaces/shiva0013/YT-AI-Automation main:main
