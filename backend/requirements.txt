@@ -28,6 +28,13 @@ flask-limiter>=3.5.0
 # Optional ffmpeg-python for slide MP4 export (Windows path also has python-pptx)
 ffmpeg-python>=0.2.0
 
+# MoviePy video engine (Linux/Mac path of the Dual-Engine Video Builder).
+# moviepy itself works on every platform but Windows uses the PowerPoint
+# COM pipeline instead — keep the dependency cross-platform so dev boxes
+# that flip USE_POWERPOINT=0 still get a working engine.
+moviepy>=2.0
+proglog>=0.1.10
+
 # PowerPoint automation (Windows only)
 python-pptx==0.6.23 ; platform_system == "Windows"
 pywin32==306 ; platform_system == "Windows"

@@ -21,6 +21,7 @@ from core.ai_client import (
 from core.job_queue import cancel_job, enqueue, get_queue_snapshot
 from core.pipeline_scheduler import ai_slot, export_slot, screenshot_slot
 from core.powerpoint.controller import ExportError, PowerPointController, PowerPointNotFoundError, TemplateError
+from video_engine import MovieEngineUnavailableError, VideoStudio
 from core.run_manager import (
     create_run,
     find_active_run_by_fingerprint,
@@ -225,30 +226,36 @@ def _run_powerpoint_export(
                 progress = 90 if stage.startswith("powerpoint") else 95
             ctx.progress(stage, progress, str(payload.get("message") or "PowerPoint is working..."), data=payload)
 
-        controller = PowerPointController()
         if output_format == "video":
             ctx.progress("powerpoint", 90, "Building presentation and exporting MP4...")
-            result = controller.create_and_export_video(
-                template_path=POWERPOINT_TEMPLATE_PATH,
-                image_files=screenshot_files,
-                output_pptx_path=pptx_path,
-                output_video_path=video_path,
-                resolution=(width, height),
-                fps=fps,
-                quality=quality,
-                slide_duration=screenshot_slide_duration,
-                intro_thumbnail_path=intro_thumbnail_path,
-                intro_thumbnail_duration=intro_thumbnail_duration,
-                outro_thumbnail_path=outro_thumbnail_path,
-                outro_thumbnail_duration=outro_thumbnail_duration,
-                progress_callback=_ppt_progress,
-                cancel_event=ctx.cancel_event,
-            )
+            studio = VideoStudio()
+            try:
+                result = studio.build_video(
+                    {
+                        "template_path": POWERPOINT_TEMPLATE_PATH,
+                        "image_files": screenshot_files,
+                        "output_pptx_path": pptx_path,
+                        "output_video_path": video_path,
+                        "resolution": (width, height),
+                        "fps": fps,
+                        "quality": quality,
+                        "slide_duration": screenshot_slide_duration,
+                        "intro_thumbnail_path": intro_thumbnail_path,
+                        "intro_thumbnail_duration": intro_thumbnail_duration,
+                        "outro_thumbnail_path": outro_thumbnail_path,
+                        "outro_thumbnail_duration": outro_thumbnail_duration,
+                        "progress_callback": _ppt_progress,
+                        "cancel_event": ctx.cancel_event,
+                    }
+                )
+            except MovieEngineUnavailableError as exc:
+                raise RuntimeError(str(exc)) from exc
             presentation_file = _rel(result.get("presentation_path"))
             video_file = _rel(result.get("video_path"))
             if not video_file or not Path(video_file).exists():
-                raise RuntimeError(result.get("warning") or "PowerPoint did not produce an MP4 file")
+                raise RuntimeError(result.get("warning") or "Video engine did not produce an MP4 file")
         else:
+            controller = PowerPointController()
             ctx.progress("powerpoint", 90, "Building PowerPoint deck...")
             presentation_file = controller.create_template_presentation(
                 template_path=POWERPOINT_TEMPLATE_PATH,
