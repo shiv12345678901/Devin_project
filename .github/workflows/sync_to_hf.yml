@@ -1,19 +1,18 @@
 name: Sync to Hugging Face Hub
 on:
   push:
-    branches: [master] # Change this to [main] if your GitHub branch is named main
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   sync-to-hub:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6 # Using v4 for stability; v6 is very new
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        # The syntax below says: "Push my master branch to the remote's main branch"
-        run: git push --force https://shiva0013:$HF_TOKEN@huggingface.co/spaces/shiva0013/YT-AI-Automation master:main
+        run: git push --force https://shiva0013:$HF_TOKEN@huggingface.co/spaces/shiva0013/YT-AI-Automation main:main
