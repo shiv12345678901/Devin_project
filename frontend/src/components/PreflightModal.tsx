@@ -4,7 +4,7 @@
  * chosen output format.
  */
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Loader2, Server, Cpu, Sparkles, Presentation, XCircle, AlertTriangle } from 'lucide-react'
+import { CheckCircle2, Loader2, Server, Cpu, Sparkles, Presentation, Film, XCircle, AlertTriangle } from 'lucide-react'
 import { api } from '../api/client'
 import type { OutputFormat, PreflightResponse } from '../api/types'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -22,6 +22,7 @@ const ROWS: CheckRow[] = [
   { key: 'backend', label: 'Backend connection', icon: Server },
   { key: 'ai_config', label: 'AI configuration', icon: Sparkles },
   { key: 'powerpoint', label: 'PowerPoint availability', icon: Presentation },
+  { key: 'video_engine', label: 'Video engine', icon: Film },
 ]
 
 function statusDot(s: CheckStatus) {
@@ -89,13 +90,15 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
     return () => window.removeEventListener('keydown', onKey)
   }, [onCancel])
 
-  const needsPpt = outputFormat === 'pptx' || outputFormat === 'video'
+  const needsPpt = outputFormat === 'pptx'
+  const needsVideo = outputFormat === 'video'
   const pptOk = data?.checks.powerpoint.ok ?? false
+  const videoEngineOk = data?.checks.video_engine?.ok ?? pptOk
   const aiOk = data?.checks.ai_config.ok ?? false
   const backendOk = !!data
   const blocked = !data
     ? false
-    : !backendOk || !aiOk || (needsPpt && !pptOk)
+    : !backendOk || !aiOk || (needsPpt && !pptOk) || (needsVideo && !videoEngineOk)
 
   const rowStatus = (key: keyof PreflightResponse['checks']): CheckStatus => {
     if (!data) {
@@ -106,8 +109,12 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
       return 'idle'
     }
     const c = data.checks[key]
+    if (!c) return 'idle'
     if (c.ok) return 'pass'
+    // Soft-fail: PowerPoint only matters for PPTX export; video_engine
+    // only matters for MP4. Anything else is always hard-required.
     if (key === 'powerpoint' && !needsPpt) return 'warn'
+    if (key === 'video_engine' && !needsVideo) return 'warn'
     return 'fail'
   }
 
@@ -140,7 +147,7 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
         <ul className="mt-5 space-y-3">
           {ROWS.map((row) => {
             const s = rowStatus(row.key)
-            const detail = data?.checks[row.key].detail ?? ''
+            const detail = data?.checks[row.key]?.detail ?? ''
             const Icon = row.icon
             return (
               <li key={row.key} className="flex items-start gap-3">

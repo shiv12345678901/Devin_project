@@ -235,9 +235,10 @@ export default function Home() {
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {preflight
-            ? (['platform', 'backend', 'ai_config', 'powerpoint'] as const).map(
+            ? (['platform', 'backend', 'ai_config', 'powerpoint', 'video_engine'] as const).map(
                 (k) => {
                   const c = preflight.checks[k]
+                  if (!c) return null
                   return (
                     <PreflightTile
                       key={k}
@@ -365,6 +366,7 @@ const PREFLIGHT_LABELS: Record<string, string> = {
   backend: 'Backend',
   ai_config: 'AI config',
   powerpoint: 'PowerPoint',
+  video_engine: 'Video engine',
 }
 
 function SectionHeader({
