@@ -1,4 +1,3 @@
-# TextBro — Text → Video Studio
 ---
 title: YT AI Automation
 emoji: 🎥
@@ -8,6 +7,9 @@ sdk: docker
 app_port: 7860
 pinned: false
 ---
+
+# TextBro — Text → Video Studio
+
 Turn text, raw HTML, images, or PDFs into video-ready screenshots using AI.
 
 - **Backend**: Flask + Playwright (Python) — originally
