@@ -35,8 +35,9 @@ ffmpeg-python>=0.2.0
 moviepy>=2.0
 proglog>=0.1.10
 
-# PowerPoint automation (Windows only)
-python-pptx==0.6.23 ; platform_system == "Windows"
+# PowerPoint file manipulation is imported at app startup, including on Linux.
+python-pptx==0.6.23
+# PowerPoint COM automation (Windows only)
 pywin32==306 ; platform_system == "Windows"
 
 # Testing (optional)
