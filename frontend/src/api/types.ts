@@ -5,6 +5,10 @@ export interface PreflightCheck {
   detail: string
 }
 
+export interface VideoEngineCheck extends PreflightCheck {
+  engines?: Array<'powerpoint' | 'moviepy'>
+}
+
 export interface PreflightResponse {
   ok: boolean
   checks: {
@@ -12,6 +16,7 @@ export interface PreflightResponse {
     backend: PreflightCheck
     ai_config: PreflightCheck
     powerpoint: PreflightCheck
+    video_engine?: VideoEngineCheck
   }
 }
 

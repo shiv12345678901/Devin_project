@@ -18,7 +18,7 @@ import PreflightModal from '../components/PreflightModal'
 import BackendRejectedBanner from '../components/BackendRejectedBanner'
 import Toggle from '../components/Toggle'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
-import { useBackendPlatform } from '../hooks/useBackendPlatform'
+import { useBackendCapabilities } from '../hooks/useBackendPlatform'
 import { api } from '../api/client'
 import { useSettings } from '../store/settings'
 import type { GenerateSettings, OutputFormat } from '../api/types'
@@ -149,7 +149,7 @@ const OUTPUT_OPTIONS: { value: OutputFormat; label: string; desc: string; icon: 
   { value: 'html', label: 'HTML file', desc: 'Raw AI-generated HTML only', icon: FileText },
   { value: 'images', label: 'Screenshots', desc: 'HTML rendered to PNG images (default)', icon: ImageIcon },
   { value: 'pptx', label: 'PowerPoint', desc: 'Images packed into a .pptx (Windows only)', icon: Presentation },
-  { value: 'video', label: 'MP4 video', desc: 'PowerPoint exported to MP4 (Windows only)', icon: Video },
+  { value: 'video', label: 'MP4 video', desc: 'Rendered to MP4 via PowerPoint (Windows) or MoviePy (Linux/macOS).', icon: Video },
 ]
 
 // ─── Validation ────────────────────────────────────────────────────────────
@@ -796,8 +796,8 @@ function OutputFormatPicker({
   running: boolean
   error?: string
 }) {
-  const platform = useBackendPlatform()
-  const isWindowsOnly = (v: OutputFormat) => v === 'pptx' || v === 'video'
+  const { platform, videoEngineReady, pptxReady } = useBackendCapabilities()
+  const engineOnly = (v: OutputFormat) => v === 'pptx' || v === 'video'
   return (
     <div id={fieldId('project', 'output_format')}>
       <div className="label">Output format</div>
@@ -805,16 +805,20 @@ function OutputFormatPicker({
         {OUTPUT_OPTIONS.map((o) => {
           const Icon = o.icon
           const active = value === o.value
-          // Disable pptx / video upstream when the backend reports a
-          // non-Windows host. We keep the option visible (with a "Windows
-          // only" hint) so users understand why it's greyed out instead
-          // of wondering where the option went.
-          const disabledByPlatform =
-            isWindowsOnly(o.value) && platform === 'non-windows'
+          // Gate engine-dependent outputs on the new preflight
+          // ``video_engine`` capability so the MoviePy branch unlocks
+          // MP4 export on Linux. PPTX still needs PowerPoint COM.
+          const pptxBlocked =
+            o.value === 'pptx' && platform !== 'unknown' && !pptxReady
+          const videoBlocked =
+            o.value === 'video' && platform !== 'unknown' && !videoEngineReady
+          const disabledByPlatform = pptxBlocked || videoBlocked
           const disabled = running || disabledByPlatform
-          const tooltip = disabledByPlatform
-            ? `${o.label} requires a Windows host with PowerPoint installed — this backend reports a non-Windows OS.`
-            : undefined
+          const tooltip = pptxBlocked
+            ? 'PowerPoint deck export requires a Windows host with PowerPoint installed — this backend reports a non-Windows OS.'
+            : videoBlocked
+              ? 'No video engine available — install MoviePy (pip install moviepy) or run on Windows with PowerPoint.'
+              : undefined
           return (
             <button
               key={o.value}
@@ -840,16 +844,23 @@ function OutputFormatPicker({
                   <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
                     {o.label}
                   </span>
-                  {isWindowsOnly(o.value) && (
+                  {o.value === 'pptx' && (
                     <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-slate-500 dark:bg-white/10 dark:text-slate-300">
                       Windows
                     </span>
                   )}
+                  {o.value === 'video' && engineOnly(o.value) && videoEngineReady && (
+                    <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                      {platform === 'windows' ? 'PowerPoint' : 'MoviePy'}
+                    </span>
+                  )}
                 </div>
                 <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                  {disabledByPlatform
+                  {pptxBlocked
                     ? 'Unavailable — backend isn’t Windows.'
-                    : o.desc}
+                    : videoBlocked
+                      ? 'Unavailable — install MoviePy or run on Windows.'
+                      : o.desc}
                 </div>
               </div>
             </button>
@@ -863,25 +874,35 @@ function OutputFormatPicker({
 }
 
 function WindowsOnlyWarning({ outputFormat }: { outputFormat: OutputFormat }) {
-  const platform = useBackendPlatform()
-  const needsWindows = outputFormat === 'pptx' || outputFormat === 'video'
-  if (!needsWindows) return null
-  const label = outputFormat === 'video' ? 'MP4 video' : 'PowerPoint deck'
-  if (platform === 'non-windows') {
+  const { platform, videoEngineReady, pptxReady } = useBackendCapabilities()
+  const needsEngine = outputFormat === 'pptx' || outputFormat === 'video'
+  if (!needsEngine) return null
+  if (outputFormat === 'pptx' && !pptxReady && platform !== 'unknown') {
     return (
       <p className="mt-2 rounded-md border border-rose-300/60 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
-        <strong>{label}</strong> export won't work on this backend — it requires a Windows host
-        with PowerPoint installed. Pick <em>Screenshots</em> or <em>HTML file</em> to avoid
-        surprise output. The run will be refused if you proceed.
+        <strong>PowerPoint deck</strong> export won't work on this backend — it requires a Windows
+        host with PowerPoint installed. Pick <em>MP4 video</em>, <em>Screenshots</em>, or{' '}
+        <em>HTML file</em> to avoid surprise output.
       </p>
     )
   }
-  return (
-    <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-      Heads up: PowerPoint / MP4 export needs a Windows host with PowerPoint installed — the
-      preflight check will verify this before the run starts.
-    </p>
-  )
+  if (outputFormat === 'video' && !videoEngineReady && platform !== 'unknown') {
+    return (
+      <p className="mt-2 rounded-md border border-rose-300/60 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+        <strong>MP4 video</strong> export won't work — no video engine is available on this
+        backend. Install MoviePy (<code>pip install moviepy</code>) or run on a Windows host
+        with PowerPoint installed.
+      </p>
+    )
+  }
+  if (outputFormat === 'video' && platform !== 'windows') {
+    return (
+      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+        MP4 export will use the <strong>MoviePy</strong> engine (libx264 ultrafast, 4K @ 30 fps).
+      </p>
+    )
+  }
+  return null
 }
 
 function ContentStep({

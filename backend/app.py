@@ -217,6 +217,10 @@ def preflight():
         'backend': {'ok': True, 'detail': 'Flask responded to /preflight'},
         'ai_config': {'ok': False, 'detail': ''},
         'powerpoint': {'ok': False, 'detail': ''},
+        # Dual-engine video builder: either the Windows COM path or the
+        # cross-platform MoviePy path satisfies this check. The frontend
+        # uses it to decide whether to expose the MP4 output option.
+        'video_engine': {'ok': False, 'detail': '', 'engines': []},
     }
 
     # AI config: does config/config.py have a non-placeholder API_KEY and at
@@ -290,8 +294,46 @@ def preflight():
             f'PowerPoint COM is Windows-only; this host is {_platform.system()}'
         )
 
+    # MoviePy / ffmpeg availability. This is the Linux side of the dual
+    # engine — if it's usable we can export MP4 video even when
+    # PowerPoint COM isn't. We don't probe the encoder (cheap import is
+    # enough for the gate) so the preflight stays fast.
+    engines: list = []
+    if checks['powerpoint']['ok']:
+        engines.append('powerpoint')
+    moviepy_ok = False
+    try:
+        import moviepy  # type: ignore  # noqa: F401
+
+        moviepy_ok = True
+        engines.append('moviepy')
+    except Exception as exc:  # pragma: no cover — surfaces in UI
+        moviepy_detail = f'MoviePy not importable: {exc}'
+    else:
+        moviepy_detail = f'MoviePy {getattr(moviepy, "__version__", "?")} available'
+
+    checks['video_engine']['engines'] = engines
+    if engines:
+        checks['video_engine']['ok'] = True
+        if moviepy_ok and checks['powerpoint']['ok']:
+            checks['video_engine']['detail'] = (
+                f'Dual engine ready — PowerPoint (COM) + MoviePy'
+            )
+        elif moviepy_ok:
+            checks['video_engine']['detail'] = moviepy_detail
+        else:
+            checks['video_engine']['detail'] = 'PowerPoint COM engine ready'
+    else:
+        checks['video_engine']['detail'] = (
+            f'No video engine available — install MoviePy ({moviepy_detail}) '
+            'or run on Windows with PowerPoint.'
+        )
+
     payload = {
-        'ok': all(c['ok'] for k, c in checks.items() if k != 'powerpoint'),
+        # Top-level ok: platform, backend, and ai_config must pass. The
+        # powerpoint / video_engine / moviepy checks are soft — the wizard
+        # gates individual output formats on them instead.
+        'ok': all(c['ok'] for k, c in checks.items() if k not in {'powerpoint', 'video_engine'}),
         'checks': checks,
     }
     with _preflight_lock:

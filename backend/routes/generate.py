@@ -670,6 +670,7 @@ def generate_sse():
                         POWERPOINT_VIDEO_FOLDER,
                     )
                     from core.powerpoint.controller import PowerPointController
+                    from video_engine import MovieEngineUnavailableError, VideoStudio
 
                     # MP4 and PPTX share the same canonical
                     # ``class_X_subject_chapter_Y_exercise_2083`` stem so
@@ -696,29 +697,35 @@ def generate_sse():
                         else None
                     )
 
-                    controller = PowerPointController()
                     if requested_format == 'video':
-                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'export', 'message': 'Exporting MP4 video with PowerPoint...', 'progress': 98})}\n\n"
-                        export_result = controller.create_and_export_video(
-                            template_path=POWERPOINT_TEMPLATE_PATH,
-                            image_files=screenshot_files,
-                            output_pptx_path=pptx_path,
-                            output_video_path=video_path,
-                            slide_duration=screenshot_slide_duration,
-                            resolution=_resolution_tuple(video_export_settings.get('resolution')),
-                            fps=int(video_export_settings.get('fps') or 30),
-                            quality=_ppt_quality(video_export_settings.get('video_quality')),
-                            intro_thumbnail_path=intro_thumbnail_path,
-                            intro_thumbnail_duration=_positive_float(video_export_settings.get('intro_thumbnail_duration_sec'), 5.0),
-                            outro_thumbnail_path=outro_thumbnail_path,
-                            outro_thumbnail_duration=_positive_float(video_export_settings.get('outro_thumbnail_duration_sec'), 5.0),
-                        )
+                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'export', 'message': 'Exporting MP4 video...', 'progress': 98})}\n\n"
+                        studio = VideoStudio()
+                        try:
+                            export_result = studio.build_video(
+                                {
+                                    "template_path": POWERPOINT_TEMPLATE_PATH,
+                                    "image_files": screenshot_files,
+                                    "output_pptx_path": pptx_path,
+                                    "output_video_path": video_path,
+                                    "slide_duration": screenshot_slide_duration,
+                                    "resolution": _resolution_tuple(video_export_settings.get('resolution')),
+                                    "fps": int(video_export_settings.get('fps') or 30),
+                                    "quality": _ppt_quality(video_export_settings.get('video_quality')),
+                                    "intro_thumbnail_path": intro_thumbnail_path,
+                                    "intro_thumbnail_duration": _positive_float(video_export_settings.get('intro_thumbnail_duration_sec'), 5.0),
+                                    "outro_thumbnail_path": outro_thumbnail_path,
+                                    "outro_thumbnail_duration": _positive_float(video_export_settings.get('outro_thumbnail_duration_sec'), 5.0),
+                                }
+                            )
+                        except MovieEngineUnavailableError as engine_exc:
+                            raise RuntimeError(str(engine_exc)) from engine_exc
                         presentation_file = export_result.get('presentation_path')
                         video_file = export_result.get('video_path')
                         export_warning = export_result.get('warning')
                         if not video_file or not os.path.exists(video_file):
-                            raise RuntimeError(export_warning or 'PowerPoint did not produce an MP4 file')
+                            raise RuntimeError(export_warning or 'Video engine did not produce an MP4 file')
                     else:
+                        controller = PowerPointController()
                         # Pass the *explicit* screenshot list from this run —
                         # using image_folder would glob every PNG in the
                         # folder (including leftovers from previous runs)

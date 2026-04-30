@@ -17,10 +17,22 @@ The backend talks to any OpenAI-compatible chat-completions endpoint
 (OpenAI, Groq, Together, NVIDIA NIM, a local llama.cpp server, …).
 """
 import os
+import platform
 
 
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
+
+
+# ─── Engine selection ──────────────────────────────────────────────────────
+#
+# The video build pipeline auto-selects between two engines based on the
+# host OS so the same backend works on a Windows dev box (PowerPoint COM
+# automation) and a Linux server (MoviePy + ffmpeg). Override by exporting
+# ``USE_POWERPOINT=1`` / ``USE_POWERPOINT=0`` in the environment.
+
+USE_POWERPOINT = _env("USE_POWERPOINT", "").strip().lower() in {"1", "true", "yes", "on"} \
+    if _env("USE_POWERPOINT") else (platform.system() == "Windows")
 
 
 # ─── API Configuration ─────────────────────────────────────────────────────
