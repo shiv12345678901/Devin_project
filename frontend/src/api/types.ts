@@ -60,7 +60,17 @@ export interface GenerateSettings {
   auto_thumbnail_image_offset_x?: number
   auto_thumbnail_image_offset_y?: number
   auto_thumbnail_image_zoom?: number
+  /** Layout preset id (see THUMBNAIL_TEMPLATES in thumbnailBuilder.ts). */
+  auto_thumbnail_template_id?: string
+  /** Override canvas aspect ratio (16:9, 1:1, 9:16). */
+  auto_thumbnail_canvas_aspect?: '16:9' | '1:1' | '9:16'
+  /** Override canvas background as a solid color hex. */
+  auto_thumbnail_canvas_background?: string
   auto_thumbnail_overrides?: Record<string, Record<string, unknown>>
+  /** New custom elements added on top of the chosen preset. */
+  auto_thumbnail_added_elements?: Record<string, Record<string, unknown>>
+  /** IDs of preset elements the user explicitly hid. */
+  auto_thumbnail_hidden_elements?: string[]
   // Outro thumbnail — inserted on the 2nd-to-last slide.
   outro_thumbnail_enabled?: boolean
   outro_thumbnail_filename?: string
