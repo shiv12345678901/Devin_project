@@ -12,6 +12,7 @@ import {
   Video,
   AlertCircle,
   Upload,
+  Wand2,
 } from 'lucide-react'
 
 import PreflightModal from '../components/PreflightModal'
@@ -24,6 +25,11 @@ import { useSettings } from '../store/settings'
 import type { GenerateSettings, OutputFormat } from '../api/types'
 import { consumeProcessEditHandoff } from '../lib/processEditHandoff'
 import type { ReplacementTargets } from '../lib/processEditHandoff'
+import {
+  buildAutoThumbnailFile,
+  buildAutoThumbnailTemplate,
+  type ThumbnailElement,
+} from '../lib/thumbnailBuilder'
 
 // ─── Defaults ──────────────────────────────────────────────────────────────
 
@@ -174,6 +180,7 @@ function validateStep(
   settings: GenerateSettings,
   text: string,
   mode: SourceMode = 'text',
+  autoThumbnailBuilder = false,
 ): FieldErrors {
   const errs: FieldErrors = {}
   const num = (v: unknown): number | null => {
@@ -221,7 +228,7 @@ function validateStep(
     }
     case 'thumbnail': {
       if (settings.intro_thumbnail_enabled) {
-        if (!(settings.intro_thumbnail_filename ?? '').trim()) {
+        if (!autoThumbnailBuilder && !(settings.intro_thumbnail_filename ?? '').trim()) {
           errs.intro_thumbnail_filename = 'Upload an image first'
         }
         const d = num(settings.intro_thumbnail_duration_sec)
@@ -290,6 +297,10 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
   const [replaceTargets, setReplaceTargets] = useState<ReplacementTargets | null>(null)
   const [stepId, setStepId] = useState<StepId>('project')
   const [showPreflight, setShowPreflight] = useState(false)
+  const [autoThumbnailPreviewUrl, setAutoThumbnailPreviewUrl] = useState<string | null>(null)
+  const [autoThumbnailError, setAutoThumbnailError] = useState<string | null>(null)
+  const [autoThumbnailSaving, setAutoThumbnailSaving] = useState(false)
+  const [autoThumbnailEditOpen, setAutoThumbnailEditOpen] = useState(false)
   const preflightProceedingRef = useRef(false)
   /** Step ids whose inline errors should be visible (only populated after the
    * user clicks Next on an invalid step). Silent until then. */
@@ -311,14 +322,102 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     // We don't need to; perStepErrors is derived below.
   }
 
+  const shouldAutoBuildThumbnail =
+    sourceMode === 'text' &&
+    appSettings.autoThumbnailBuilder &&
+    (settings.output_format === 'video' || settings.output_format === 'pptx')
+
+  useEffect(() => {
+    if (!shouldAutoBuildThumbnail || (settings.intro_thumbnail_filename ?? '').trim()) {
+      setAutoThumbnailPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev)
+        return null
+      })
+      return
+    }
+
+    let cancelled = false
+    let objectUrl: string | null = null
+
+    buildAutoThumbnailFile(settings, text)
+      .then((file) => {
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(file)
+        setAutoThumbnailPreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev)
+          return objectUrl
+        })
+      })
+      .catch((err) => {
+        if (!cancelled) setAutoThumbnailError(err instanceof Error ? err.message : String(err))
+      })
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [
+    shouldAutoBuildThumbnail,
+    settings.class_name,
+    settings.subject,
+    settings.title,
+    settings.auto_thumbnail_side_image_url,
+    settings.auto_thumbnail_chapter_num,
+    settings.auto_thumbnail_year,
+    settings.auto_thumbnail_image_offset_x,
+    settings.auto_thumbnail_image_offset_y,
+    settings.auto_thumbnail_image_zoom,
+    settings.auto_thumbnail_overrides,
+    settings.intro_thumbnail_filename,
+    text,
+  ])
+
+  useEffect(() => {
+    return () => {
+      const url = settings.auto_thumbnail_side_image_url
+      if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+    }
+  }, [settings.auto_thumbnail_side_image_url])
+
+  const useAutoThumbnailNow = async () => {
+    if (autoThumbnailSaving) return
+    setAutoThumbnailSaving(true)
+    setAutoThumbnailError(null)
+    try {
+      const file = await buildAutoThumbnailFile(settings, text)
+      const { filename } = await api.uploadThumbnail(file)
+      setSettings((prev) => ({
+        ...prev,
+        intro_thumbnail_enabled: true,
+        intro_thumbnail_filename: filename,
+        auto_thumbnail_generated: true,
+      }))
+    } catch (err) {
+      setAutoThumbnailError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setAutoThumbnailSaving(false)
+    }
+  }
+
+  const setAutoThumbnailSideImage = (file: File | null) => {
+    setSettings((prev) => {
+      const previousUrl = prev.auto_thumbnail_side_image_url
+      if (previousUrl?.startsWith('blob:')) URL.revokeObjectURL(previousUrl)
+      return {
+        ...prev,
+        auto_thumbnail_side_image_url: file ? URL.createObjectURL(file) : undefined,
+      }
+    })
+  }
+
   const perStepErrors: Record<StepId, FieldErrors> = useMemo(() => ({
-    project: validateStep('project', settings, text, sourceMode),
-    content: validateStep('content', settings, text, sourceMode),
-    screenshot: validateStep('screenshot', settings, text, sourceMode),
-    video: validateStep('video', settings, text, sourceMode),
-    thumbnail: validateStep('thumbnail', settings, text, sourceMode),
-    advanced: validateStep('advanced', settings, text, sourceMode),
-  }), [settings, text, sourceMode])
+    project: validateStep('project', settings, text, sourceMode, shouldAutoBuildThumbnail),
+    content: validateStep('content', settings, text, sourceMode, shouldAutoBuildThumbnail),
+    screenshot: validateStep('screenshot', settings, text, sourceMode, shouldAutoBuildThumbnail),
+    video: validateStep('video', settings, text, sourceMode, shouldAutoBuildThumbnail),
+    thumbnail: validateStep('thumbnail', settings, text, sourceMode, shouldAutoBuildThumbnail),
+    advanced: validateStep('advanced', settings, text, sourceMode, shouldAutoBuildThumbnail),
+  }), [settings, text, sourceMode, shouldAutoBuildThumbnail])
 
   const stepValid = (id: StepId) => Object.keys(perStepErrors[id]).length === 0
 
@@ -390,6 +489,32 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     payload.subject = (payload.subject ?? '').trim() || undefined
     payload.title = (payload.title ?? '').trim() || undefined
     payload.concurrent_pipeline_runs = appSettings.concurrentPipelineRuns
+    setAutoThumbnailError(null)
+    if (shouldAutoBuildThumbnail) {
+      const existingIntroThumbnail = (payload.intro_thumbnail_filename ?? '').trim()
+      if (existingIntroThumbnail) {
+        payload.intro_thumbnail_enabled = true
+      } else {
+        try {
+          const file = await buildAutoThumbnailFile(payload, text)
+          const { filename } = await api.uploadThumbnail(file)
+          payload.intro_thumbnail_enabled = true
+          payload.intro_thumbnail_filename = filename
+          payload.auto_thumbnail_generated = true
+          setSettings((prev) => ({
+            ...prev,
+            intro_thumbnail_enabled: true,
+            intro_thumbnail_filename: filename,
+            auto_thumbnail_generated: true,
+          }))
+        } catch (err) {
+          preflightProceedingRef.current = false
+          setAutoThumbnailError(err instanceof Error ? err.message : String(err))
+          setStepId('thumbnail')
+          return
+        }
+      }
+    }
     // Snapshot the full wizard state (text + settings) so the next
     // session can restore everything via "Reuse previous run".
     setLastRunSnapshot(saveLastRunSnapshot(text, payload, sourceMode))
@@ -509,6 +634,14 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
             settings={settings}
             onChange={set}
             errors={showCurrentErrors ? currentErrors : {}}
+            autoThumbnailBuilder={shouldAutoBuildThumbnail}
+            autoThumbnailPreviewUrl={autoThumbnailPreviewUrl}
+            autoThumbnailError={autoThumbnailError}
+            autoThumbnailSaving={autoThumbnailSaving}
+            autoThumbnailEditOpen={autoThumbnailEditOpen}
+            onUseAutoThumbnail={useAutoThumbnailNow}
+            onToggleAutoThumbnailEdit={() => setAutoThumbnailEditOpen((v) => !v)}
+            onAutoThumbnailSideImage={setAutoThumbnailSideImage}
           />
         )}
 
@@ -739,7 +872,7 @@ function ProjectStep({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <StepHeader
           title="Project info"
-          subtitle="Metadata for this run — used as the output folder/file prefix and shown in Processes."
+          subtitle="Enter class, subject, and chapter title before adding content. The chapter title is also used by the auto thumbnail builder."
         />
         {canReuse && (
           <button
@@ -785,11 +918,11 @@ function ProjectStep({
             ))}
           </select>
         </Field>
-        <Field label="Chapter" required className="sm:col-span-2" error={errors.title}>
+        <Field label="Chapter title for video and thumbnail" required className="sm:col-span-2" error={errors.title}>
           <input
             id={fieldId('project', 'title')}
             className={inputCls(errors.title)}
-            placeholder="Chapter 1 — Introduction"
+            placeholder="Chapter 2 - स्वाद"
             value={settings.title ?? ''}
             onChange={(e) => onChange('title', e.target.value)}
             disabled={running}
@@ -1170,10 +1303,26 @@ function ThumbnailStep({
   settings,
   onChange,
   errors,
+  autoThumbnailBuilder,
+  autoThumbnailPreviewUrl,
+  autoThumbnailError,
+  autoThumbnailSaving,
+  autoThumbnailEditOpen,
+  onUseAutoThumbnail,
+  onToggleAutoThumbnailEdit,
+  onAutoThumbnailSideImage,
 }: {
   settings: GenerateSettings
   onChange: Setter
   errors: FieldErrors
+  autoThumbnailBuilder: boolean
+  autoThumbnailPreviewUrl: string | null
+  autoThumbnailError: string | null
+  autoThumbnailSaving: boolean
+  autoThumbnailEditOpen: boolean
+  onUseAutoThumbnail: () => void
+  onToggleAutoThumbnailEdit: () => void
+  onAutoThumbnailSideImage: (file: File | null) => void
 }) {
   return (
     <>
@@ -1186,9 +1335,10 @@ function ThumbnailStep({
         <ThumbnailSlot
           kind="intro"
           title="Intro thumbnail"
-          position="Inserted on slide 2"
-          enabled={settings.intro_thumbnail_enabled ?? false}
+          position={autoThumbnailBuilder ? 'Auto-built from project info unless replaced' : 'Inserted on slide 2'}
+          enabled={autoThumbnailBuilder || (settings.intro_thumbnail_enabled ?? false)}
           filename={settings.intro_thumbnail_filename ?? ''}
+          generatedPreviewUrl={autoThumbnailPreviewUrl}
           durationSec={settings.intro_thumbnail_duration_sec}
           onEnabledChange={(v) => onChange('intro_thumbnail_enabled', v)}
           onFilenameChange={(v) => onChange('intro_thumbnail_filename', v)}
@@ -1202,6 +1352,7 @@ function ThumbnailStep({
           position="Inserted on the 2nd-to-last slide"
           enabled={settings.outro_thumbnail_enabled ?? false}
           filename={settings.outro_thumbnail_filename ?? ''}
+          generatedPreviewUrl={null}
           durationSec={settings.outro_thumbnail_duration_sec}
           onEnabledChange={(v) => onChange('outro_thumbnail_enabled', v)}
           onFilenameChange={(v) => onChange('outro_thumbnail_filename', v)}
@@ -1210,8 +1361,471 @@ function ThumbnailStep({
           durationError={errors.outro_thumbnail_duration_sec}
         />
       </div>
+
+      {autoThumbnailBuilder && (
+        <AutoThumbnailPanel
+          settings={settings}
+          onChange={onChange}
+          autoThumbnailError={autoThumbnailError}
+          autoThumbnailSaving={autoThumbnailSaving}
+          autoThumbnailEditOpen={autoThumbnailEditOpen}
+          onUseAutoThumbnail={onUseAutoThumbnail}
+          onToggleAutoThumbnailEdit={onToggleAutoThumbnailEdit}
+          onAutoThumbnailSideImage={onAutoThumbnailSideImage}
+        />
+      )}
     </>
   )
+}
+
+function AutoThumbnailPanel({
+  settings,
+  onChange,
+  autoThumbnailError,
+  autoThumbnailSaving,
+  autoThumbnailEditOpen,
+  onUseAutoThumbnail,
+  onToggleAutoThumbnailEdit,
+  onAutoThumbnailSideImage,
+}: {
+  settings: GenerateSettings
+  onChange: Setter
+  autoThumbnailError: string | null
+  autoThumbnailSaving: boolean
+  autoThumbnailEditOpen: boolean
+  onUseAutoThumbnail: () => void
+  onToggleAutoThumbnailEdit: () => void
+  onAutoThumbnailSideImage: (file: File | null) => void
+}) {
+  const hasSavedIntro = Boolean((settings.intro_thumbnail_filename ?? '').trim())
+
+  return (
+    <div className="rounded-md border border-brand-200 bg-brand-50 p-4 text-sm text-brand-800 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-100">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/70 text-brand-700 dark:bg-white/10 dark:text-brand-100">
+            <Wand2 size={15} />
+          </span>
+          <div className="min-w-0">
+            <div className="font-medium">Auto thumbnail builder</div>
+            <div className="mt-0.5 text-xs opacity-80">
+              Use the generated intro thumbnail, replace it with an upload, or customize the generated layout.
+            </div>
+            {autoThumbnailError && (
+              <div className="mt-2 text-xs text-rose-700 dark:text-rose-200">
+                {autoThumbnailError}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={onUseAutoThumbnail}
+            disabled={autoThumbnailSaving || hasSavedIntro}
+          >
+            <Check size={12} /> {autoThumbnailSaving ? 'Saving...' : hasSavedIntro ? 'Using thumbnail' : 'Use it'}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={onToggleAutoThumbnailEdit}
+          >
+            <FileText size={12} /> {autoThumbnailEditOpen ? 'Hide editor' : 'Edit'}
+          </button>
+        </div>
+      </div>
+
+      {autoThumbnailEditOpen && (
+        <div className="mt-4 rounded-md border border-slate-200 bg-white p-4 text-slate-700 dark:border-white/10 dark:bg-slate-950/40 dark:text-slate-200">
+          <div className="mb-3 text-sm font-medium text-slate-900 dark:text-slate-50">
+            Generated thumbnail customization
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Chapter number">
+              <input
+                className="input"
+                value={settings.auto_thumbnail_chapter_num ?? ''}
+                onChange={(e) => onChange('auto_thumbnail_chapter_num', e.target.value)}
+                placeholder="2"
+              />
+            </Field>
+            <Field label="Year">
+              <input
+                className="input"
+                value={settings.auto_thumbnail_year ?? '2083'}
+                onChange={(e) => onChange('auto_thumbnail_year', e.target.value)}
+                placeholder="2083"
+              />
+            </Field>
+            <ThumbnailVisualEditor
+              settings={settings}
+              text={''}
+              onChange={onChange}
+              onAutoThumbnailSideImage={onAutoThumbnailSideImage}
+              className="sm:col-span-2"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ThumbnailVisualEditor({
+  settings,
+  text,
+  onChange,
+  onAutoThumbnailSideImage,
+  className,
+}: {
+  settings: GenerateSettings
+  text: string
+  onChange: Setter
+  onAutoThumbnailSideImage: (file: File | null) => void
+  className?: string
+}) {
+  const template = useMemo(() => buildAutoThumbnailTemplate(settings, text), [settings, text])
+  const [selectedId, setSelectedId] = useState<string>('title')
+  const selected = template.elements[selectedId] ?? Object.values(template.elements)[0]
+
+  const patchElement = (id: string, patch: Partial<ThumbnailElement>) => {
+    onChange('auto_thumbnail_overrides', {
+      ...(settings.auto_thumbnail_overrides ?? {}),
+      [id]: {
+        ...((settings.auto_thumbnail_overrides?.[id] as Partial<ThumbnailElement>) ?? {}),
+        ...patch,
+      },
+    })
+  }
+
+  const patchSelected = (patch: Partial<ThumbnailElement>) => {
+    if (!selected) return
+    patchElement(selected.id, patch)
+  }
+
+  const clearSelectedOverride = () => {
+    if (!selected) return
+    const next = { ...(settings.auto_thumbnail_overrides ?? {}) }
+    delete next[selected.id]
+    onChange('auto_thumbnail_overrides', next)
+  }
+
+  const startDrag = (
+    e: React.PointerEvent<HTMLElement>,
+    element: ThumbnailElement,
+    mode: 'move' | 'resize',
+  ) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setSelectedId(element.id)
+    const frame = e.currentTarget.closest('[data-thumbnail-frame="true"]')
+    if (!(frame instanceof HTMLElement)) return
+    const rect = frame.getBoundingClientRect()
+    const startX = (e.clientX - rect.left) * (template.canvasWidth / rect.width)
+    const startY = (e.clientY - rect.top) * (template.canvasHeight / rect.height)
+    const start = {
+      posX: element.posX,
+      posY: element.posY,
+      width: element.width ?? 120,
+      height: element.height ?? 80,
+    }
+    const onMove = (event: PointerEvent) => {
+      const x = (event.clientX - rect.left) * (template.canvasWidth / rect.width)
+      const y = (event.clientY - rect.top) * (template.canvasHeight / rect.height)
+      if (mode === 'move') {
+        patchElement(element.id, {
+          posX: Math.round(start.posX + x - startX),
+          posY: Math.round(start.posY + y - startY),
+        })
+      } else {
+        patchElement(element.id, {
+          width: Math.max(20, Math.round(start.width + x - startX)),
+          height: Math.max(20, Math.round(start.height + y - startY)),
+        })
+      }
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  return (
+    <div className={className}>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-medium text-slate-900 dark:text-slate-50">
+            Visual editor
+          </div>
+          <div className="text-xs text-slate-500 dark:text-slate-400">
+            Click an item, drag to move, use the corner handle to resize.
+          </div>
+        </div>
+        <button type="button" className="btn-ghost btn-sm" onClick={clearSelectedOverride}>
+          Reset selected
+        </button>
+      </div>
+      <div
+        data-thumbnail-frame="true"
+        className="relative aspect-video w-full overflow-hidden rounded-md border border-slate-300 bg-slate-950 dark:border-white/10"
+        onPointerDown={() => setSelectedId('rightImage')}
+      >
+        {Object.values(template.elements)
+          .filter((el) => el.visible !== false)
+          .sort((a, b) => (a.zIndex ?? 5) - (b.zIndex ?? 5))
+          .map((el) => (
+            <ThumbnailEditableElement
+              key={el.id}
+              element={el}
+              selected={selectedId === el.id}
+              canvasWidth={template.canvasWidth}
+              canvasHeight={template.canvasHeight}
+              onPointerDown={(event, mode) => startDrag(event, el, mode)}
+              onSelect={() => setSelectedId(el.id)}
+            />
+          ))}
+      </div>
+
+      {selected && (
+        <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-medium text-slate-900 dark:text-slate-50">
+                {selected.id}
+              </div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                Drag in preview to move. Use the corner handle to resize.
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={() => patchSelected({ zIndex: (selected.zIndex ?? 5) + 1 })}
+              >
+                Bring front
+              </button>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={() => patchSelected({ zIndex: (selected.zIndex ?? 5) - 1 })}
+              >
+                Send back
+              </button>
+            </div>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+          <Field label="Selected">
+            <select
+              className="input"
+              value={selected.id}
+              onChange={(e) => setSelectedId(e.target.value)}
+            >
+              {Object.values(template.elements).map((el) => (
+                <option key={el.id} value={el.id}>
+                  {el.id}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {selected.type !== 'panel' && selected.type !== 'shape' && selected.type !== 'image' && (
+            <>
+              <Field label="Text" className="sm:col-span-3">
+                <textarea
+                  className="textarea h-20"
+                  value={selected.text}
+                  onChange={(e) => patchSelected({ text: e.target.value })}
+                />
+              </Field>
+              <NumField
+                step="thumbnail"
+                name="selected_font_size"
+                label="Font size"
+                value={selected.fontSize}
+                onChange={(v) => patchSelected({ fontSize: v })}
+              />
+              <Field label="Text color">
+                <input
+                  type="color"
+                  className="h-10 w-full rounded-md border border-slate-200 bg-white"
+                  value={asHexColor(selected.color, '#000000')}
+                  onChange={(e) => patchSelected({ color: e.target.value })}
+                />
+              </Field>
+              <Field label="Align">
+                <select
+                  className="input"
+                  value={selected.textAlign ?? 'center'}
+                  onChange={(e) =>
+                    patchSelected({ textAlign: e.target.value as ThumbnailElement['textAlign'] })
+                  }
+                >
+                  <option value="left">Left</option>
+                  <option value="center">Center</option>
+                  <option value="right">Right</option>
+                </select>
+              </Field>
+            </>
+          )}
+          {selected.type !== 'image' && selected.backgroundColor !== 'transparent' && (
+            <Field label="Background">
+              <input
+                type="color"
+                className="h-10 w-full rounded-md border border-slate-200 bg-white"
+                value={asHexColor(selected.backgroundColor, '#ffffff')}
+                onChange={(e) => patchSelected({ backgroundColor: e.target.value })}
+              />
+            </Field>
+          )}
+          {selected.type === 'image' && (
+            <>
+              <Field label="Image" className="sm:col-span-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="btn-secondary btn-sm cursor-pointer">
+                    <Upload size={12} /> Add or replace image
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/bmp"
+                      className="hidden"
+                      onChange={(e) => onAutoThumbnailSideImage(e.target.files?.[0] ?? null)}
+                    />
+                  </label>
+                  {settings.auto_thumbnail_side_image_url && (
+                    <button
+                      type="button"
+                      className="btn-ghost btn-sm"
+                      onClick={() => onAutoThumbnailSideImage(null)}
+                    >
+                      Remove image
+                    </button>
+                  )}
+                </div>
+              </Field>
+              <NumField
+                step="thumbnail"
+                name="auto_thumbnail_image_zoom"
+                label="Zoom (%)"
+                value={settings.auto_thumbnail_image_zoom ?? 100}
+                onChange={(v) => onChange('auto_thumbnail_image_zoom', v)}
+              />
+              <NumField
+                step="thumbnail"
+                name="auto_thumbnail_image_offset_x"
+                label="Crop X (%)"
+                value={settings.auto_thumbnail_image_offset_x ?? 50}
+                onChange={(v) => onChange('auto_thumbnail_image_offset_x', v)}
+              />
+              <NumField
+                step="thumbnail"
+                name="auto_thumbnail_image_offset_y"
+                label="Crop Y (%)"
+                value={settings.auto_thumbnail_image_offset_y ?? 50}
+                onChange={(v) => onChange('auto_thumbnail_image_offset_y', v)}
+              />
+            </>
+          )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ThumbnailEditableElement({
+  element,
+  selected,
+  canvasWidth,
+  canvasHeight,
+  onPointerDown,
+  onSelect,
+}: {
+  element: ThumbnailElement
+  selected: boolean
+  canvasWidth: number
+  canvasHeight: number
+  onPointerDown: (event: React.PointerEvent<HTMLElement>, mode: 'move' | 'resize') => void
+  onSelect: () => void
+}) {
+  const style: React.CSSProperties = {
+    position: 'absolute',
+    left: `${(element.posX / canvasWidth) * 100}%`,
+    top: `${(element.posY / canvasHeight) * 100}%`,
+    width: `${((element.width ?? 120) / canvasWidth) * 100}%`,
+    height: `${((element.height ?? 80) / canvasHeight) * 100}%`,
+    zIndex: element.zIndex ?? 5,
+    opacity: (element.opacity ?? 100) / 100,
+    borderRadius: element.borderRadius ? `${element.borderRadius / 2}px` : undefined,
+    background:
+      element.type === 'image'
+        ? element.imageUrl
+          ? undefined
+          : '#ffffff'
+        : element.backgroundColor === 'transparent'
+          ? undefined
+          : element.backgroundColor,
+    color: element.color,
+    border: selected ? '2px solid rgb(var(--brand-500))' : '1px dashed rgba(148, 163, 184, 0.45)',
+    overflow: 'hidden',
+    cursor: 'move',
+    userSelect: 'none',
+  }
+
+  return (
+    <div
+      style={style}
+      onPointerDown={(e) => onPointerDown(e, 'move')}
+      onClick={(e) => {
+        e.stopPropagation()
+        onSelect()
+      }}
+    >
+      {element.type === 'image' && element.imageUrl ? (
+        <img
+          src={element.imageUrl}
+          alt=""
+          draggable={false}
+          className="h-full w-full object-cover"
+          style={{
+            objectPosition: `${element.imageOffsetX ?? 50}% ${element.imageOffsetY ?? 50}%`,
+            transform: `scale(${(element.imageZoom ?? 100) / 100})`,
+          }}
+        />
+      ) : element.type === 'image' ? (
+        <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-500">
+          Click to add image
+        </div>
+      ) : element.type === 'badge' ? (
+        <div className="flex h-full w-full items-center justify-center rounded-full bg-yellow-300 text-center text-xs font-black text-red-600">
+          {element.text}
+        </div>
+      ) : (
+        <div
+          className="flex h-full w-full items-center justify-center whitespace-pre-wrap text-center leading-tight"
+          style={{
+            fontSize: `${Math.max(8, (element.fontSize / canvasWidth) * 100)}vw`,
+            fontWeight: element.fontWeight,
+            padding: `${element.paddingY / 4}px ${element.paddingX / 4}px`,
+          }}
+        >
+          {element.text}
+        </div>
+      )}
+      {selected && (
+        <span
+          className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize rounded-tl bg-brand-500"
+          onPointerDown={(e) => onPointerDown(e, 'resize')}
+        />
+      )}
+    </div>
+  )
+}
+
+function asHexColor(value: string, fallback: string): string {
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
 function ThumbnailSlot({
@@ -1220,6 +1834,7 @@ function ThumbnailSlot({
   position,
   enabled,
   filename,
+  generatedPreviewUrl,
   durationSec,
   onEnabledChange,
   onFilenameChange,
@@ -1232,6 +1847,7 @@ function ThumbnailSlot({
   position: string
   enabled: boolean
   filename: string
+  generatedPreviewUrl: string | null
   durationSec: number | undefined
   onEnabledChange: (v: boolean) => void
   onFilenameChange: (v: string) => void
@@ -1244,6 +1860,7 @@ function ThumbnailSlot({
   const fileFieldName = `${kind}_thumbnail_filename`
   const durFieldName = `${kind}_thumbnail_duration_sec`
   const trimmed = filename.trim()
+  const previewSrc = trimmed ? api.thumbnailUrl(trimmed) : generatedPreviewUrl
 
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -1284,7 +1901,11 @@ function ThumbnailSlot({
                 }
               >
                 <Upload size={16} />
-                {uploading ? 'Uploading…' : trimmed ? 'Replace image' : 'Upload image'}
+                {uploading
+                  ? 'Uploading...'
+                  : trimmed || generatedPreviewUrl
+                    ? 'Replace image'
+                    : 'Upload image'}
                 <input
                   id={fieldId('thumbnail', fileFieldName)}
                   type="file"
@@ -1294,28 +1915,32 @@ function ThumbnailSlot({
                   disabled={uploading}
                 />
               </label>
-              {trimmed && (
-                <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-2 dark:border-white/10 dark:bg-white/[0.03]">
+              {previewSrc && (
+                <div className="rounded-md border border-slate-200 bg-white p-2 dark:border-white/10 dark:bg-white/[0.03]">
                   <img
-                    src={api.thumbnailUrl(trimmed)}
+                    src={previewSrc}
                     alt={`${title} preview`}
-                    className="h-14 w-20 shrink-0 rounded object-cover"
+                    className="aspect-video w-full rounded object-cover"
                   />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-xs font-medium text-slate-800 dark:text-slate-200">
-                      {trimmed}
+                  <div className="mt-2 flex items-center gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium text-slate-800 dark:text-slate-200">
+                        {trimmed || 'Auto-generated preview'}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                        {trimmed ? 'Stored on backend' : 'Will be uploaded when the run starts'}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                      Stored on backend
-                    </div>
+                    {trimmed && (
+                      <button
+                        type="button"
+                        className="btn-ghost text-xs"
+                        onClick={() => onFilenameChange('')}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    className="btn-ghost text-xs"
-                    onClick={() => onFilenameChange('')}
-                  >
-                    Remove
-                  </button>
                 </div>
               )}
               {uploadErr && <FieldError message={uploadErr} />}

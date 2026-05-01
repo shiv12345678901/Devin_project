@@ -53,6 +53,14 @@ export interface GenerateSettings {
   intro_thumbnail_enabled?: boolean
   intro_thumbnail_filename?: string
   intro_thumbnail_duration_sec?: number
+  auto_thumbnail_generated?: boolean
+  auto_thumbnail_side_image_url?: string
+  auto_thumbnail_chapter_num?: string
+  auto_thumbnail_year?: string
+  auto_thumbnail_image_offset_x?: number
+  auto_thumbnail_image_offset_y?: number
+  auto_thumbnail_image_zoom?: number
+  auto_thumbnail_overrides?: Record<string, Record<string, unknown>>
   // Outro thumbnail — inserted on the 2nd-to-last slide.
   outro_thumbnail_enabled?: boolean
   outro_thumbnail_filename?: string

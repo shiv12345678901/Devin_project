@@ -156,6 +156,7 @@ export interface AppSettings {
   defaultOutputFormat: 'html' | 'images' | 'pptx' | 'video'
   backendUrl: string
   concurrentPipelineRuns: boolean
+  autoThumbnailBuilder: boolean
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -164,6 +165,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultOutputFormat: 'images',
   backendUrl: '',
   concurrentPipelineRuns: false,
+  autoThumbnailBuilder: false,
 }
 
 export const SETTINGS_STORAGE_KEY = 'textbro:settings:v1'

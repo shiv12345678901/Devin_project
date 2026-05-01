@@ -6,7 +6,8 @@ import uuid
 import zipfile
 import time
 
-from flask import Blueprint, request, jsonify, send_file
+from flask import Blueprint, request, jsonify, send_file, Response
+from core.thumbnail_builder import ThumbnailParams, render_thumbnail_png
 
 THUMBNAILS_FOLDER = 'output/thumbnails'
 PRESENTATIONS_FOLDER = 'output/presentations'
@@ -115,6 +116,33 @@ def upload_thumbnail():
         'url': f'/thumbnails/{stored_name}',
         'size_bytes': os.path.getsize(full_path),
     })
+
+
+@resources_bp.route('/generate-thumbnail', methods=['GET'])
+def generate_thumbnail():
+    """Public PNG thumbnail endpoint for external websites.
+
+    Example:
+    /generate-thumbnail?class=10&chapterNum=12&chapterTitle=Title&imageUrl=https://...
+    """
+    params = ThumbnailParams(
+        class_name=(request.args.get('class') or request.args.get('className') or '10').strip(),
+        chapter_num=(request.args.get('chapterNum') or request.args.get('chapter') or '1').strip(),
+        chapter_title=(request.args.get('chapterTitle') or request.args.get('title') or 'Chapter').strip(),
+        chapter_title2=(request.args.get('chapterTitle2') or '').strip(),
+        image_url=(request.args.get('imageUrl') or '').strip(),
+        year=(request.args.get('year') or '2082').strip(),
+        template=(request.args.get('template') or 'default').strip(),
+    )
+    try:
+        png = render_thumbnail_png(params)
+    except Exception as exc:
+        return jsonify({'error': f'Could not generate thumbnail: {exc}'}), 500
+    return Response(
+        png,
+        mimetype='image/png',
+        headers={'Cache-Control': 'public, max-age=86400'},
+    )
 
 
 @resources_bp.route('/download/<path:filepath>')

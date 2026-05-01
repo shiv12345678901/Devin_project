@@ -5,6 +5,7 @@ import {
   Code2,
   FileText,
   GitBranch,
+  Image as ImageIcon,
   Monitor,
   Moon,
   Paintbrush,
@@ -21,6 +22,7 @@ import { useRuns } from '../store/runs'
 import { BRAND_SWATCHES, useSettings, type ThemeMode } from '../store/settings'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
+import Toggle from '../components/Toggle'
 import {
   DEFAULT_YOUTUBE_TEMPLATE,
   readYoutubeTemplate,
@@ -197,6 +199,26 @@ export default function Settings() {
           </div>
         </div>
         <div className="border-t border-slate-100 pt-5 dark:border-white/5">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 dark:border-white/10 dark:bg-white/[0.03]">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-200">
+                <ImageIcon size={16} />
+              </span>
+              <div>
+                <div className="text-sm font-medium text-slate-800 dark:text-slate-100">
+                  Auto thumbnail builder
+                </div>
+                <div className="mt-0.5 max-w-xl text-xs text-slate-500 dark:text-slate-400">
+                  Builds an intro thumbnail from the text-to-video class, subject, chapter, and input text when PPT / MP4 export starts.
+                </div>
+              </div>
+            </div>
+            <Toggle
+              label=""
+              checked={settings.autoThumbnailBuilder}
+              onChange={(v) => update({ autoThumbnailBuilder: v })}
+            />
+          </div>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-medium text-slate-800 dark:text-slate-100">
