@@ -527,6 +527,32 @@ def generate_sse():
 
             html_filename, _ = save_html(html_content, folder=html_folder)
 
+            if requested_format == 'html':
+                log_generation({
+                    'tool': 'text-to-video',
+                    'input_preview': input_text[:200],
+                    'output_name': output_name or None,
+                    'project': project_info,
+                    'html_file': html_filename,
+                    'screenshot_count': 0,
+                    'presentation_file': None,
+                    'video_file': None,
+                    'operation_id': operation_id,
+                    'settings': {
+                        'zoom': zoom, 'overlap': overlap,
+                        'width': viewport_width, 'height': viewport_height,
+                        'model_choice': model_choice,
+                        'system_prompt_used': bool(system_prompt),
+                        **video_export_settings,
+                    },
+                })
+                metrics_tracker.end(operation_id, success=True)
+                final_message = 'Successfully generated HTML file'
+                yield f"data: {json.dumps({'type': 'progress', 'stage': 'html_saved', 'message': final_message, 'progress': 99})}\n\n"
+                yield f"data: {json.dumps({'type': 'html_generated', 'html_filename': html_filename, 'html_content': html_content})}\n\n"
+                yield f"data: {json.dumps({'type': 'complete', 'success': True, 'message': final_message, 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': [], 'screenshot_count': 0, 'screenshot_folder': None, 'presentation_file': None, 'video_file': None, 'operation_id': operation_id})}\n\n"
+                return
+
             yield f"data: {json.dumps({'type': 'progress', 'stage': 'html_saved', 'message': 'HTML saved, starting screenshots...', 'progress': 35})}\n\n"
             # Let the UI preview the generated HTML before screenshots finish.
             yield f"data: {json.dumps({'type': 'html_generated', 'html_filename': html_filename, 'html_content': html_content})}\n\n"

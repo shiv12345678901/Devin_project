@@ -59,9 +59,11 @@ const DEFAULT_SETTINGS: GenerateSettings = {
 // — we still read it as a fallback so users who ran at least once under
 // v1 don't lose the little that was saved.
 const LAST_RUN_STORAGE_KEY = 'textbro:text-to-video:last-run:v2'
+const HTML_LAST_RUN_STORAGE_KEY = 'textbro:html-to-video:last-run:v1'
 const LEGACY_PROJECT_DETAILS_STORAGE_KEY = 'textbro:text-to-video:project-details:v1'
 const CLASS_OPTIONS = ['Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12']
 const SUBJECT_OPTIONS = ['Nepali', 'English', 'Science', 'Math', 'Social', 'Model Question']
+type SourceMode = 'text' | 'html'
 
 type LegacyProjectDetails = Pick<GenerateSettings, 'class_name' | 'subject' | 'title' | 'output_format'>
 
@@ -75,10 +77,12 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
 }
 
-function readLastRunSnapshot(): LastRunSnapshot | null {
+function readLastRunSnapshot(mode: SourceMode = 'text'): LastRunSnapshot | null {
   if (typeof window === 'undefined') return null
   try {
-    const raw = window.localStorage.getItem(LAST_RUN_STORAGE_KEY)
+    const raw = window.localStorage.getItem(
+      mode === 'html' ? HTML_LAST_RUN_STORAGE_KEY : LAST_RUN_STORAGE_KEY,
+    )
     if (raw) {
       const parsed = JSON.parse(raw) as unknown
       if (isRecord(parsed) && isRecord(parsed.settings)) {
@@ -89,7 +93,8 @@ function readLastRunSnapshot(): LastRunSnapshot | null {
       }
     }
     // Fallback — legacy key only had the 4 project-info fields.
-    const legacyRaw = window.localStorage.getItem(LEGACY_PROJECT_DETAILS_STORAGE_KEY)
+    const legacyRaw =
+      mode === 'text' ? window.localStorage.getItem(LEGACY_PROJECT_DETAILS_STORAGE_KEY) : null
     if (legacyRaw) {
       const legacy = JSON.parse(legacyRaw) as LegacyProjectDetails
       if (isRecord(legacy)) {
@@ -110,14 +115,21 @@ function readLastRunSnapshot(): LastRunSnapshot | null {
   }
 }
 
-function saveLastRunSnapshot(text: string, settings: GenerateSettings): LastRunSnapshot | null {
+function saveLastRunSnapshot(
+  text: string,
+  settings: GenerateSettings,
+  mode: SourceMode = 'text',
+): LastRunSnapshot | null {
   if (typeof window === 'undefined') return null
   const snapshot: LastRunSnapshot = { text, settings }
   try {
-    window.localStorage.setItem(LAST_RUN_STORAGE_KEY, JSON.stringify(snapshot))
+    window.localStorage.setItem(
+      mode === 'html' ? HTML_LAST_RUN_STORAGE_KEY : LAST_RUN_STORAGE_KEY,
+      JSON.stringify(snapshot),
+    )
     // Clear the legacy key so the reuse button doesn't surface stale
     // project-info that we've already superseded.
-    window.localStorage.removeItem(LEGACY_PROJECT_DETAILS_STORAGE_KEY)
+    if (mode === 'text') window.localStorage.removeItem(LEGACY_PROJECT_DETAILS_STORAGE_KEY)
   } catch {
     /* ignore storage failures */
   }
@@ -157,7 +169,12 @@ const OUTPUT_OPTIONS: { value: OutputFormat; label: string; desc: string; icon: 
 type FieldErrors = Record<string, string>
 
 /** Returns a map of { fieldId -> errorMessage } for a given step. Empty = valid. */
-function validateStep(id: StepId, settings: GenerateSettings, text: string): FieldErrors {
+function validateStep(
+  id: StepId,
+  settings: GenerateSettings,
+  text: string,
+  mode: SourceMode = 'text',
+): FieldErrors {
   const errs: FieldErrors = {}
   const num = (v: unknown): number | null => {
     if (v === undefined || v === null || v === '') return null
@@ -173,7 +190,7 @@ function validateStep(id: StepId, settings: GenerateSettings, text: string): Fie
       return errs
     }
     case 'content': {
-      if (!text.trim()) errs.text = 'Paste your source text here'
+      if (!text.trim()) errs.text = mode === 'html' ? 'Paste your HTML here' : 'Paste your source text here'
       return errs
     }
     case 'screenshot': {
@@ -255,18 +272,20 @@ const fieldId = (step: StepId, name: string) => `field-${step}-${name}`
 
 // ─── Page ──────────────────────────────────────────────────────────────────
 
-export default function TextToVideo() {
+export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: SourceMode }) {
   const nav = useNavigate()
-  const { state, generate, cancel } = useTrackedGenerate('text-to-video')
+  const tracked = useTrackedGenerate(sourceMode === 'html' ? 'html-to-video' : 'text-to-video')
+  const { state, cancel } = tracked
+  const generateSource = sourceMode === 'html' ? tracked.generateFromHtml : tracked.generate
   const running = false
   const [text, setText] = useState('')
   const { settings: appSettings } = useSettings()
   const [settings, setSettings] = useState<GenerateSettings>({
     ...DEFAULT_SETTINGS,
-    output_format: appSettings.defaultOutputFormat,
+    output_format: sourceMode === 'html' ? 'video' : appSettings.defaultOutputFormat,
   })
   const [lastRunSnapshot, setLastRunSnapshot] = useState<LastRunSnapshot | null>(() =>
-    readLastRunSnapshot(),
+    readLastRunSnapshot(sourceMode),
   )
   const [replaceTargets, setReplaceTargets] = useState<ReplacementTargets | null>(null)
   const [stepId, setStepId] = useState<StepId>('project')
@@ -277,7 +296,7 @@ export default function TextToVideo() {
   const [erroredSteps, setErroredSteps] = useState<Set<StepId>>(new Set())
 
   useEffect(() => {
-    const draft = consumeProcessEditHandoff('text-to-video')
+    const draft = consumeProcessEditHandoff(sourceMode === 'html' ? 'html-to-video' : 'text-to-video')
     if (!draft) return
     setText(draft.text)
     setSettings((prev) => ({ ...prev, ...draft.settings }))
@@ -293,13 +312,13 @@ export default function TextToVideo() {
   }
 
   const perStepErrors: Record<StepId, FieldErrors> = useMemo(() => ({
-    project: validateStep('project', settings, text),
-    content: validateStep('content', settings, text),
-    screenshot: validateStep('screenshot', settings, text),
-    video: validateStep('video', settings, text),
-    thumbnail: validateStep('thumbnail', settings, text),
-    advanced: validateStep('advanced', settings, text),
-  }), [settings, text])
+    project: validateStep('project', settings, text, sourceMode),
+    content: validateStep('content', settings, text, sourceMode),
+    screenshot: validateStep('screenshot', settings, text, sourceMode),
+    video: validateStep('video', settings, text, sourceMode),
+    thumbnail: validateStep('thumbnail', settings, text, sourceMode),
+    advanced: validateStep('advanced', settings, text, sourceMode),
+  }), [settings, text, sourceMode])
 
   const stepValid = (id: StepId) => Object.keys(perStepErrors[id]).length === 0
 
@@ -373,12 +392,12 @@ export default function TextToVideo() {
     payload.concurrent_pipeline_runs = appSettings.concurrentPipelineRuns
     // Snapshot the full wizard state (text + settings) so the next
     // session can restore everything via "Reuse previous run".
-    setLastRunSnapshot(saveLastRunSnapshot(text, payload))
+    setLastRunSnapshot(saveLastRunSnapshot(text, payload, sourceMode))
     // Enqueues and (if idle) kicks off immediately. Navigate right away so
     // the user sees either the running run or the queue entry without
     // staying on the wizard.
     const targets = replaceTargets
-    const { queueId } = generate(text, payload, targets ? { replaceTargets: targets } : undefined)
+    const { queueId } = generateSource(text, payload, targets ? { replaceTargets: targets } : undefined)
     setReplaceTargets(null)
     nav(`/processes?queue=${encodeURIComponent(queueId)}`)
   }
@@ -421,7 +440,9 @@ export default function TextToVideo() {
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
       <div>
-        <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">Text to Video</h1>
+        <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">
+          {sourceMode === 'html' ? 'HTML to Video' : 'Text to Video'}
+        </h1>
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
           Step through the wizard to configure the run. Nothing starts until you hit{' '}
           <span className="font-medium">Start Process</span> on the last step.
@@ -451,6 +472,7 @@ export default function TextToVideo() {
             onReuseLast={reuseLastRun}
             running={running}
             errors={showCurrentErrors ? currentErrors : {}}
+            sourceMode={sourceMode}
           />
         )}
 
@@ -462,6 +484,7 @@ export default function TextToVideo() {
             onChange={set}
             running={running}
             errors={showCurrentErrors ? currentErrors : {}}
+            sourceMode={sourceMode}
           />
         )}
 
@@ -688,6 +711,7 @@ function ProjectStep({
   onReuseLast,
   running,
   errors,
+  sourceMode,
 }: {
   settings: GenerateSettings
   onChange: Setter
@@ -695,6 +719,7 @@ function ProjectStep({
   onReuseLast: () => void
   running: boolean
   errors: FieldErrors
+  sourceMode: SourceMode
 }) {
   // "Reuse previous run" is offered whenever we have any captured
   // signal from last time — project info, typed text, or non-default
@@ -777,6 +802,7 @@ function ProjectStep({
         onChange={(v) => onChange('output_format', v)}
         running={running}
         error={errors.output_format}
+        sourceMode={sourceMode}
       />
     </>
   )
@@ -790,11 +816,13 @@ function OutputFormatPicker({
   onChange,
   running,
   error,
+  sourceMode,
 }: {
   value: OutputFormat
   onChange: (v: OutputFormat) => void
   running: boolean
   error?: string
+  sourceMode: SourceMode
 }) {
   const { platform, videoEngineReady, pptxReady } = useBackendCapabilities()
   const engineOnly = (v: OutputFormat) => v === 'pptx' || v === 'video'
@@ -802,7 +830,7 @@ function OutputFormatPicker({
     <div id={fieldId('project', 'output_format')}>
       <div className="label">Output format</div>
       <div className="grid gap-2 sm:grid-cols-2">
-        {OUTPUT_OPTIONS.map((o) => {
+        {OUTPUT_OPTIONS.filter((o) => sourceMode === 'text' || o.value !== 'html').map((o) => {
           const Icon = o.icon
           const active = value === o.value
           // Gate engine-dependent outputs on the new preflight
@@ -912,6 +940,7 @@ function ContentStep({
   onChange,
   running,
   errors,
+  sourceMode,
 }: {
   text: string
   onText: (s: string) => void
@@ -919,15 +948,35 @@ function ContentStep({
   onChange: Setter
   running: boolean
   errors: FieldErrors
+  sourceMode: SourceMode
 }) {
+  const isHtml = sourceMode === 'html'
+  const onFile = async (file: File) => {
+    onText(await file.text())
+  }
+  const beautify = async () => {
+    if (!text.trim()) return
+    const res = await api.beautify(text)
+    onText(res.html)
+  }
+  const minify = async () => {
+    if (!text.trim()) return
+    const res = await api.minify(text)
+    onText(res.html)
+  }
+
   return (
     <>
       <StepHeader
-        title="AI & text"
-        subtitle="Pick the model, paste the source text, and (optionally) override the system prompt."
+        title={isHtml ? 'HTML input' : 'AI & text'}
+        subtitle={
+          isHtml
+            ? 'Paste or upload the HTML you already generated. The workflow continues from screenshots onward.'
+            : 'Pick the model, paste the source text, and (optionally) override the system prompt.'
+        }
       />
 
-      <Field label="AI Model">
+      {!isHtml && <Field label="AI Model">
         <select
           id={fieldId('content', 'model_choice')}
           className="input"
@@ -942,9 +991,33 @@ function ContentStep({
           <option value="quality">Quality — DeepSeek V3.2</option>
           <option value="long">Long context — DeepSeek V4 Pro (1M ctx)</option>
         </select>
-      </Field>
+      </Field>}
 
-      <Field label="Text input" required error={errors.text}>
+      {isHtml && (
+        <div className="flex flex-wrap gap-2">
+          <label className="btn-secondary cursor-pointer">
+            <Upload size={14} /> Upload .html
+            <input
+              type="file"
+              accept=".html,text/html"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) void onFile(f)
+              }}
+              disabled={running}
+            />
+          </label>
+          <button type="button" className="btn-secondary" onClick={() => void beautify()} disabled={running || !text.trim()}>
+            Beautify
+          </button>
+          <button type="button" className="btn-secondary" onClick={() => void minify()} disabled={running || !text.trim()}>
+            Minify
+          </button>
+        </div>
+      )}
+
+      <Field label={isHtml ? 'HTML input' : 'Text input'} required error={errors.text}>
         <textarea
           id={fieldId('content', 'text')}
           className={inputCls(errors.text) + ' textarea h-60 resize-y font-mono'}
@@ -958,7 +1031,7 @@ function ContentStep({
         </div>
       </Field>
 
-      <Field label="System prompt (optional)">
+      {!isHtml && <Field label="System prompt (optional)">
         <textarea
           className="textarea h-24 resize-y"
           placeholder="Optional extra instructions for HTML generation…"
@@ -966,7 +1039,7 @@ function ContentStep({
           onChange={(e) => onChange('system_prompt', e.target.value)}
           disabled={running}
         />
-      </Field>
+      </Field>}
     </>
   )
 }

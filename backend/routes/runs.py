@@ -826,6 +826,261 @@ def start_text_to_video():
 #  * Same ETA tracker buckets (resolution + concurrent flag) so concurrent
 #    screenshot-to-video exports influence future predictions correctly.
 
+@runs_bp.route("/runs/html-to-video", methods=["POST"])
+def start_html_to_video():
+    """Queue HTML -> screenshots -> optional PPTX/MP4 using the shared engine."""
+    data = request.get_json(silent=True) or {}
+    html_content = str(data.get("html") or "")
+    if not html_content.strip():
+        return jsonify({"success": False, "error": "HTML is required"}), 400
+
+    output_format = str(data.get("output_format") or "video")
+    if output_format not in {"images", "pptx", "video"}:
+        return jsonify({
+            "success": False,
+            "error": "output_format must be 'images', 'pptx', or 'video'",
+        }), 400
+
+    output_name = _safe_name(
+        str(data.get("output_name") or data.get("title") or ""),
+        f"html_{int(time.time() * 1000)}",
+    )
+    project_info = {
+        "class_name": str(data.get("class_name") or "").strip(),
+        "subject": str(data.get("subject") or "").strip(),
+        "title": str(data.get("title") or "").strip(),
+    }
+    zoom = float(data.get("zoom") or 2.1)
+    overlap = int(data.get("overlap") or 15)
+    viewport_width = int(data.get("viewport_width") or 1920)
+    viewport_height = int(data.get("viewport_height") or 1080)
+    max_screenshots = int(data.get("max_screenshots") or 50)
+    close_powerpoint = _bool_value(data.get("close_powerpoint_before_start"), True)
+    auto_timing_screenshot_slides = _bool_value(data.get("auto_timing_screenshot_slides"), True)
+    fixed_seconds_per_screenshot_slide = _positive_float(data.get("fixed_seconds_per_screenshot_slide"), 5.0)
+    intro_thumbnail_enabled = _bool_value(
+        data.get("intro_thumbnail_enabled", data.get("thumbnail_enabled", data.get("thumbnail_on_slide_2"))),
+        False,
+    )
+    outro_thumbnail_enabled = _bool_value(data.get("outro_thumbnail_enabled"), False)
+    intro_thumbnail_filename = str(data.get("intro_thumbnail_filename") or data.get("thumbnail_filename") or "")
+    outro_thumbnail_filename = str(data.get("outro_thumbnail_filename") or "")
+    intro_thumbnail_duration = _positive_float(
+        data.get("intro_thumbnail_duration_sec", data.get("thumbnail_duration_sec")),
+        5.0,
+    )
+    outro_thumbnail_duration = _positive_float(data.get("outro_thumbnail_duration_sec"), 5.0)
+    resolution_label = str(data.get("resolution") or "1080p")
+    width, height = _resolution_tuple(resolution_label)
+    fps = int(data.get("fps") or 30)
+    quality = _ppt_quality(data.get("video_quality", 85))
+    concurrent_pipeline_runs = _bool_value(data.get("concurrent_pipeline_runs"), False)
+    model_choice = "html-to-video"
+
+    estimated_total_seconds = eta_tracker.predict_process_time(
+        model_choice,
+        max(len(html_content), 1),
+        resolution=resolution_label,
+        concurrent=concurrent_pipeline_runs,
+    )
+
+    fingerprint_payload = {
+        "tool": "html-to-video",
+        "html": html_content.strip(),
+        "class_name": project_info["class_name"],
+        "subject": project_info["subject"],
+        "title": project_info["title"],
+        "output_format": output_format,
+        "output_name": output_name,
+        "zoom": zoom,
+        "overlap": overlap,
+        "viewport_width": viewport_width,
+        "viewport_height": viewport_height,
+        "max_screenshots": max_screenshots,
+        "auto_timing_screenshot_slides": auto_timing_screenshot_slides,
+        "fixed_seconds_per_screenshot_slide": fixed_seconds_per_screenshot_slide,
+        "intro_thumbnail_enabled": intro_thumbnail_enabled,
+        "intro_thumbnail_filename": intro_thumbnail_filename,
+        "intro_thumbnail_duration": intro_thumbnail_duration,
+        "outro_thumbnail_enabled": outro_thumbnail_enabled,
+        "outro_thumbnail_filename": outro_thumbnail_filename,
+        "outro_thumbnail_duration": outro_thumbnail_duration,
+        "resolution": [width, height],
+        "fps": fps,
+        "quality": quality,
+        "concurrent_pipeline_runs": concurrent_pipeline_runs,
+    }
+    input_fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    duplicate = find_active_run_by_fingerprint("html-to-video", input_fingerprint)
+    if duplicate:
+        return jsonify({
+            "success": False,
+            "error": f"This exact job is already {duplicate.get('status')}.",
+            "reason": "duplicate",
+            "duplicate_run_id": duplicate.get("run_id"),
+            "operation_id": duplicate.get("operation_id"),
+        }), 409
+
+    operation_id = f"html_video_{time.time_ns()}"
+    cancel_event = register_operation(operation_id)
+    settings = dict(data)
+    settings.update({
+        "output_format": output_format,
+        "output_name": output_name,
+        "input_fingerprint": input_fingerprint,
+    })
+    run = create_run(
+        tool="html-to-video",
+        title=output_name,
+        input_text=html_content,
+        settings=settings,
+        model_choice=model_choice,
+        operation_id=operation_id,
+        run_id=operation_id,
+        status="queued",
+        input_fingerprint=input_fingerprint,
+    )
+    run_id = run["run_id"]
+
+    def worker(ctx: WorkflowContext) -> None:
+        process_started = time.time()
+        html_filename = None
+        screenshot_files: list[str] = []
+        screenshot_names: list[str] = []
+        screenshot_folder = None
+        presentation_file = None
+        video_file = None
+        try:
+            progress_data = (
+                {"eta_seconds": estimated_total_seconds}
+                if estimated_total_seconds is not None
+                else None
+            )
+            html_filename, _ = save_html(html_content, prefix=operation_id, folder="output/html")
+            ctx.output("html_file", html_filename)
+            ctx.progress("html_saved", 30, "HTML saved; starting screenshots...", data=progress_data)
+
+            batch_id = get_next_batch_id()
+            screenshot_folder = f"batch {batch_id}"
+            ctx.output("screenshot_folder", screenshot_folder)
+            screenshot_started = time.time()
+
+            def _screenshot_progress(message: str, pct: int = 0) -> None:
+                p = max(0, min(100, int(pct or 0)))
+                ctx.progress("screenshot", 35 + int((p / 100.0) * 50), str(message))
+
+            with screenshot_slot(ctx, concurrent_pipeline_runs):
+                ctx.progress("screenshot", 35, "Starting browser screenshots...")
+                screenshot_files, screenshot_names = take_screenshots(
+                    html_content,
+                    screenshot_name=batch_id,
+                    screenshot_folder=OUTPUT_FOLDER,
+                    zoom=zoom,
+                    overlap=overlap,
+                    viewport_width=viewport_width,
+                    viewport_height=viewport_height,
+                    max_screenshots=max_screenshots,
+                    progress_callback=_screenshot_progress,
+                    cancel_event=ctx.cancel_event,
+                )
+            expected_screenshot_prefix = f"{screenshot_folder}/"
+            if any(not str(name).startswith(expected_screenshot_prefix) for name in screenshot_names):
+                raise RuntimeError("Screenshot output path mismatch; refusing to attach files from another run")
+            ctx.check_cancelled()
+            ctx.metrics({
+                "screenshot_seconds": round(time.time() - screenshot_started, 2),
+                "screenshot_count": len(screenshot_files),
+            })
+            ctx.output("screenshot_files", screenshot_names)
+            ctx.progress("screenshots_done", 86, f"Captured {len(screenshot_files)} screenshot(s)")
+
+            if output_format in {"pptx", "video"}:
+                presentation_file, video_file = _run_powerpoint_export(
+                    ctx,
+                    output_format=output_format,
+                    screenshot_files=screenshot_files,
+                    project_info=project_info,
+                    output_name=output_name,
+                    input_text=html_content,
+                    close_powerpoint=close_powerpoint,
+                    concurrent_pipeline_runs=concurrent_pipeline_runs,
+                    auto_timing_screenshot_slides=auto_timing_screenshot_slides,
+                    fixed_seconds_per_screenshot_slide=fixed_seconds_per_screenshot_slide,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    quality=quality,
+                    intro_thumbnail_filename=intro_thumbnail_filename,
+                    intro_thumbnail_enabled=intro_thumbnail_enabled,
+                    intro_thumbnail_duration=intro_thumbnail_duration,
+                    outro_thumbnail_filename=outro_thumbnail_filename,
+                    outro_thumbnail_enabled=outro_thumbnail_enabled,
+                    outro_thumbnail_duration=outro_thumbnail_duration,
+                )
+
+            outputs = {
+                "html_filename": html_filename,
+                "html_file": html_filename,
+                "screenshot_folder": screenshot_folder,
+                "screenshot_files": screenshot_names,
+                "screenshot_count": len(screenshot_files),
+                "presentation_file": presentation_file,
+                "presentation_path": presentation_file,
+                "video_file": video_file,
+                "video_path": video_file,
+            }
+            log_generation({
+                "tool": "html-to-video",
+                "input_preview": html_content[:200],
+                "output_name": output_name,
+                "html_file": html_filename,
+                "screenshot_folder": screenshot_folder,
+                "screenshot_count": len(screenshot_files),
+                "presentation_file": presentation_file,
+                "video_file": video_file,
+                "operation_id": operation_id,
+                "settings": settings,
+            })
+            final = "Successfully generated MP4 video" if output_format == "video" else (
+                "Successfully generated PowerPoint deck" if output_format == "pptx" else f"Successfully generated {len(screenshot_files)} screenshot(s)"
+            )
+            ctx.complete(final, outputs=outputs, metrics={"screenshot_count": len(screenshot_files)})
+            eta_tracker.record_process_completion(
+                model_choice,
+                max(len(html_content), 1),
+                time.time() - process_started,
+                resolution=resolution_label,
+                concurrent=concurrent_pipeline_runs,
+            )
+        except (CancelledError, Exception) as exc:
+            if ctx.cancel_event.is_set() or isinstance(exc, CancelledError):
+                _close_powerpoint_best_effort()
+                ctx.cancel("Operation cancelled")
+            elif isinstance(exc, (PowerPointNotFoundError, TemplateError, ExportError)):
+                ctx.fail(str(exc))
+            else:
+                ctx.fail(str(exc))
+        finally:
+            unregister_operation(operation_id)
+
+    position = enqueue(
+        run_id,
+        operation_id,
+        worker,
+        cancel_event,
+        label="HTML-to-video",
+        pipeline_enabled=concurrent_pipeline_runs,
+    )
+    return jsonify({
+        "success": True,
+        "run_id": run_id,
+        "operation_id": operation_id,
+        "queue_position": position,
+    })
+
+
 _SCREENSHOT_FIELD_NAMES = ("screenshots", "screenshots[]", "screenshot", "files", "files[]")
 _ALLOWED_SCREENSHOT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 

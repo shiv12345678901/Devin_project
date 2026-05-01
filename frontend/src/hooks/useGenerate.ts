@@ -277,8 +277,8 @@ export function useGenerate() {
     [],
   )
 
-  const runBackendTextRun = useCallback(
-    async (text: string, settings: GenerateSettings): Promise<GenerationResult | null> => {
+  const runBackendQueuedRun = useCallback(
+    async (startRun: () => ReturnType<typeof api.startTextToVideoRun>): Promise<GenerationResult | null> => {
       abortRef.current?.abort()
       cancelRequestedRef.current = false
       const ctl = new AbortController()
@@ -287,7 +287,7 @@ export function useGenerate() {
 
       let started
       try {
-        started = await api.startTextToVideoRun(text, settings)
+        started = await startRun()
       } catch (err) {
         setState({
           status: 'error',
@@ -468,11 +468,12 @@ export function useGenerate() {
   )
 
   const generate = useCallback(
-    (text: string, settings: GenerateSettings) => runBackendTextRun(text, settings),
-    [runBackendTextRun],
+    (text: string, settings: GenerateSettings) =>
+      runBackendQueuedRun(() => api.startTextToVideoRun(text, settings)),
+    [runBackendQueuedRun],
   )
 
-  const generateFromHtml = useCallback(
+  const generateFromHtmlLegacy = useCallback(
     async (html: string, settings: GenerateSettings): Promise<GenerationResult | null> => {
       abortRef.current?.abort()
       const ctl = new AbortController()
@@ -506,6 +507,14 @@ export function useGenerate() {
       }
     },
     [],
+  )
+
+  void generateFromHtmlLegacy
+
+  const generateFromHtml = useCallback(
+    (html: string, settings: GenerateSettings) =>
+      runBackendQueuedRun(() => api.startHtmlToVideoRun(html, settings)),
+    [runBackendQueuedRun],
   )
 
   const generateFromImage = useCallback(
