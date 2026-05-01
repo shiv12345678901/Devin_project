@@ -13,6 +13,15 @@ import {
   AlertCircle,
   Upload,
   Wand2,
+  Trash2,
+  Copy as CopyIcon,
+  Eye,
+  EyeOff,
+  Sparkles,
+  Type as TypeIcon,
+  Square,
+  Circle,
+  Layers,
 } from 'lucide-react'
 
 import PreflightModal from '../components/PreflightModal'
@@ -28,7 +37,22 @@ import type { ReplacementTargets } from '../lib/processEditHandoff'
 import {
   buildAutoThumbnailFile,
   buildAutoThumbnailTemplate,
+  renderTemplateToDataUrl,
+  THUMBNAIL_TEMPLATES,
+  THUMBNAIL_ASPECTS,
+  DEFAULT_TEMPLATE_ID,
+  findTemplatePreset,
+  createTextElement,
+  createHeadingElement,
+  createSubtitleElement,
+  createShapeElement,
+  createBadgeElement,
+  createImageElement,
+  duplicateElement,
+  nextElementId,
   type ThumbnailElement,
+  type ThumbnailAspectId,
+  type ThumbnailShapeType,
 } from '../lib/thumbnailBuilder'
 
 // ─── Defaults ──────────────────────────────────────────────────────────────
@@ -1398,6 +1422,9 @@ function AutoThumbnailPanel({
   onAutoThumbnailSideImage: (file: File | null) => void
 }) {
   const hasSavedIntro = Boolean((settings.intro_thumbnail_filename ?? '').trim())
+  const presetId = settings.auto_thumbnail_template_id ?? DEFAULT_TEMPLATE_ID
+  const preset = findTemplatePreset(presetId)
+  const aspectId: ThumbnailAspectId = settings.auto_thumbnail_canvas_aspect ?? '16:9'
 
   return (
     <div className="rounded-md border border-brand-200 bg-brand-50 p-4 text-sm text-brand-800 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-100">
@@ -1409,7 +1436,7 @@ function AutoThumbnailPanel({
           <div className="min-w-0">
             <div className="font-medium">Auto thumbnail builder</div>
             <div className="mt-0.5 text-xs opacity-80">
-              Use the generated intro thumbnail, replace it with an upload, or customize the generated layout.
+              Pick a layout, tweak it visually, and the result is uploaded as the intro thumbnail when the run starts.
             </div>
             {autoThumbnailError && (
               <div className="mt-2 text-xs text-rose-700 dark:text-rose-200">
@@ -1437,10 +1464,76 @@ function AutoThumbnailPanel({
         </div>
       </div>
 
+      {/* Quick preset row — always visible so users can switch styles without
+          opening the visual editor. */}
+      <div className="mt-4 flex flex-wrap gap-2">
+        {THUMBNAIL_TEMPLATES.map((p) => {
+          const active = p.id === presetId
+          return (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => onChange('auto_thumbnail_template_id', p.id)}
+              title={p.description}
+              className={
+                'btn-sm rounded-md border px-3 py-1.5 text-xs transition-colors ' +
+                (active
+                  ? 'border-brand-500 bg-brand-500 text-white shadow-sm'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-200')
+              }
+            >
+              {active && <Sparkles size={11} className="mr-1 inline" />}
+              {p.label}
+            </button>
+          )
+        })}
+      </div>
+      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        {preset.description}
+      </div>
+
       {autoThumbnailEditOpen && (
         <div className="mt-4 rounded-md border border-slate-200 bg-white p-4 text-slate-700 dark:border-white/10 dark:bg-slate-950/40 dark:text-slate-200">
-          <div className="mb-3 text-sm font-medium text-slate-900 dark:text-slate-50">
-            Generated thumbnail customization
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-medium text-slate-900 dark:text-slate-50">
+              Visual editor
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Field label="Aspect">
+                <select
+                  className="input text-xs"
+                  value={aspectId}
+                  onChange={(e) =>
+                    onChange('auto_thumbnail_canvas_aspect', e.target.value as ThumbnailAspectId)
+                  }
+                >
+                  {Object.entries(THUMBNAIL_ASPECTS).map(([id, info]) => (
+                    <option key={id} value={id}>
+                      {info.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Background">
+                <input
+                  type="color"
+                  className="h-9 w-16 rounded-md border border-slate-200 bg-white"
+                  value={asHexColor(settings.auto_thumbnail_canvas_background ?? '', '#0f172a')}
+                  onChange={(e) =>
+                    onChange('auto_thumbnail_canvas_background', e.target.value)
+                  }
+                />
+              </Field>
+              {settings.auto_thumbnail_canvas_background && (
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm self-end"
+                  onClick={() => onChange('auto_thumbnail_canvas_background', undefined)}
+                >
+                  Reset bg
+                </button>
+              )}
+            </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Chapter number">
@@ -1473,6 +1566,15 @@ function AutoThumbnailPanel({
   )
 }
 
+const NUDGE_KEYS: Record<string, [number, number]> = {
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+}
+
+type ResizeHandle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+
 function ThumbnailVisualEditor({
   settings,
   text,
@@ -1487,14 +1589,64 @@ function ThumbnailVisualEditor({
   className?: string
 }) {
   const template = useMemo(() => buildAutoThumbnailTemplate(settings, text), [settings, text])
-  const [selectedId, setSelectedId] = useState<string>('title')
-  const selected = template.elements[selectedId] ?? Object.values(template.elements)[0]
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    return Object.values(template.elements).find((e) => e.type === 'title')?.id ?? null
+  })
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const frameRef = useRef<HTMLDivElement | null>(null)
+
+  // Re-render the canvas-derived preview every time the template changes.
+  // The preview <img> is the *real* output the run will use, so the user
+  // sees exactly what they'll get rather than a CSS approximation.
+  useEffect(() => {
+    let cancelled = false
+    // Show "Rendering…" only if the work takes long enough to notice; this
+    // keeps state writes off the synchronous effect-body path so the React
+    // hooks lint rule stays happy.
+    const loadingTimer = window.setTimeout(() => {
+      if (!cancelled) setPreviewLoading(true)
+    }, 120)
+    renderTemplateToDataUrl(template, 1)
+      .then((dataUrl) => {
+        if (!cancelled) setPreviewSrc(dataUrl)
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewSrc(null)
+      })
+      .finally(() => {
+        window.clearTimeout(loadingTimer)
+        if (!cancelled) setPreviewLoading(false)
+      })
+    return () => {
+      cancelled = true
+      window.clearTimeout(loadingTimer)
+    }
+  }, [template])
+
+  const selected = selectedId ? template.elements[selectedId] : undefined
+
+  const overrides = settings.auto_thumbnail_overrides ?? {}
+  const added = settings.auto_thumbnail_added_elements ?? {}
+  const hidden = settings.auto_thumbnail_hidden_elements ?? []
+
+  const isAddedElement = (id: string) => Boolean(added[id])
 
   const patchElement = (id: string, patch: Partial<ThumbnailElement>) => {
+    if (isAddedElement(id)) {
+      onChange('auto_thumbnail_added_elements', {
+        ...added,
+        [id]: {
+          ...(added[id] as Partial<ThumbnailElement>),
+          ...patch,
+        },
+      })
+      return
+    }
     onChange('auto_thumbnail_overrides', {
-      ...(settings.auto_thumbnail_overrides ?? {}),
+      ...overrides,
       [id]: {
-        ...((settings.auto_thumbnail_overrides?.[id] as Partial<ThumbnailElement>) ?? {}),
+        ...((overrides[id] as Partial<ThumbnailElement>) ?? {}),
         ...patch,
       },
     })
@@ -1507,24 +1659,78 @@ function ThumbnailVisualEditor({
 
   const clearSelectedOverride = () => {
     if (!selected) return
-    const next = { ...(settings.auto_thumbnail_overrides ?? {}) }
+    if (isAddedElement(selected.id)) return
+    const next = { ...overrides }
     delete next[selected.id]
     onChange('auto_thumbnail_overrides', next)
+  }
+
+  const removeSelected = () => {
+    if (!selected) return
+    if (isAddedElement(selected.id)) {
+      const next = { ...added }
+      delete next[selected.id]
+      onChange('auto_thumbnail_added_elements', next)
+      setSelectedId(null)
+      return
+    }
+    if (!hidden.includes(selected.id)) {
+      onChange('auto_thumbnail_hidden_elements', [...hidden, selected.id])
+    }
+    setSelectedId(null)
+  }
+
+  const restoreElement = (id: string) => {
+    if (!hidden.includes(id)) return
+    onChange('auto_thumbnail_hidden_elements', hidden.filter((x) => x !== id))
+  }
+
+  const addElement = (factory: (id: string) => ThumbnailElement, prefix: string) => {
+    const id = nextElementId(prefix)
+    const element = factory(id)
+    onChange('auto_thumbnail_added_elements', {
+      ...added,
+      [id]: element as unknown as Record<string, unknown>,
+    })
+    setSelectedId(id)
+  }
+
+  const duplicateSelected = () => {
+    if (!selected) return
+    const id = nextElementId('copy')
+    const copy = duplicateElement(selected, id)
+    onChange('auto_thumbnail_added_elements', {
+      ...added,
+      [id]: copy as unknown as Record<string, unknown>,
+    })
+    setSelectedId(id)
+  }
+
+  const bringToFront = () => {
+    const maxZ = Math.max(0, ...Object.values(template.elements).map((e) => e.zIndex ?? 5))
+    patchSelected({ zIndex: maxZ + 1 })
+  }
+  const sendToBack = () => {
+    const minZ = Math.min(0, ...Object.values(template.elements).map((e) => e.zIndex ?? 5))
+    patchSelected({ zIndex: minZ - 1 })
   }
 
   const startDrag = (
     e: React.PointerEvent<HTMLElement>,
     element: ThumbnailElement,
-    mode: 'move' | 'resize',
+    mode: 'move' | ResizeHandle,
   ) => {
     e.preventDefault()
     e.stopPropagation()
     setSelectedId(element.id)
-    const frame = e.currentTarget.closest('[data-thumbnail-frame="true"]')
-    if (!(frame instanceof HTMLElement)) return
+    if (element.locked) return
+    const frame = frameRef.current
+    if (!frame) return
     const rect = frame.getBoundingClientRect()
-    const startX = (e.clientX - rect.left) * (template.canvasWidth / rect.width)
-    const startY = (e.clientY - rect.top) * (template.canvasHeight / rect.height)
+    const sx = template.canvasWidth / rect.width
+    const sy = template.canvasHeight / rect.height
+    const startX = (e.clientX - rect.left) * sx
+    const startY = (e.clientY - rect.top) * sy
     const start = {
       posX: element.posX,
       posY: element.posY,
@@ -1532,18 +1738,30 @@ function ThumbnailVisualEditor({
       height: element.height ?? 80,
     }
     const onMove = (event: PointerEvent) => {
-      const x = (event.clientX - rect.left) * (template.canvasWidth / rect.width)
-      const y = (event.clientY - rect.top) * (template.canvasHeight / rect.height)
+      const x = (event.clientX - rect.left) * sx
+      const y = (event.clientY - rect.top) * sy
+      const dx = x - startX
+      const dy = y - startY
       if (mode === 'move') {
         patchElement(element.id, {
-          posX: Math.round(start.posX + x - startX),
-          posY: Math.round(start.posY + y - startY),
+          posX: Math.round(start.posX + dx),
+          posY: Math.round(start.posY + dy),
         })
       } else {
-        patchElement(element.id, {
-          width: Math.max(20, Math.round(start.width + x - startX)),
-          height: Math.max(20, Math.round(start.height + y - startY)),
-        })
+        const next = { ...start }
+        if (mode.includes('e')) next.width = Math.max(20, Math.round(start.width + dx))
+        if (mode.includes('s')) next.height = Math.max(20, Math.round(start.height + dy))
+        if (mode.includes('w')) {
+          const newW = Math.max(20, Math.round(start.width - dx))
+          next.posX = Math.round(start.posX + (start.width - newW))
+          next.width = newW
+        }
+        if (mode.includes('n')) {
+          const newH = Math.max(20, Math.round(start.height - dy))
+          next.posY = Math.round(start.posY + (start.height - newH))
+          next.height = newH
+        }
+        patchElement(element.id, next)
       }
     }
     const onUp = () => {
@@ -1554,185 +1772,377 @@ function ThumbnailVisualEditor({
     window.addEventListener('pointerup', onUp)
   }
 
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!selected || selected.locked) return
+    if (NUDGE_KEYS[e.key]) {
+      e.preventDefault()
+      const [dx, dy] = NUDGE_KEYS[e.key]
+      const step = e.shiftKey ? 10 : 1
+      patchSelected({
+        posX: selected.posX + dx * step,
+        posY: selected.posY + dy * step,
+      })
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault()
+      removeSelected()
+    } else if (e.key === 'd' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      duplicateSelected()
+    } else if (e.key === 'Escape') {
+      setSelectedId(null)
+    }
+  }
+
+  const orderedElements = Object.values(template.elements)
+    .filter((el) => el.visible !== false)
+    .sort((a, b) => (a.zIndex ?? 5) - (b.zIndex ?? 5))
+
   return (
     <div className={className}>
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <div className="text-sm font-medium text-slate-900 dark:text-slate-50">
-            Visual editor
-          </div>
-          <div className="text-xs text-slate-500 dark:text-slate-400">
-            Click an item, drag to move, use the corner handle to resize.
-          </div>
-        </div>
-        <button type="button" className="btn-ghost btn-sm" onClick={clearSelectedOverride}>
-          Reset selected
+      {/* Toolbar */}
+      <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 dark:border-white/10 dark:bg-white/[0.03]">
+        <span className="text-xs font-medium text-slate-600 dark:text-slate-300">Add:</span>
+        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createHeadingElement(id), 'heading')} title="Add big headline">
+          <TypeIcon size={12} /> Heading
         </button>
-      </div>
-      <div
-        data-thumbnail-frame="true"
-        className="relative aspect-video w-full overflow-hidden rounded-md border border-slate-300 bg-slate-950 dark:border-white/10"
-        onPointerDown={() => setSelectedId('rightImage')}
-      >
-        {Object.values(template.elements)
-          .filter((el) => el.visible !== false)
-          .sort((a, b) => (a.zIndex ?? 5) - (b.zIndex ?? 5))
-          .map((el) => (
-            <ThumbnailEditableElement
-              key={el.id}
-              element={el}
-              selected={selectedId === el.id}
-              canvasWidth={template.canvasWidth}
-              canvasHeight={template.canvasHeight}
-              onPointerDown={(event, mode) => startDrag(event, el, mode)}
-              onSelect={() => setSelectedId(el.id)}
-            />
-          ))}
+        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createTextElement(id), 'text')} title="Add text">
+          <TypeIcon size={12} /> Text
+        </button>
+        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createSubtitleElement(id), 'subtitle')} title="Add subtitle">
+          <TypeIcon size={12} /> Subtitle
+        </button>
+        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createShapeElement(id, 'rectangle'), 'shape')} title="Add rectangle">
+          <Square size={12} /> Rect
+        </button>
+        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createShapeElement(id, 'circle'), 'circle')} title="Add circle">
+          <Circle size={12} /> Circle
+        </button>
+        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createBadgeElement(id), 'badge')} title="Add badge">
+          <Sparkles size={12} /> Badge
+        </button>
+        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createImageElement(id), 'image')} title="Add image slot">
+          <ImageIcon size={12} /> Image
+        </button>
+        <span className="ml-auto text-[11px] text-slate-500 dark:text-slate-400">
+          Click to select • drag to move • Shift+arrows = 10px • Del to remove
+        </span>
       </div>
 
+      {/* Canvas preview + drag overlay */}
+      <div
+        ref={frameRef}
+        data-thumbnail-frame="true"
+        tabIndex={0}
+        onKeyDown={onKeyDown}
+        className="relative w-full overflow-hidden rounded-md border border-slate-300 bg-slate-200 outline-none focus:ring-2 focus:ring-brand-500 dark:border-white/10 dark:bg-slate-900"
+        style={{ aspectRatio: `${template.canvasWidth} / ${template.canvasHeight}` }}
+        onPointerDown={(e) => {
+          // Clicks on the empty frame deselect rather than picking a random element.
+          if (e.target === e.currentTarget) setSelectedId(null)
+        }}
+      >
+        {previewSrc && (
+          <img
+            src={previewSrc}
+            alt="Thumbnail preview"
+            draggable={false}
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+          />
+        )}
+        {!previewSrc && previewLoading && (
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-500 dark:text-slate-400">
+            Rendering preview…
+          </div>
+        )}
+        {orderedElements.map((el) => (
+          <ThumbnailEditableElement
+            key={el.id}
+            element={el}
+            selected={selectedId === el.id}
+            canvasWidth={template.canvasWidth}
+            canvasHeight={template.canvasHeight}
+            onPointerDown={(event, mode) => startDrag(event, el, mode)}
+            onSelect={() => setSelectedId(el.id)}
+          />
+        ))}
+      </div>
+
+      {/* Element actions */}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Field label="Selected element">
+          <select
+            className="input"
+            value={selectedId ?? ''}
+            onChange={(e) => setSelectedId(e.target.value || null)}
+          >
+            <option value="">— none —</option>
+            {Object.values(template.elements).map((el) => (
+              <option key={el.id} value={el.id}>
+                {elementDisplayName(el)}
+                {el.visible === false ? ' (hidden)' : ''}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {selected && (
+          <div className="flex flex-wrap items-end gap-2">
+            <button type="button" className="btn-secondary btn-sm" onClick={duplicateSelected}>
+              <CopyIcon size={12} /> Duplicate
+            </button>
+            <button type="button" className="btn-secondary btn-sm" onClick={bringToFront}>
+              <Layers size={12} /> Bring front
+            </button>
+            <button type="button" className="btn-secondary btn-sm" onClick={sendToBack}>
+              <Layers size={12} /> Send back
+            </button>
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={() => patchSelected({ visible: !(selected.visible !== false) })}
+            >
+              {selected.visible !== false ? <EyeOff size={12} /> : <Eye size={12} />}
+              {selected.visible !== false ? 'Hide' : 'Show'}
+            </button>
+            <button type="button" className="btn-ghost btn-sm" onClick={clearSelectedOverride} title="Reset overrides for this element">
+              Reset
+            </button>
+            <button type="button" className="btn-ghost btn-sm text-rose-600 dark:text-rose-300" onClick={removeSelected}>
+              <Trash2 size={12} /> Remove
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Hidden / removed elements list */}
+      {hidden.length > 0 && (
+        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs dark:border-white/10 dark:bg-white/[0.03]">
+          <div className="mb-1 font-medium text-slate-700 dark:text-slate-200">Hidden elements:</div>
+          <div className="flex flex-wrap gap-2">
+            {hidden.map((id) => (
+              <button
+                key={id}
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => restoreElement(id)}
+              >
+                <Eye size={11} /> {id}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Inspector */}
       {selected && (
         <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <div className="text-sm font-medium text-slate-900 dark:text-slate-50">
-                {selected.id}
-              </div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                Drag in preview to move. Use the corner handle to resize.
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="btn-secondary btn-sm"
-                onClick={() => patchSelected({ zIndex: (selected.zIndex ?? 5) + 1 })}
-              >
-                Bring front
-              </button>
-              <button
-                type="button"
-                className="btn-secondary btn-sm"
-                onClick={() => patchSelected({ zIndex: (selected.zIndex ?? 5) - 1 })}
-              >
-                Send back
-              </button>
-            </div>
+          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-600 dark:text-slate-300">
+            {elementDisplayName(selected)} • inspector
           </div>
-          <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="Selected">
-            <select
-              className="input"
-              value={selected.id}
-              onChange={(e) => setSelectedId(e.target.value)}
-            >
-              {Object.values(template.elements).map((el) => (
-                <option key={el.id} value={el.id}>
-                  {el.id}
-                </option>
-              ))}
-            </select>
-          </Field>
-          {selected.type !== 'panel' && selected.type !== 'shape' && selected.type !== 'image' && (
-            <>
-              <Field label="Text" className="sm:col-span-3">
-                <textarea
-                  className="textarea h-20"
-                  value={selected.text}
-                  onChange={(e) => patchSelected({ text: e.target.value })}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <NumField step="thumbnail" name="sel_x" label="X" value={selected.posX} onChange={(v) => patchSelected({ posX: v })} />
+            <NumField step="thumbnail" name="sel_y" label="Y" value={selected.posY} onChange={(v) => patchSelected({ posY: v })} />
+            <NumField step="thumbnail" name="sel_z" label="Z-index" value={selected.zIndex ?? 5} onChange={(v) => patchSelected({ zIndex: v })} />
+            <NumField step="thumbnail" name="sel_w" label="Width" value={selected.width ?? 0} onChange={(v) => patchSelected({ width: Math.max(20, v) })} />
+            <NumField step="thumbnail" name="sel_h" label="Height" value={selected.height ?? 0} onChange={(v) => patchSelected({ height: Math.max(20, v) })} />
+            <NumField step="thumbnail" name="sel_rot" label="Rotation°" value={selected.rotation ?? 0} onChange={(v) => patchSelected({ rotation: v })} />
+            {selected.type !== 'panel' && selected.type !== 'shape' && selected.type !== 'image' && (
+              <>
+                <Field label="Text" className="sm:col-span-3">
+                  <textarea
+                    className="textarea h-20"
+                    value={selected.text}
+                    onChange={(e) => patchSelected({ text: e.target.value })}
+                  />
+                </Field>
+                <NumField
+                  step="thumbnail"
+                  name="selected_font_size"
+                  label="Font size"
+                  value={selected.fontSize}
+                  onChange={(v) => patchSelected({ fontSize: v })}
                 />
-              </Field>
-              <NumField
-                step="thumbnail"
-                name="selected_font_size"
-                label="Font size"
-                value={selected.fontSize}
-                onChange={(v) => patchSelected({ fontSize: v })}
-              />
-              <Field label="Text color">
-                <input
-                  type="color"
-                  className="h-10 w-full rounded-md border border-slate-200 bg-white"
-                  value={asHexColor(selected.color, '#000000')}
-                  onChange={(e) => patchSelected({ color: e.target.value })}
+                <Field label="Weight">
+                  <select
+                    className="input"
+                    value={selected.fontWeight}
+                    onChange={(e) => patchSelected({ fontWeight: e.target.value })}
+                  >
+                    <option value="400">Regular</option>
+                    <option value="500">Medium</option>
+                    <option value="600">Semibold</option>
+                    <option value="700">Bold</option>
+                    <option value="800">Extra-bold</option>
+                    <option value="900">Black</option>
+                  </select>
+                </Field>
+                <Field label="Align">
+                  <select
+                    className="input"
+                    value={selected.textAlign ?? 'center'}
+                    onChange={(e) =>
+                      patchSelected({ textAlign: e.target.value as ThumbnailElement['textAlign'] })
+                    }
+                  >
+                    <option value="left">Left</option>
+                    <option value="center">Center</option>
+                    <option value="right">Right</option>
+                  </select>
+                </Field>
+                <Field label="Text color">
+                  <input
+                    type="color"
+                    className="h-10 w-full rounded-md border border-slate-200 bg-white"
+                    value={asHexColor(selected.color, '#000000')}
+                    onChange={(e) => patchSelected({ color: e.target.value })}
+                  />
+                </Field>
+                <NumField
+                  step="thumbnail"
+                  name="sel_letter"
+                  label="Letter spacing"
+                  value={selected.letterSpacing ?? 0}
+                  onChange={(v) => patchSelected({ letterSpacing: v })}
                 />
-              </Field>
-              <Field label="Align">
-                <select
-                  className="input"
-                  value={selected.textAlign ?? 'center'}
-                  onChange={(e) =>
-                    patchSelected({ textAlign: e.target.value as ThumbnailElement['textAlign'] })
-                  }
-                >
-                  <option value="left">Left</option>
-                  <option value="center">Center</option>
-                  <option value="right">Right</option>
-                </select>
-              </Field>
-            </>
-          )}
-          {selected.type !== 'image' && selected.backgroundColor !== 'transparent' && (
-            <Field label="Background">
-              <input
-                type="color"
-                className="h-10 w-full rounded-md border border-slate-200 bg-white"
-                value={asHexColor(selected.backgroundColor, '#ffffff')}
-                onChange={(e) => patchSelected({ backgroundColor: e.target.value })}
-              />
-            </Field>
-          )}
-          {selected.type === 'image' && (
-            <>
-              <Field label="Image" className="sm:col-span-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="btn-secondary btn-sm cursor-pointer">
-                    <Upload size={12} /> Add or replace image
+                <NumField
+                  step="thumbnail"
+                  name="sel_shadow_blur"
+                  label="Text shadow"
+                  value={selected.shadowBlur ?? 0}
+                  onChange={(v) => patchSelected({ shadowBlur: Math.max(0, v) })}
+                />
+                <NumField
+                  step="thumbnail"
+                  name="sel_stroke"
+                  label="Outline"
+                  value={selected.strokeWidth ?? 0}
+                  onChange={(v) => patchSelected({ strokeWidth: Math.max(0, v) })}
+                />
+                {(selected.strokeWidth ?? 0) > 0 && (
+                  <Field label="Outline color">
                     <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp,image/bmp"
-                      className="hidden"
-                      onChange={(e) => onAutoThumbnailSideImage(e.target.files?.[0] ?? null)}
+                      type="color"
+                      className="h-10 w-full rounded-md border border-slate-200 bg-white"
+                      value={asHexColor(selected.strokeColor ?? '#000000', '#000000')}
+                      onChange={(e) => patchSelected({ strokeColor: e.target.value })}
                     />
-                  </label>
-                  {settings.auto_thumbnail_side_image_url && (
-                    <button
-                      type="button"
-                      className="btn-ghost btn-sm"
-                      onClick={() => onAutoThumbnailSideImage(null)}
-                    >
-                      Remove image
-                    </button>
-                  )}
+                  </Field>
+                )}
+              </>
+            )}
+            {selected.type !== 'image' && (
+              <Field label="Background">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    className="h-10 w-16 rounded-md border border-slate-200 bg-white"
+                    value={asHexColor(selected.backgroundColor, '#ffffff')}
+                    onChange={(e) => patchSelected({ backgroundColor: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm"
+                    onClick={() => patchSelected({ backgroundColor: 'transparent' })}
+                  >
+                    Clear
+                  </button>
                 </div>
               </Field>
+            )}
+            {(selected.type === 'panel' || selected.type === 'shape' || selected.type === 'badge') && (
               <NumField
                 step="thumbnail"
-                name="auto_thumbnail_image_zoom"
-                label="Zoom (%)"
-                value={settings.auto_thumbnail_image_zoom ?? 100}
-                onChange={(v) => onChange('auto_thumbnail_image_zoom', v)}
+                name="sel_radius"
+                label="Corner radius"
+                value={selected.borderRadius}
+                onChange={(v) => patchSelected({ borderRadius: Math.max(0, v) })}
               />
-              <NumField
-                step="thumbnail"
-                name="auto_thumbnail_image_offset_x"
-                label="Crop X (%)"
-                value={settings.auto_thumbnail_image_offset_x ?? 50}
-                onChange={(v) => onChange('auto_thumbnail_image_offset_x', v)}
-              />
-              <NumField
-                step="thumbnail"
-                name="auto_thumbnail_image_offset_y"
-                label="Crop Y (%)"
-                value={settings.auto_thumbnail_image_offset_y ?? 50}
-                onChange={(v) => onChange('auto_thumbnail_image_offset_y', v)}
-              />
-            </>
-          )}
+            )}
+            {selected.type === 'shape' && (
+              <Field label="Shape">
+                <select
+                  className="input"
+                  value={selected.shapeType ?? 'rectangle'}
+                  onChange={(e) => patchSelected({ shapeType: e.target.value as ThumbnailShapeType })}
+                >
+                  <option value="rectangle">Rectangle</option>
+                  <option value="pill">Pill</option>
+                  <option value="circle">Circle</option>
+                  <option value="line">Line</option>
+                </select>
+              </Field>
+            )}
+            {selected.type === 'image' && (
+              <>
+                <Field label="Image" className="sm:col-span-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="btn-secondary btn-sm cursor-pointer">
+                      <Upload size={12} /> Add or replace image
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/bmp"
+                        className="hidden"
+                        onChange={(e) => onAutoThumbnailSideImage(e.target.files?.[0] ?? null)}
+                      />
+                    </label>
+                    {settings.auto_thumbnail_side_image_url && (
+                      <button
+                        type="button"
+                        className="btn-ghost btn-sm"
+                        onClick={() => onAutoThumbnailSideImage(null)}
+                      >
+                        Remove image
+                      </button>
+                    )}
+                  </div>
+                </Field>
+                <NumField
+                  step="thumbnail"
+                  name="auto_thumbnail_image_zoom"
+                  label="Zoom (%)"
+                  value={settings.auto_thumbnail_image_zoom ?? 100}
+                  onChange={(v) => onChange('auto_thumbnail_image_zoom', v)}
+                />
+                <NumField
+                  step="thumbnail"
+                  name="auto_thumbnail_image_offset_x"
+                  label="Crop X (%)"
+                  value={settings.auto_thumbnail_image_offset_x ?? 50}
+                  onChange={(v) => onChange('auto_thumbnail_image_offset_x', v)}
+                />
+                <NumField
+                  step="thumbnail"
+                  name="auto_thumbnail_image_offset_y"
+                  label="Crop Y (%)"
+                  value={settings.auto_thumbnail_image_offset_y ?? 50}
+                  onChange={(v) => onChange('auto_thumbnail_image_offset_y', v)}
+                />
+                <NumField
+                  step="thumbnail"
+                  name="sel_overlay"
+                  label="Dark overlay"
+                  value={selected.imageOverlay ?? 0}
+                  onChange={(v) => patchSelected({ imageOverlay: Math.max(0, Math.min(100, v)) })}
+                />
+              </>
+            )}
+            <NumField
+              step="thumbnail"
+              name="sel_opacity"
+              label="Opacity (%)"
+              value={selected.opacity ?? 100}
+              onChange={(v) => patchSelected({ opacity: Math.max(0, Math.min(100, v)) })}
+            />
           </div>
         </div>
       )}
     </div>
   )
+}
+
+function elementDisplayName(el: ThumbnailElement): string {
+  const text = (el.text || '').replace(/\s+/g, ' ').trim().slice(0, 28)
+  const label = text ? `${el.id} — “${text}”` : el.id
+  return label
 }
 
 function ThumbnailEditableElement({
@@ -1747,7 +2157,7 @@ function ThumbnailEditableElement({
   selected: boolean
   canvasWidth: number
   canvasHeight: number
-  onPointerDown: (event: React.PointerEvent<HTMLElement>, mode: 'move' | 'resize') => void
+  onPointerDown: (event: React.PointerEvent<HTMLElement>, mode: 'move' | ResizeHandle) => void
   onSelect: () => void
 }) {
   const style: React.CSSProperties = {
@@ -1756,22 +2166,16 @@ function ThumbnailEditableElement({
     top: `${(element.posY / canvasHeight) * 100}%`,
     width: `${((element.width ?? 120) / canvasWidth) * 100}%`,
     height: `${((element.height ?? 80) / canvasHeight) * 100}%`,
-    zIndex: element.zIndex ?? 5,
-    opacity: (element.opacity ?? 100) / 100,
-    borderRadius: element.borderRadius ? `${element.borderRadius / 2}px` : undefined,
-    background:
-      element.type === 'image'
-        ? element.imageUrl
-          ? undefined
-          : '#ffffff'
-        : element.backgroundColor === 'transparent'
-          ? undefined
-          : element.backgroundColor,
-    color: element.color,
-    border: selected ? '2px solid rgb(var(--brand-500))' : '1px dashed rgba(148, 163, 184, 0.45)',
-    overflow: 'hidden',
-    cursor: 'move',
+    zIndex: (element.zIndex ?? 5) + 100,
+    cursor: element.locked ? 'default' : 'move',
     userSelect: 'none',
+    border: selected
+      ? '2px solid rgb(var(--brand-500))'
+      : '1px dashed rgba(148, 163, 184, 0.0)',
+    background: 'transparent',
+    boxShadow: selected ? '0 0 0 2px rgba(var(--brand-500), 0.18)' : undefined,
+    transform: element.rotation ? `rotate(${element.rotation}deg)` : undefined,
+    transformOrigin: 'center',
   }
 
   return (
@@ -1782,43 +2186,47 @@ function ThumbnailEditableElement({
         e.stopPropagation()
         onSelect()
       }}
+      onMouseEnter={(e) => {
+        if (!selected) (e.currentTarget as HTMLElement).style.border = '1px dashed rgba(148, 163, 184, 0.65)'
+      }}
+      onMouseLeave={(e) => {
+        if (!selected) (e.currentTarget as HTMLElement).style.border = '1px dashed rgba(148, 163, 184, 0)'
+      }}
     >
-      {element.type === 'image' && element.imageUrl ? (
-        <img
-          src={element.imageUrl}
-          alt=""
-          draggable={false}
-          className="h-full w-full object-cover"
-          style={{
-            objectPosition: `${element.imageOffsetX ?? 50}% ${element.imageOffsetY ?? 50}%`,
-            transform: `scale(${(element.imageZoom ?? 100) / 100})`,
-          }}
-        />
-      ) : element.type === 'image' ? (
-        <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-500">
-          Click to add image
-        </div>
-      ) : element.type === 'badge' ? (
-        <div className="flex h-full w-full items-center justify-center rounded-full bg-yellow-300 text-center text-xs font-black text-red-600">
-          {element.text}
-        </div>
-      ) : (
-        <div
-          className="flex h-full w-full items-center justify-center whitespace-pre-wrap text-center leading-tight"
-          style={{
-            fontSize: `${Math.max(8, (element.fontSize / canvasWidth) * 100)}vw`,
-            fontWeight: element.fontWeight,
-            padding: `${element.paddingY / 4}px ${element.paddingX / 4}px`,
-          }}
-        >
-          {element.text}
-        </div>
-      )}
-      {selected && (
-        <span
-          className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize rounded-tl bg-brand-500"
-          onPointerDown={(e) => onPointerDown(e, 'resize')}
-        />
+      {selected && !element.locked && (
+        <>
+          {(['nw', 'ne', 'sw', 'se'] as ResizeHandle[]).map((h) => (
+            <span
+              key={h}
+              className="absolute h-3 w-3 rounded-full bg-white shadow ring-2 ring-brand-500"
+              style={{
+                top: h.includes('n') ? -6 : undefined,
+                bottom: h.includes('s') ? -6 : undefined,
+                left: h.includes('w') ? -6 : undefined,
+                right: h.includes('e') ? -6 : undefined,
+                cursor:
+                  h === 'nw' || h === 'se' ? 'nwse-resize' : 'nesw-resize',
+              }}
+              onPointerDown={(e) => onPointerDown(e, h)}
+            />
+          ))}
+          {(['n', 's', 'e', 'w'] as ResizeHandle[]).map((h) => (
+            <span
+              key={h}
+              className="absolute h-2.5 w-2.5 rounded-sm bg-white shadow ring-2 ring-brand-500"
+              style={{
+                top: h === 'n' ? -5 : h === 's' ? undefined : '50%',
+                bottom: h === 's' ? -5 : undefined,
+                left: h === 'w' ? -5 : h === 'e' ? undefined : '50%',
+                right: h === 'e' ? -5 : undefined,
+                transform:
+                  h === 'n' || h === 's' ? 'translateX(-50%)' : 'translateY(-50%)',
+                cursor: h === 'n' || h === 's' ? 'ns-resize' : 'ew-resize',
+              }}
+              onPointerDown={(e) => onPointerDown(e, h)}
+            />
+          ))}
+        </>
       )}
     </div>
   )
