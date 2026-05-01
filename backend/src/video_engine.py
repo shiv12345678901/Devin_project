@@ -21,8 +21,11 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import re
+import shutil
+import subprocess
 from pathlib import Path
-from typing import Any, Callable, Iterable, List, Optional
+from typing import Any, Callable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +65,7 @@ _DEFAULT_RESOLUTION = (3840, 2160)
 _DEFAULT_FPS = 30
 _DEFAULT_PRESET = "ultrafast"
 _DEFAULT_CODEC = "libx264"
+_DEFAULT_CRF = 23
 _BG_MUSIC_VOLUME = 0.10
 _WATERMARK_OPACITY = 0.50
 
@@ -96,9 +100,11 @@ class VideoStudio:
             ``progress_callback``   – ``fn(payload: dict)``
             ``cancel_event``        – threading.Event for cooperative cancel
 
+        Optional ffmpeg / MoviePy keys:
+            ``intro_video_path``    – intro MP4 before the screenshot slides
+            ``outro_video_path``    – outro MP4 after the screenshot slides
+
         MoviePy-only optional keys:
-            ``intro_video_path``    – Layer 1 (intro.mp4)
-            ``outro_video_path``    – Layer 5 (outro.mp4)
             ``voiceover_files``     – ``list[Optional[str]]`` (one per slide)
             ``narration_audio``     – single full-length narration track
             ``background_music``    – music file mixed in at 10 % volume
@@ -109,6 +115,8 @@ class VideoStudio:
         """
         if self.use_powerpoint:
             return self._build_with_powerpoint(config_data)
+        if self._can_build_simple_with_ffmpeg(config_data):
+            return self._build_simple_with_ffmpeg(config_data)
         return self._build_with_moviepy(config_data)
 
     # ──────────────────────────────────────────────────────────────────
@@ -147,6 +155,348 @@ class VideoStudio:
     # ──────────────────────────────────────────────────────────────────
     # Linux / macOS — MoviePy
     # ──────────────────────────────────────────────────────────────────
+    def _sort_image_files_like_powerpoint(self, image_files: List[str]) -> List[str]:
+        """Match PowerPointExporter.create_from_template screenshot ordering."""
+
+        def sort_key(filepath: str) -> int:
+            basename = os.path.basename(filepath)
+            match = re.search(r"\((\d+)\)", basename)
+            if match:
+                return int(match.group(1))
+            nums = re.findall(r"\d+", basename)
+            return int(nums[-1]) if nums else 0
+
+        return sorted(image_files, key=sort_key)
+
+    def _quality_to_crf(self, cfg: dict) -> int:
+        if cfg.get("encode_crf") is not None:
+            return int(cfg["encode_crf"])
+
+        raw_quality = cfg.get("quality")
+        try:
+            quality = int(raw_quality)
+        except (TypeError, ValueError):
+            return _DEFAULT_CRF
+
+        # Some callers pass PowerPoint's legacy 1-5 quality, while queued
+        # Linux runs pass the UI's 1-100 value. Convert both to a sane x264 CRF.
+        if quality <= 5:
+            quality = quality * 20
+        quality = max(1, min(100, quality))
+        return round(31 - (quality / 100) * 13)
+
+    def _can_build_simple_with_ffmpeg(self, cfg: dict) -> bool:
+        """Use ffmpeg directly for still-image timelines.
+
+        MoviePy is flexible, but 4K still slides force Python to generate
+        every frame. ffmpeg can hold each image for N seconds natively, which
+        is much faster for the common screenshot-only export path.
+        """
+        if not shutil.which("ffmpeg"):
+            return False
+
+        image_files = list(cfg.get("image_files") or [])
+        if not image_files or any(not Path(p).is_file() for p in image_files):
+            return False
+
+        unsupported_keys = ("narration_audio", "background_music", "logo_path")
+        if any(cfg.get(key) for key in unsupported_keys):
+            return False
+
+        for key in ("intro_video_path", "outro_video_path"):
+            path = cfg.get(key)
+            if path and not Path(path).is_file():
+                return False
+
+        voiceover_files = [p for p in list(cfg.get("voiceover_files") or []) if p]
+        if voiceover_files:
+            return False
+
+        return True
+
+    def _build_simple_with_ffmpeg(self, cfg: dict) -> dict:
+        image_files: List[str] = self._sort_image_files_like_powerpoint(
+            list(cfg.get("image_files") or [])
+        )
+        if not image_files:
+            raise VideoEngineError("ffmpeg engine requires at least one image_file")
+
+        output_video_path: str = cfg["output_video_path"]
+        Path(output_video_path).parent.mkdir(parents=True, exist_ok=True)
+
+        resolution = tuple(cfg.get("resolution") or _DEFAULT_RESOLUTION)
+        fps = int(cfg.get("fps") or _DEFAULT_FPS)
+        slide_duration = float(cfg.get("slide_duration", 5.0))
+        encode_preset = str(cfg.get("encode_preset") or _DEFAULT_PRESET)
+        encode_codec = str(cfg.get("encode_codec") or _DEFAULT_CODEC)
+        encode_crf = self._quality_to_crf(cfg)
+        thread_count = int(
+            cfg.get("threads")
+            or max(1, min((os.cpu_count() or 4), 16))
+        )
+        progress_callback: Optional[Callable[[dict], None]] = cfg.get("progress_callback")
+        cancel_event = cfg.get("cancel_event")
+
+        def _emit(progress: int, message: str) -> None:
+            if progress_callback:
+                try:
+                    progress_callback(
+                        {"stage": "ffmpeg", "progress": progress, "message": message}
+                    )
+                except Exception:
+                    logger.exception("progress_callback raised")
+
+        def _duration(value: Any, default: float) -> float:
+            try:
+                parsed = float(value)
+            except Exception:
+                return default
+            return parsed if parsed > 0 else default
+
+        timeline: List[tuple[str, float]] = []
+        intro_thumb = cfg.get("intro_thumbnail_path")
+        if intro_thumb and Path(intro_thumb).is_file():
+            timeline.append(
+                (str(intro_thumb), _duration(cfg.get("intro_thumbnail_duration"), 5.0))
+            )
+        timeline.extend((str(path), slide_duration) for path in image_files)
+        outro_thumb = cfg.get("outro_thumbnail_path")
+        if outro_thumb and Path(outro_thumb).is_file():
+            timeline.append(
+                (str(outro_thumb), _duration(cfg.get("outro_thumbnail_duration"), 5.0))
+            )
+
+        width, height = int(resolution[0]), int(resolution[1])
+        # Keep still-slide exports variable-frame-rate: one encoded frame can
+        # be held for the slide duration instead of duplicating it to match fps.
+        vf = f"scale={width}:{height},setsar=1,format=yuv420p"
+
+        def _concat_path(path: str) -> str:
+            escaped = Path(path).resolve().as_posix().replace("'", "'\\''")
+            return f"file '{escaped}'"
+
+        def _run_ffmpeg(cmd: List[str]) -> None:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                while proc.poll() is None:
+                    if cancel_event is not None and cancel_event.is_set():
+                        proc.terminate()
+                        raise VideoEngineError("Cancelled by user")
+                    try:
+                        proc.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        pass
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+
+            stdout, stderr = proc.communicate()
+            if proc.returncode:
+                detail = (stderr or stdout or "ffmpeg failed").strip()
+                raise VideoEngineError(f"ffmpeg export failed: {detail}")
+
+        def _has_audio(path: str) -> bool:
+            if not shutil.which("ffprobe"):
+                return True
+            probe = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "a:0",
+                    "-show_entries",
+                    "stream=index",
+                    "-of",
+                    "csv=p=0",
+                    path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            return bool(probe.stdout.strip())
+
+        def _video_segment(input_path: str, output_path: Path) -> None:
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                input_path,
+            ]
+            audio_index = "0:a:0"
+            if not _has_audio(input_path):
+                cmd.extend(
+                    [
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "anullsrc=channel_layout=stereo:sample_rate=48000",
+                    ]
+                )
+                audio_index = "1:a:0"
+            cmd.extend(
+                [
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    audio_index,
+                    "-vf",
+                    f"scale={width}:{height},setsar=1,fps={fps},format=yuv420p",
+                    "-c:v",
+                    encode_codec,
+                    "-preset",
+                    encode_preset,
+                    "-crf",
+                    str(encode_crf),
+                    "-threads",
+                    str(thread_count),
+                    "-c:a",
+                    "aac",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-shortest",
+                    str(output_path),
+                ]
+            )
+            _run_ffmpeg(cmd)
+
+        _emit(
+            90,
+            f"Encoding MP4 with ffmpeg ({encode_codec} {encode_preset}, crf={encode_crf}, threads={thread_count})...",
+        )
+        output_path = Path(output_video_path)
+        slide_concat_path = output_path.with_suffix(".slides.ffconcat")
+        segment_concat_path = output_path.with_suffix(".segments.ffconcat")
+        slide_segment_path = output_path.with_suffix(".slides.mp4")
+        segment_paths: List[Path] = []
+        try:
+            intro_video = cfg.get("intro_video_path")
+            if intro_video:
+                intro_segment_path = output_path.with_suffix(".intro.mp4")
+                _video_segment(str(intro_video), intro_segment_path)
+                segment_paths.append(intro_segment_path)
+
+            lines = ["ffconcat version 1.0"]
+            for path, duration in timeline:
+                lines.append(_concat_path(path))
+                lines.append(f"duration {duration:.6f}")
+            # The concat demuxer needs the final file repeated to honor its
+            # duration instead of treating it as a single-frame tail.
+            lines.append(_concat_path(timeline[-1][0]))
+            slide_concat_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            total_slide_duration = sum(duration for _path, duration in timeline)
+            _run_ffmpeg(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(slide_concat_path),
+                    "-f",
+                    "lavfi",
+                    "-t",
+                    f"{total_slide_duration:.6f}",
+                    "-i",
+                    "anullsrc=channel_layout=stereo:sample_rate=48000",
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "1:a:0",
+                    "-vf",
+                    vf,
+                    "-fps_mode",
+                    "vfr",
+                    "-c:v",
+                    encode_codec,
+                    "-preset",
+                    encode_preset,
+                    "-crf",
+                    str(encode_crf),
+                    "-threads",
+                    str(thread_count),
+                    "-c:a",
+                    "aac",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-shortest",
+                    str(slide_segment_path),
+                ]
+            )
+            segment_paths.append(slide_segment_path)
+
+            outro_video = cfg.get("outro_video_path")
+            if outro_video:
+                outro_segment_path = output_path.with_suffix(".outro.mp4")
+                _video_segment(str(outro_video), outro_segment_path)
+                segment_paths.append(outro_segment_path)
+
+            segment_lines = ["ffconcat version 1.0"]
+            segment_lines.extend(_concat_path(str(path)) for path in segment_paths)
+            segment_concat_path.write_text(
+                "\n".join(segment_lines) + "\n",
+                encoding="utf-8",
+            )
+
+            _run_ffmpeg(
+                [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(segment_concat_path),
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                output_video_path,
+                ]
+            )
+        finally:
+            for path in [
+                slide_concat_path,
+                segment_concat_path,
+                *segment_paths,
+            ]:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+
+        _emit(99, "MP4 written to disk.")
+        return {
+            "presentation_path": None,
+            "video_path": output_video_path,
+            "warning": None,
+            "engine": "ffmpeg",
+        }
+
     def _build_with_moviepy(self, cfg: dict) -> dict:
         try:
             from moviepy import (  # type: ignore
@@ -164,7 +514,9 @@ class VideoStudio:
                 "Install with: pip install 'moviepy>=2.0' && apt-get install ffmpeg"
             ) from exc
 
-        image_files: List[str] = list(cfg.get("image_files") or [])
+        image_files: List[str] = self._sort_image_files_like_powerpoint(
+            list(cfg.get("image_files") or [])
+        )
         if not image_files:
             raise VideoEngineError("MoviePy engine requires at least one image_file")
 
@@ -174,6 +526,13 @@ class VideoStudio:
         resolution = tuple(cfg.get("resolution") or _DEFAULT_RESOLUTION)
         fps = int(cfg.get("fps") or _DEFAULT_FPS)
         slide_duration = float(cfg.get("slide_duration", 5.0))
+        encode_preset = str(cfg.get("encode_preset") or _DEFAULT_PRESET)
+        encode_codec = str(cfg.get("encode_codec") or _DEFAULT_CODEC)
+        encode_crf = self._quality_to_crf(cfg)
+        thread_count = int(
+            cfg.get("threads")
+            or max(1, min((os.cpu_count() or 4), 16))
+        )
         progress_callback: Optional[Callable[[dict], None]] = cfg.get("progress_callback")
         cancel_event = cfg.get("cancel_event")
 
@@ -311,16 +670,26 @@ class VideoStudio:
                 _emit("moviepy", 86, "Mixing audio bed...")
                 timeline = timeline.with_audio(CompositeAudioClip(audio_layers))
 
-            # Export — H.264 ultrafast.
-            _emit("moviepy", 90, "Encoding MP4 (libx264 ultrafast)...")
+            # Export — default H.264 ultrafast, with configurable knobs.
+            _emit(
+                "moviepy",
+                90,
+                f"Encoding MP4 ({encode_codec} {encode_preset}, crf={encode_crf}, threads={thread_count})...",
+            )
             ffmpeg_logger = _ProgressBarLogger(progress_callback)
+            ffmpeg_params = [
+                "-movflags", "+faststart",
+                "-pix_fmt", "yuv420p",
+                "-crf", str(encode_crf),
+            ]
             timeline.write_videofile(
                 output_video_path,
-                codec=_DEFAULT_CODEC,
-                preset=_DEFAULT_PRESET,
+                codec=encode_codec,
+                preset=encode_preset,
                 fps=fps,
                 audio_codec="aac" if timeline.audio is not None else None,
-                threads=cfg.get("threads") or 4,
+                threads=thread_count,
+                ffmpeg_params=ffmpeg_params,
                 logger=ffmpeg_logger,
             )
             _emit("moviepy", 99, "MP4 written to disk.")
