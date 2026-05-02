@@ -2,8 +2,8 @@
     "min_samples": 10,
     "models": {
         "default": {
-            "seconds_per_char": 0.03894296297732871,
-            "samples": 17,
+            "seconds_per_char": 0.03834522227808101,
+            "samples": 18,
             "runs": [
                 {
                     "input_chars": 11155,
@@ -106,6 +106,12 @@
                     "seconds": 305.841,
                     "resolution": "4k",
                     "concurrent": true
+                },
+                {
+                    "input_chars": 16532,
+                    "seconds": 510.638,
+                    "resolution": "4k",
+                    "concurrent": false
                 }
             ]
         },
