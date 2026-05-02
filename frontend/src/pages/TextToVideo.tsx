@@ -1850,18 +1850,30 @@ function ThumbnailVisualEditor({
     const sy = template.canvasHeight / rect.height
     const startX = (e.clientX - rect.left) * sx
     const startY = (e.clientY - rect.top) * sy
+    // Alt-drag on an image element pans the focal point inside the frame
+    // instead of moving the element. Same gesture most photo apps use.
+    const isPanGesture = mode === 'move' && element.type === 'image' && e.altKey
     const start = {
       posX: element.posX,
       posY: element.posY,
       width: element.width ?? 120,
       height: element.height ?? 80,
+      imageOffsetX: element.imageOffsetX ?? 50,
+      imageOffsetY: element.imageOffsetY ?? 50,
     }
     const onMove = (event: PointerEvent) => {
       const x = (event.clientX - rect.left) * sx
       const y = (event.clientY - rect.top) * sy
       const dx = x - startX
       const dy = y - startY
-      if (mode === 'move') {
+      if (isPanGesture) {
+        const ow = element.width || 1
+        const oh = element.height || 1
+        patchElement(element.id, {
+          imageOffsetX: Math.max(0, Math.min(100, Math.round(start.imageOffsetX - (dx / ow) * 100))),
+          imageOffsetY: Math.max(0, Math.min(100, Math.round(start.imageOffsetY - (dy / oh) * 100))),
+        })
+      } else if (mode === 'move') {
         patchElement(element.id, {
           posX: Math.round(start.posX + dx),
           posY: Math.round(start.posY + dy),
@@ -2023,7 +2035,7 @@ function ThumbnailVisualEditor({
 
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-2 dark:border-white/10 dark:bg-slate-950/40">
             <span className="px-1 text-xs text-slate-500 dark:text-slate-400">
-              Select a box to edit. Drag to move, use corner handles to resize, arrow keys nudge position.
+              Select a box to edit. Drag to move, corner handles to resize, arrow keys nudge. Alt-drag an image to pan its focal point.
             </span>
             <span className="hidden">
               Drag to move · Shift+arrows = 10px · ⌘D duplicates · Del removes
@@ -2284,12 +2296,15 @@ function ContentTab({
   onReset: () => void
 }) {
   if (selected.type === 'image') {
+    const fitMode = selected.imageFitMode ?? 'cover'
+    const zoom = selected.imageZoom ?? 100
+    const hasImage = Boolean(selected.imageUrl || settings.auto_thumbnail_side_image_url)
     return (
       <div className="space-y-3">
         <Field label="Image">
           <div className="flex flex-wrap items-center gap-2">
             <label className="btn-secondary btn-sm cursor-pointer">
-              <Upload size={12} /> {settings.auto_thumbnail_side_image_url ? 'Replace' : 'Upload'} image
+              <Upload size={12} /> {hasImage ? 'Replace' : 'Upload'} image
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp,image/bmp"
@@ -2301,7 +2316,7 @@ function ContentTab({
                 }}
               />
             </label>
-            {settings.auto_thumbnail_side_image_url && (
+            {hasImage && (
               <button
                 type="button"
                 className="btn-ghost btn-sm"
@@ -2312,9 +2327,109 @@ function ContentTab({
             )}
           </div>
         </Field>
-        <button type="button" className="btn-ghost btn-sm" onClick={onReset}>
-          <RotateCcw size={12} /> Reset selected
-        </button>
+
+        <Field label="Fit mode">
+          <div className="grid grid-cols-3 gap-1">
+            {(['cover', 'contain', 'stretch'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={
+                  'rounded-md border px-2 py-1 text-xs ' +
+                  (fitMode === mode
+                    ? 'border-brand-500 bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-200'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:bg-slate-950/40 dark:text-slate-200')
+                }
+                onClick={() => patchSelected({ imageFitMode: mode })}
+                title={
+                  mode === 'cover'
+                    ? 'Fill the box, crop overflow'
+                    : mode === 'contain'
+                      ? 'Show the whole image, may letterbox'
+                      : 'Stretch to fill, ignore aspect ratio'
+                }
+              >
+                {mode === 'cover' ? 'Fill' : mode === 'contain' ? 'Fit' : 'Stretch'}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        {hasImage && (
+          <Field label="Drag to position image">
+            <ImagePanThumbnail element={selected} onChange={patchSelected} />
+          </Field>
+        )}
+
+        <Field label="Anchor">
+          <div className="grid grid-cols-3 gap-1">
+            {[
+              [0, 0, '↖'], [50, 0, '↑'], [100, 0, '↗'],
+              [0, 50, '←'], [50, 50, '•'], [100, 50, '→'],
+              [0, 100, '↙'], [50, 100, '↓'], [100, 100, '↘'],
+            ].map(([ox, oy, label]) => (
+              <button
+                key={`${ox}-${oy}`}
+                type="button"
+                className="rounded-md border border-slate-200 bg-white px-1 py-1 text-sm text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:bg-slate-950/40 dark:text-slate-200"
+                onClick={() =>
+                  patchSelected({
+                    imageOffsetX: ox as number,
+                    imageOffsetY: oy as number,
+                  })
+                }
+                title={`${ox}% / ${oy}%`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <Field label={`Zoom (${zoom}%)`}>
+          <input
+            type="range"
+            min={50}
+            max={300}
+            step={1}
+            className="w-full"
+            value={zoom}
+            onChange={(e) => patchSelected({ imageZoom: Number(e.target.value) })}
+          />
+        </Field>
+
+        <Field label={`Dark overlay (${selected.imageOverlay ?? 0}%)`}>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            className="w-full"
+            value={selected.imageOverlay ?? 0}
+            onChange={(e) => patchSelected({ imageOverlay: Number(e.target.value) })}
+          />
+        </Field>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn-ghost btn-sm"
+            onClick={() =>
+              patchSelected({
+                imageOffsetX: 50,
+                imageOffsetY: 50,
+                imageZoom: 100,
+                imageFitMode: 'cover',
+              })
+            }
+            title="Reset framing — center, 100% zoom, cover"
+          >
+            <RotateCcw size={12} /> Reset framing
+          </button>
+          <button type="button" className="btn-ghost btn-sm" onClick={onReset}>
+            <RotateCcw size={12} /> Reset overrides
+          </button>
+        </div>
       </div>
     )
   }
@@ -2363,6 +2478,104 @@ function ContentTab({
       <button type="button" className="btn-ghost btn-sm" onClick={onReset}>
         <RotateCcw size={12} /> Reset selected
       </button>
+    </div>
+  )
+}
+
+/** Mini-preview panel that lets the user drag the image's focal point.
+ *
+ * Behaviour mirrors what most photo apps call "pan inside frame" — we treat
+ * the rendered thumbnail as a draggable surface and translate pixel deltas
+ * into `imageOffsetX/Y` percentages (0=left/top, 100=right/bottom of the
+ * scaled image). The visual is a 1:1 reflection of the on-canvas frame so
+ * the user sees the exact framing they're choosing. */
+function ImagePanThumbnail({
+  element,
+  onChange,
+}: {
+  element: ThumbnailElement
+  onChange: (patch: Partial<ThumbnailElement>) => void
+}) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const fitMode = element.imageFitMode ?? 'cover'
+  const zoom = element.imageZoom ?? 100
+  const offsetX = element.imageOffsetX ?? 50
+  const offsetY = element.imageOffsetY ?? 50
+
+  // Match the canvas aspect ratio so the visible framing matches reality.
+  const aspect = element.width && element.height ? element.width / element.height : 16 / 9
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!element.imageUrl) return
+    event.preventDefault()
+    setDragging(true)
+    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+  }
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragging || !ref.current) return
+    const rect = ref.current.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
+    const px = ((event.clientX - rect.left) / rect.width) * 100
+    const py = ((event.clientY - rect.top) / rect.height) * 100
+    onChange({
+      imageOffsetX: Math.max(0, Math.min(100, Math.round(px))),
+      imageOffsetY: Math.max(0, Math.min(100, Math.round(py))),
+    })
+  }
+
+  const stop = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragging) return
+    setDragging(false)
+    try {
+      ;(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId)
+    } catch {
+      /* not captured */
+    }
+  }
+
+  const bgSize =
+    fitMode === 'stretch'
+      ? '100% 100%'
+      : fitMode === 'contain'
+        ? zoom === 100 ? 'contain' : `${zoom}% ${zoom}%`
+        : zoom === 100 ? 'cover' : `${zoom}% auto`
+
+  return (
+    <div
+      ref={ref}
+      role="presentation"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={stop}
+      onPointerCancel={stop}
+      className="relative w-full overflow-hidden rounded-md border border-slate-200 bg-slate-100 dark:border-white/10 dark:bg-slate-900"
+      style={{
+        aspectRatio: `${aspect}`,
+        backgroundImage: element.imageUrl ? `url("${element.imageUrl}")` : undefined,
+        backgroundSize: bgSize,
+        backgroundPosition: `${offsetX}% ${offsetY}%`,
+        backgroundRepeat: 'no-repeat',
+        backgroundColor: element.backgroundColor || '#111111',
+        cursor: dragging ? 'grabbing' : element.imageUrl ? 'grab' : 'default',
+        touchAction: 'none',
+      }}
+    >
+      {/* Crosshair marker showing the current focal point. */}
+      <div
+        className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow"
+        style={{
+          left: `${offsetX}%`,
+          top: `${offsetY}%`,
+          backgroundColor: 'rgba(15, 23, 42, 0.6)',
+        }}
+      />
+      {!element.imageUrl && (
+        <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-500">
+          Upload an image to drag its focal point
+        </div>
+      )}
     </div>
   )
 }
@@ -2780,7 +2993,16 @@ function ThumbnailEditableElement({
   if (element.type === 'image') {
     liveStyle.backgroundColor = element.backgroundColor || '#111111'
     liveStyle.backgroundImage = element.imageUrl ? `url("${element.imageUrl}")` : undefined
-    liveStyle.backgroundSize = element.imageZoom ? `${element.imageZoom}% auto` : 'cover'
+    const fitMode = element.imageFitMode ?? 'cover'
+    const zoom = element.imageZoom ?? 100
+    if (fitMode === 'stretch') {
+      liveStyle.backgroundSize = '100% 100%'
+    } else if (fitMode === 'contain') {
+      liveStyle.backgroundSize = zoom === 100 ? 'contain' : `${zoom}% ${zoom}%`
+    } else {
+      // cover (default) — auto-zoom>100 lets the user push past 100% to crop.
+      liveStyle.backgroundSize = zoom === 100 ? 'cover' : `${zoom}% auto`
+    }
     liveStyle.backgroundPosition = `${element.imageOffsetX ?? 50}% ${element.imageOffsetY ?? 50}%`
     liveStyle.backgroundRepeat = 'no-repeat'
   }

@@ -63,6 +63,10 @@ export interface ThumbnailElement {
   imageOffsetX?: number
   imageOffsetY?: number
   imageZoom?: number
+  /** How the image is sized inside its element box. `cover` (default)
+   * scales-and-crops to fill the box, `contain` shows the whole image with
+   * letterboxing, `stretch` ignores aspect ratio. */
+  imageFitMode?: 'cover' | 'contain' | 'stretch'
   /** Dark gradient overlay drawn on top of an image (0-100, 0=disabled). */
   imageOverlay?: number
   shapeType?: ThumbnailShapeType
@@ -662,9 +666,21 @@ function drawImageElement(
   roundedRect(ctx, x, y, width, height, e.borderRadius)
   ctx.clip()
   const zoom = (e.imageZoom ?? 100) / 100
-  const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight) * zoom
-  const drawWidth = image.naturalWidth * scale
-  const drawHeight = image.naturalHeight * scale
+  const fitMode = e.imageFitMode ?? 'cover'
+  let scale: number
+  if (fitMode === 'stretch') {
+    // Stretch: ignore aspect ratio entirely. Zoom still applies.
+    scale = 1
+  } else if (fitMode === 'contain') {
+    // Contain: shrink so the whole image fits inside the box.
+    scale = Math.min(width / image.naturalWidth, height / image.naturalHeight) * zoom
+  } else {
+    // Cover (default): scale so the image fully fills the box, cropping
+    // whichever axis is excess.
+    scale = Math.max(width / image.naturalWidth, height / image.naturalHeight) * zoom
+  }
+  const drawWidth = fitMode === 'stretch' ? width * zoom : image.naturalWidth * scale
+  const drawHeight = fitMode === 'stretch' ? height * zoom : image.naturalHeight * scale
   const offsetX = ((e.imageOffsetX ?? 50) / 100) * (width - drawWidth)
   const offsetY = ((e.imageOffsetY ?? 50) / 100) * (height - drawHeight)
   ctx.drawImage(image, x + offsetX, y + offsetY, drawWidth, drawHeight)
