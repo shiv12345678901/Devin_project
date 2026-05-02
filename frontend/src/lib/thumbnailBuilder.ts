@@ -82,7 +82,25 @@ export const THUMBNAIL_CANVAS_WIDTH = 1920
 export const THUMBNAIL_CANVAS_HEIGHT = 1080
 
 const HEADING_FONT = "'Inter', 'Noto Sans Devanagari', system-ui, Arial, sans-serif"
-const DEVANAGARI_FONT = "'Noto Sans Devanagari', 'Inter', system-ui, Arial, sans-serif"
+const DEVANAGARI_FONT = "'Noto Sans Devanagari', 'Tiro Devanagari Sanskrit', 'Inter', system-ui, Arial, sans-serif"
+const DEVANAGARI_DISPLAY_FONT = "'Tiro Devanagari Sanskrit', 'Noto Sans Devanagari', 'Inter', system-ui, Arial, sans-serif"
+
+/** Devanagari Unicode block (0900–097F). Used to auto-pick a script-aware
+ * font stack so user-typed Hindi/Nepali text actually renders correctly
+ * inside the canvas, instead of falling back to a Latin-only face. */
+const DEVANAGARI_RE = /[\u0900-\u097F]/
+
+function hasDevanagari(text: string | undefined): boolean {
+  return !!text && DEVANAGARI_RE.test(text)
+}
+
+/** Pick the right font stack for a given text element. Display script
+ * (`Tiro`) is reserved for the dedicated chapter-label slot since it has
+ * very high contrast and reads well only at large sizes. */
+function fontFor(text: string, kind: 'body' | 'display' = 'body'): string {
+  if (!hasDevanagari(text)) return HEADING_FONT
+  return kind === 'display' ? DEVANAGARI_DISPLAY_FONT : DEVANAGARI_FONT
+}
 
 /* Education Classic palette — handpicked so backgrounds, badges, and
  * text stay readable next to each other.  Tweaking these here
@@ -136,7 +154,7 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
     canvasWidth: THUMBNAIL_CANVAS_WIDTH,
     canvasHeight: THUMBNAIL_CANVAS_HEIGHT,
     canvasBackground: PALETTE.canvas,
-    elements: scaleTemplateElements({
+    elements: autoFitTextElements(scaleTemplateElements({
       /* Cream card behind the title block — gives the red headline a
        * high-contrast surface to sit on. */
       leftPanel: panel('leftPanel', {
@@ -156,6 +174,7 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
       title: textBox('title', `${className} ${subject}`, {
         type: 'title', posX: 13, posY: 18, width: 665, height: 96,
         fontSize: 75, fontWeight: '900', color: PALETTE.headerText,
+        fontFamily: fontFor(`${className} ${subject}`),
         backgroundColor: PALETTE.headerBg, borderRadius: 12,
         paddingX: 0, paddingY: 10, zIndex: 5, textAlign: 'center',
       }),
@@ -163,7 +182,7 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
       chapterLabel: textBox('chapterLabel', `${chapterPrefix} ${chapterNum} :`, {
         type: 'label', posX: 23, posY: 163, width: 230, height: 84,
         fontSize: 65, fontWeight: '800', color: PALETTE.chapterLabel,
-        fontFamily: DEVANAGARI_FONT, textAlign: 'left',
+        fontFamily: fontFor(chapterPrefix, 'display'), textAlign: 'left',
         backgroundColor: 'transparent', paddingX: 0, paddingY: 8,
         zIndex: 2,
       }),
@@ -171,12 +190,14 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
       chapterLine1: textBox('chapterLine1', line1 || autoThumbnailSummary(text), {
         type: 'chapter-text', posX: 270, posY: 161, width: 390, height: 110,
         fontSize: 87, fontWeight: '900', color: PALETTE.chapterText,
+        fontFamily: fontFor(line1 || autoThumbnailSummary(text)),
         textAlign: 'left', backgroundColor: 'transparent',
         zIndex: 5,
       }),
       chapterLine2: textBox('chapterLine2', line2, {
         type: 'chapter-text', posX: 44, posY: 279, width: 614, height: 82,
         fontSize: 75, fontWeight: '900', color: PALETTE.chapterText,
+        fontFamily: fontFor(line2),
         textAlign: 'center', backgroundColor: 'transparent',
         zIndex: 5,
       }),
@@ -185,6 +206,7 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
       chapterLine3: textBox('chapterLine3', line3, {
         type: 'chapter-text', posX: 46, posY: 379, width: 614, height: 82,
         fontSize: 75, fontWeight: '900', color: PALETTE.chapterText,
+        fontFamily: fontFor(line3),
         textAlign: 'center', backgroundColor: 'transparent',
         zIndex: 4,
       }),
@@ -220,7 +242,7 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
         backgroundColor: PALETTE.badgeBg, borderRadius: 0,
         paddingX: 16, paddingY: 12, zIndex: 10,
       }),
-    }),
+    })),
   }
 }
 
@@ -248,6 +270,56 @@ function scaleTemplateElements(
         paddingY: Math.round(element.paddingY * scaleY),
       },
     ]),
+  )
+}
+
+/** Shrink each text element's font-size until its content fits the box.
+ * Runs once at template-build time so both the canvas renderer and the
+ * live DOM preview see the same fitted size. Per-line measurement uses an
+ * offscreen 2-D context — same metrics the saved PNG eventually uses. */
+function autoFitTextElements(
+  elements: Record<string, ThumbnailElement>,
+): Record<string, ThumbnailElement> {
+  // SSR / non-DOM environments: skip and return the elements unchanged.
+  if (typeof document === 'undefined') return elements
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return elements
+
+  return Object.fromEntries(
+    Object.entries(elements).map(([id, element]) => {
+      const isText =
+        element.type !== 'panel' &&
+        element.type !== 'shape' &&
+        element.type !== 'image'
+      if (!isText || !element.width || !element.text) return [id, element]
+
+      const maxWidth = Math.max(1, element.width - element.paddingX * 2)
+      const maxHeight = element.height
+        ? Math.max(1, element.height - element.paddingY * 2)
+        : Infinity
+      const fontFamily = element.fontFamily ?? HEADING_FONT
+      const lines = element.text.split('\n')
+
+      const fits = (size: number): boolean => {
+        ctx.font = `${element.fontWeight} ${size}px ${fontFamily}`
+        const widest = Math.max(
+          ...lines.map((line) => ctx.measureText(line).width),
+          0,
+        )
+        const totalHeight = lines.length * size * 1.08
+        return widest <= maxWidth && totalHeight <= maxHeight
+      }
+
+      const minSize = Math.max(14, Math.round(element.fontSize * 0.4))
+      let size = element.fontSize
+      // Step in 2-px decrements until the element fits or we hit the floor.
+      while (size > minSize && !fits(size)) size -= 2
+      // Last resort: clamp anyway so we never write a wider-than-box text.
+      if (size === minSize && !fits(minSize)) size = minSize
+      if (size === element.fontSize) return [id, element]
+      return [id, { ...element, fontSize: size }]
+    }),
   )
 }
 
@@ -361,14 +433,40 @@ function applyHiddenElements(
 
 /* ───────────────────────── Public render API ───────────────────────── */
 
+/** Slug-style filename from class/subject/chapter so saved thumbnails are
+ * recognisable on disk (e.g. "class10-nepali-ch2-thumbnail.png") instead
+ * of a UUID. Falls back to the title or a generic name. */
+export function autoThumbnailFilename(settings: GenerateSettings): string {
+  const slug = (s: string | undefined) =>
+    (s ?? '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 24)
+  const className = slug(settings.class_name)
+  const subject = slug(settings.subject)
+  const chapterNum = (settings.auto_thumbnail_chapter_num ?? '')
+    .replace(/[^A-Za-z0-9]+/g, '')
+    .slice(0, 6)
+  const titleSlug = slug(settings.title)
+  const parts = [
+    className && `class${className}`,
+    subject || null,
+    chapterNum && `ch${chapterNum}`,
+    !className && !subject && !chapterNum ? titleSlug || 'thumbnail' : null,
+    'thumbnail',
+  ].filter(Boolean) as string[]
+  return `${parts.join('-')}.png`
+}
+
 export async function buildAutoThumbnailFile(
   settings: GenerateSettings,
   text: string,
+  pixelRatio = 1.5,
 ): Promise<File> {
   const template = buildAutoThumbnailTemplate(settings, text)
-  const blob = await renderTemplateToBlob(template, 1.5)
-  const safeTitle = cleanLine(settings.title, 'thumbnail').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 40)
-  return new File([blob], `auto_${safeTitle || 'thumbnail'}.png`, { type: 'image/png' })
+  const blob = await renderTemplateToBlob(template, pixelRatio)
+  return new File([blob], autoThumbnailFilename(settings), { type: 'image/png' })
 }
 
 export async function renderTemplateToBlob(
@@ -381,6 +479,16 @@ export async function renderTemplateToBlob(
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Canvas is not available in this browser')
   ctx.scale(pixelRatio, pixelRatio)
+  // Wait for webfonts (Inter, Noto Sans Devanagari, Tiro) to load before
+  // measuring/drawing — otherwise the first render falls back to a system
+  // sans and the saved PNG looks different from the editor's live preview.
+  if (typeof document !== 'undefined' && document.fonts?.ready) {
+    try {
+      await document.fonts.ready
+    } catch {
+      /* font readiness is best-effort */
+    }
+  }
   const images = await loadTemplateImages(template)
   renderTemplate(ctx, template, images)
   return new Promise((resolve, reject) => {

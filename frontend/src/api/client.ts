@@ -256,6 +256,25 @@ export const api = {
     fetch(buildUrl(`/thumbnail-templates/${encodeURIComponent(id)}`), { method: 'DELETE' })
       .then((res) => parseJson<{ success?: boolean; error?: string }>(res)),
 
+  /** POST a JSON template payload and get back the matching PNG.
+   *
+   * Used as a backend parity check (and as a server-rendered fallback) for
+   * the same `ThumbnailTemplateState` produced by the frontend editor. */
+  renderThumbnailTemplate: async (
+    payload: Record<string, unknown>,
+  ): Promise<Blob> => {
+    const r = await fetch(buildUrl('/render-thumbnail-template'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      const msg = await r.text()
+      throw new Error(`Render failed (${r.status}): ${msg}`)
+    }
+    return r.blob()
+  },
+
   uploadThumbnail: async (
     file: File,
   ): Promise<{ success: boolean; filename: string; url: string; size_bytes: number }> => {
