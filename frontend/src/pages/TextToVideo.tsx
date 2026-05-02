@@ -22,6 +22,11 @@ import {
   Square,
   Circle,
   Layers,
+  Lock,
+  Unlock,
+  RotateCcw,
+  Move,
+  Palette,
 } from 'lucide-react'
 
 import PreflightModal from '../components/PreflightModal'
@@ -38,20 +43,14 @@ import {
   buildAutoThumbnailFile,
   buildAutoThumbnailTemplate,
   renderTemplateToDataUrl,
-  THUMBNAIL_TEMPLATES,
-  THUMBNAIL_ASPECTS,
-  DEFAULT_TEMPLATE_ID,
-  findTemplatePreset,
   createTextElement,
   createHeadingElement,
   createSubtitleElement,
   createShapeElement,
   createBadgeElement,
-  createImageElement,
   duplicateElement,
   nextElementId,
   type ThumbnailElement,
-  type ThumbnailAspectId,
   type ThumbnailShapeType,
 } from '../lib/thumbnailBuilder'
 
@@ -388,11 +387,16 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     settings.auto_thumbnail_side_image_url,
     settings.auto_thumbnail_chapter_num,
     settings.auto_thumbnail_year,
+    settings.auto_thumbnail_chapter_prefix,
     settings.auto_thumbnail_image_offset_x,
     settings.auto_thumbnail_image_offset_y,
     settings.auto_thumbnail_image_zoom,
+    settings.auto_thumbnail_canvas_background,
     settings.auto_thumbnail_overrides,
+    settings.auto_thumbnail_added_elements,
+    settings.auto_thumbnail_hidden_elements,
     settings.intro_thumbnail_filename,
+    settings,
     text,
   ])
 
@@ -656,6 +660,7 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
         {activeStepId === 'thumbnail' && (
           <ThumbnailStep
             settings={settings}
+            text={text}
             onChange={set}
             errors={showCurrentErrors ? currentErrors : {}}
             autoThumbnailBuilder={shouldAutoBuildThumbnail}
@@ -1325,6 +1330,7 @@ function VideoStep({
 
 function ThumbnailStep({
   settings,
+  text,
   onChange,
   errors,
   autoThumbnailBuilder,
@@ -1337,6 +1343,7 @@ function ThumbnailStep({
   onAutoThumbnailSideImage,
 }: {
   settings: GenerateSettings
+  text: string
   onChange: Setter
   errors: FieldErrors
   autoThumbnailBuilder: boolean
@@ -1389,6 +1396,7 @@ function ThumbnailStep({
       {autoThumbnailBuilder && (
         <AutoThumbnailPanel
           settings={settings}
+          text={text}
           onChange={onChange}
           autoThumbnailError={autoThumbnailError}
           autoThumbnailSaving={autoThumbnailSaving}
@@ -1404,6 +1412,7 @@ function ThumbnailStep({
 
 function AutoThumbnailPanel({
   settings,
+  text,
   onChange,
   autoThumbnailError,
   autoThumbnailSaving,
@@ -1413,6 +1422,7 @@ function AutoThumbnailPanel({
   onAutoThumbnailSideImage,
 }: {
   settings: GenerateSettings
+  text: string
   onChange: Setter
   autoThumbnailError: string | null
   autoThumbnailSaving: boolean
@@ -1422,144 +1432,125 @@ function AutoThumbnailPanel({
   onAutoThumbnailSideImage: (file: File | null) => void
 }) {
   const hasSavedIntro = Boolean((settings.intro_thumbnail_filename ?? '').trim())
-  const presetId = settings.auto_thumbnail_template_id ?? DEFAULT_TEMPLATE_ID
-  const preset = findTemplatePreset(presetId)
-  const aspectId: ThumbnailAspectId = settings.auto_thumbnail_canvas_aspect ?? '16:9'
+
+  // Mini preview rendered from the same template the run uses, so the user
+  // sees the actual output (not a CSS approximation) before pressing "Use it".
+  const template = useMemo(
+    () => buildAutoThumbnailTemplate(settings, text),
+    [settings, text],
+  )
+  const [miniPreview, setMiniPreview] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    renderTemplateToDataUrl(template, 0.6)
+      .then((url) => { if (!cancelled) setMiniPreview(url) })
+      .catch(() => { if (!cancelled) setMiniPreview(null) })
+    return () => { cancelled = true }
+  }, [template])
 
   return (
-    <div className="rounded-md border border-brand-200 bg-brand-50 p-4 text-sm text-brand-800 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-100">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
-          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/70 text-brand-700 dark:bg-white/10 dark:text-brand-100">
-            <Wand2 size={15} />
-          </span>
-          <div className="min-w-0">
-            <div className="font-medium">Auto thumbnail builder</div>
-            <div className="mt-0.5 text-xs opacity-80">
-              Pick a layout, tweak it visually, and the result is uploaded as the intro thumbnail when the run starts.
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950/40">
+      {/* ── Header strip ──────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-start gap-4 border-b border-slate-200 bg-gradient-to-r from-brand-50 to-white p-5 dark:border-white/10 dark:from-brand-500/10 dark:to-transparent">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-500 text-white shadow-sm">
+          <Wand2 size={18} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-base font-semibold text-slate-900 dark:text-slate-50">
+            Auto thumbnail builder
+          </div>
+          <div className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
+            We compose a clean Education Classic intro from your class, subject and chapter title — drop in a photo and tweak any element to taste.
+          </div>
+          {autoThumbnailError && (
+            <div className="mt-2 flex items-start gap-1.5 rounded-md bg-rose-50 px-2 py-1.5 text-xs text-rose-700 dark:bg-rose-500/10 dark:text-rose-200">
+              <AlertCircle size={13} className="mt-px shrink-0" /> {autoThumbnailError}
             </div>
-            {autoThumbnailError && (
-              <div className="mt-2 text-xs text-rose-700 dark:text-rose-200">
-                {autoThumbnailError}
+          )}
+        </div>
+      </div>
+
+      {/* ── Mini preview + actions ───────────────────────────────── */}
+      <div className="grid gap-5 p-5 sm:grid-cols-[260px,1fr] sm:items-center">
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-100 shadow-inner dark:border-white/10 dark:bg-slate-900">
+          <div
+            className="relative w-full"
+            style={{ aspectRatio: `${template.canvasWidth} / ${template.canvasHeight}` }}
+          >
+            {miniPreview ? (
+              <img
+                src={miniPreview}
+                alt="Auto thumbnail preview"
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-xs text-slate-500 dark:text-slate-400">
+                Rendering preview…
               </div>
             )}
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="btn-secondary btn-sm"
-            onClick={onUseAutoThumbnail}
-            disabled={autoThumbnailSaving || hasSavedIntro}
-          >
-            <Check size={12} /> {autoThumbnailSaving ? 'Saving...' : hasSavedIntro ? 'Using thumbnail' : 'Use it'}
-          </button>
-          <button
-            type="button"
-            className="btn-secondary btn-sm"
-            onClick={onToggleAutoThumbnailEdit}
-          >
-            <FileText size={12} /> {autoThumbnailEditOpen ? 'Hide editor' : 'Edit'}
-          </button>
+
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            {hasSavedIntro ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                <Check size={11} /> Using as intro thumbnail
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
+                <Sparkles size={11} /> Not saved yet
+              </span>
+            )}
+            <span className="text-slate-500 dark:text-slate-400">
+              1280 × 720 · PNG
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-primary btn-sm"
+              onClick={onUseAutoThumbnail}
+              disabled={autoThumbnailSaving || hasSavedIntro}
+            >
+              <Check size={13} /> {autoThumbnailSaving ? 'Saving…' : hasSavedIntro ? 'Already saved' : 'Use this thumbnail'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={onToggleAutoThumbnailEdit}
+            >
+              <FileText size={13} /> {autoThumbnailEditOpen ? 'Close editor' : 'Edit'}
+            </button>
+            <label className="btn-ghost btn-sm cursor-pointer">
+              <Upload size={13} /> Replace with upload
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) onAutoThumbnailSideImage(file)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+          </div>
+          <div className="text-xs text-slate-500 dark:text-slate-400">
+            Tip: edit the green canvas, the yellow header bar, the chapter pill, or drop in your own image — everything updates the preview live.
+          </div>
         </div>
       </div>
 
-      {/* Quick preset row — always visible so users can switch styles without
-          opening the visual editor. */}
-      <div className="mt-4 flex flex-wrap gap-2">
-        {THUMBNAIL_TEMPLATES.map((p) => {
-          const active = p.id === presetId
-          return (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => onChange('auto_thumbnail_template_id', p.id)}
-              title={p.description}
-              className={
-                'btn-sm rounded-md border px-3 py-1.5 text-xs transition-colors ' +
-                (active
-                  ? 'border-brand-500 bg-brand-500 text-white shadow-sm'
-                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-200')
-              }
-            >
-              {active && <Sparkles size={11} className="mr-1 inline" />}
-              {p.label}
-            </button>
-          )
-        })}
-      </div>
-      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-        {preset.description}
-      </div>
-
+      {/* ── Visual editor ────────────────────────────────────────── */}
       {autoThumbnailEditOpen && (
-        <div className="mt-4 rounded-md border border-slate-200 bg-white p-4 text-slate-700 dark:border-white/10 dark:bg-slate-950/40 dark:text-slate-200">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div className="text-sm font-medium text-slate-900 dark:text-slate-50">
-              Visual editor
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Field label="Aspect">
-                <select
-                  className="input text-xs"
-                  value={aspectId}
-                  onChange={(e) =>
-                    onChange('auto_thumbnail_canvas_aspect', e.target.value as ThumbnailAspectId)
-                  }
-                >
-                  {Object.entries(THUMBNAIL_ASPECTS).map(([id, info]) => (
-                    <option key={id} value={id}>
-                      {info.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Background">
-                <input
-                  type="color"
-                  className="h-9 w-16 rounded-md border border-slate-200 bg-white"
-                  value={asHexColor(settings.auto_thumbnail_canvas_background ?? '', '#0f172a')}
-                  onChange={(e) =>
-                    onChange('auto_thumbnail_canvas_background', e.target.value)
-                  }
-                />
-              </Field>
-              {settings.auto_thumbnail_canvas_background && (
-                <button
-                  type="button"
-                  className="btn-ghost btn-sm self-end"
-                  onClick={() => onChange('auto_thumbnail_canvas_background', undefined)}
-                >
-                  Reset bg
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Chapter number">
-              <input
-                className="input"
-                value={settings.auto_thumbnail_chapter_num ?? ''}
-                onChange={(e) => onChange('auto_thumbnail_chapter_num', e.target.value)}
-                placeholder="2"
-              />
-            </Field>
-            <Field label="Year">
-              <input
-                className="input"
-                value={settings.auto_thumbnail_year ?? '2083'}
-                onChange={(e) => onChange('auto_thumbnail_year', e.target.value)}
-                placeholder="2083"
-              />
-            </Field>
-            <ThumbnailVisualEditor
-              settings={settings}
-              text={''}
-              onChange={onChange}
-              onAutoThumbnailSideImage={onAutoThumbnailSideImage}
-              className="sm:col-span-2"
-            />
-          </div>
+        <div className="border-t border-slate-200 dark:border-white/10">
+          <ThumbnailVisualEditor
+            settings={settings}
+            text={text}
+            onChange={onChange}
+            onAutoThumbnailSideImage={onAutoThumbnailSideImage}
+          />
         </div>
       )}
     </div>
@@ -1575,45 +1566,52 @@ const NUDGE_KEYS: Record<string, [number, number]> = {
 
 type ResizeHandle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 
+type InspectorTab = 'content' | 'style' | 'layout' | 'layers'
+
+const PRESET_LABELS: Record<string, string> = {
+  titleCard: 'Title card (background)',
+  classSubject: 'Header bar — class & subject',
+  chapterLabel: 'Chapter label (पाठ N)',
+  chapterLine1: 'Chapter title — line 1',
+  chapterLine2: 'Chapter title — line 2',
+  chapterPill: 'Chapter pill (bottom)',
+  rightImage: 'Side photo',
+  yearBadge: 'Year starburst',
+}
+
 function ThumbnailVisualEditor({
   settings,
   text,
   onChange,
   onAutoThumbnailSideImage,
-  className,
 }: {
   settings: GenerateSettings
   text: string
   onChange: Setter
   onAutoThumbnailSideImage: (file: File | null) => void
-  className?: string
 }) {
-  const template = useMemo(() => buildAutoThumbnailTemplate(settings, text), [settings, text])
+  const template = useMemo(
+    () => buildAutoThumbnailTemplate(settings, text),
+    [settings, text],
+  )
   const [selectedId, setSelectedId] = useState<string | null>(() => {
-    return Object.values(template.elements).find((e) => e.type === 'title')?.id ?? null
+    return template.elements.chapterLine1?.id ?? null
   })
+  const [tab, setTab] = useState<InspectorTab>('content')
   const [previewSrc, setPreviewSrc] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const frameRef = useRef<HTMLDivElement | null>(null)
 
-  // Re-render the canvas-derived preview every time the template changes.
-  // The preview <img> is the *real* output the run will use, so the user
-  // sees exactly what they'll get rather than a CSS approximation.
+  // Render the canvas-derived preview every time the template changes — the
+  // <img> *is* the real output, so the editor matches the saved PNG exactly.
   useEffect(() => {
     let cancelled = false
-    // Show "Rendering…" only if the work takes long enough to notice; this
-    // keeps state writes off the synchronous effect-body path so the React
-    // hooks lint rule stays happy.
     const loadingTimer = window.setTimeout(() => {
       if (!cancelled) setPreviewLoading(true)
     }, 120)
     renderTemplateToDataUrl(template, 1)
-      .then((dataUrl) => {
-        if (!cancelled) setPreviewSrc(dataUrl)
-      })
-      .catch(() => {
-        if (!cancelled) setPreviewSrc(null)
-      })
+      .then((dataUrl) => { if (!cancelled) setPreviewSrc(dataUrl) })
+      .catch(() => { if (!cancelled) setPreviewSrc(null) })
       .finally(() => {
         window.clearTimeout(loadingTimer)
         if (!cancelled) setPreviewLoading(false)
@@ -1625,7 +1623,6 @@ function ThumbnailVisualEditor({
   }, [template])
 
   const selected = selectedId ? template.elements[selectedId] : undefined
-
   const overrides = settings.auto_thumbnail_overrides ?? {}
   const added = settings.auto_thumbnail_added_elements ?? {}
   const hidden = settings.auto_thumbnail_hidden_elements ?? []
@@ -1636,19 +1633,13 @@ function ThumbnailVisualEditor({
     if (isAddedElement(id)) {
       onChange('auto_thumbnail_added_elements', {
         ...added,
-        [id]: {
-          ...(added[id] as Partial<ThumbnailElement>),
-          ...patch,
-        },
+        [id]: { ...(added[id] as Partial<ThumbnailElement>), ...patch },
       })
       return
     }
     onChange('auto_thumbnail_overrides', {
       ...overrides,
-      [id]: {
-        ...((overrides[id] as Partial<ThumbnailElement>) ?? {}),
-        ...patch,
-      },
+      [id]: { ...((overrides[id] as Partial<ThumbnailElement>) ?? {}), ...patch },
     })
   }
 
@@ -1693,6 +1684,7 @@ function ThumbnailVisualEditor({
       [id]: element as unknown as Record<string, unknown>,
     })
     setSelectedId(id)
+    setTab('content')
   }
 
   const duplicateSelected = () => {
@@ -1713,6 +1705,14 @@ function ThumbnailVisualEditor({
   const sendToBack = () => {
     const minZ = Math.min(0, ...Object.values(template.elements).map((e) => e.zIndex ?? 5))
     patchSelected({ zIndex: minZ - 1 })
+  }
+
+  const resetAllOverrides = () => {
+    if (!confirm('Reset every customisation back to the Education Classic defaults?')) return
+    onChange('auto_thumbnail_overrides', undefined)
+    onChange('auto_thumbnail_added_elements', undefined)
+    onChange('auto_thumbnail_hidden_elements', undefined)
+    onChange('auto_thumbnail_canvas_background', undefined)
   }
 
   const startDrag = (
@@ -1797,352 +1797,648 @@ function ThumbnailVisualEditor({
     .filter((el) => el.visible !== false)
     .sort((a, b) => (a.zIndex ?? 5) - (b.zIndex ?? 5))
 
+  // All elements (including hidden) for the layers panel.
+  const allElements = Object.values(template.elements).sort(
+    (a, b) => (b.zIndex ?? 5) - (a.zIndex ?? 5),
+  )
+
   return (
-    <div className={className}>
-      {/* Toolbar */}
-      <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 dark:border-white/10 dark:bg-white/[0.03]">
-        <span className="text-xs font-medium text-slate-600 dark:text-slate-300">Add:</span>
-        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createHeadingElement(id), 'heading')} title="Add big headline">
-          <TypeIcon size={12} /> Heading
-        </button>
-        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createTextElement(id), 'text')} title="Add text">
-          <TypeIcon size={12} /> Text
-        </button>
-        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createSubtitleElement(id), 'subtitle')} title="Add subtitle">
-          <TypeIcon size={12} /> Subtitle
-        </button>
-        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createShapeElement(id, 'rectangle'), 'shape')} title="Add rectangle">
-          <Square size={12} /> Rect
-        </button>
-        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createShapeElement(id, 'circle'), 'circle')} title="Add circle">
-          <Circle size={12} /> Circle
-        </button>
-        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createBadgeElement(id), 'badge')} title="Add badge">
-          <Sparkles size={12} /> Badge
-        </button>
-        <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createImageElement(id), 'image')} title="Add image slot">
-          <ImageIcon size={12} /> Image
-        </button>
-        <span className="ml-auto text-[11px] text-slate-500 dark:text-slate-400">
-          Click to select • drag to move • Shift+arrows = 10px • Del to remove
-        </span>
-      </div>
-
-      {/* Canvas preview + drag overlay */}
-      <div
-        ref={frameRef}
-        data-thumbnail-frame="true"
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-        className="relative w-full overflow-hidden rounded-md border border-slate-300 bg-slate-200 outline-none focus:ring-2 focus:ring-brand-500 dark:border-white/10 dark:bg-slate-900"
-        style={{ aspectRatio: `${template.canvasWidth} / ${template.canvasHeight}` }}
-        onPointerDown={(e) => {
-          // Clicks on the empty frame deselect rather than picking a random element.
-          if (e.target === e.currentTarget) setSelectedId(null)
-        }}
-      >
-        {previewSrc && (
-          <img
-            src={previewSrc}
-            alt="Thumbnail preview"
-            draggable={false}
-            className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+    <div className="bg-slate-50 dark:bg-slate-950/30">
+      {/* ── Project metadata bar ─────────────────────────────────── */}
+      <div className="flex flex-wrap items-end gap-3 border-b border-slate-200 bg-white px-5 py-3 dark:border-white/10 dark:bg-slate-950/40">
+        <Field label="Chapter #">
+          <input
+            className="input h-9"
+            style={{ width: 70 }}
+            value={settings.auto_thumbnail_chapter_num ?? ''}
+            onChange={(e) => onChange('auto_thumbnail_chapter_num', e.target.value)}
+            placeholder="2"
           />
-        )}
-        {!previewSrc && previewLoading && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-500 dark:text-slate-400">
-            Rendering preview…
-          </div>
-        )}
-        {orderedElements.map((el) => (
-          <ThumbnailEditableElement
-            key={el.id}
-            element={el}
-            selected={selectedId === el.id}
-            canvasWidth={template.canvasWidth}
-            canvasHeight={template.canvasHeight}
-            onPointerDown={(event, mode) => startDrag(event, el, mode)}
-            onSelect={() => setSelectedId(el.id)}
-          />
-        ))}
-      </div>
-
-      {/* Element actions */}
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <Field label="Selected element">
-          <select
-            className="input"
-            value={selectedId ?? ''}
-            onChange={(e) => setSelectedId(e.target.value || null)}
-          >
-            <option value="">— none —</option>
-            {Object.values(template.elements).map((el) => (
-              <option key={el.id} value={el.id}>
-                {elementDisplayName(el)}
-                {el.visible === false ? ' (hidden)' : ''}
-              </option>
-            ))}
-          </select>
         </Field>
-        {selected && (
-          <div className="flex flex-wrap items-end gap-2">
-            <button type="button" className="btn-secondary btn-sm" onClick={duplicateSelected}>
-              <CopyIcon size={12} /> Duplicate
-            </button>
-            <button type="button" className="btn-secondary btn-sm" onClick={bringToFront}>
-              <Layers size={12} /> Bring front
-            </button>
-            <button type="button" className="btn-secondary btn-sm" onClick={sendToBack}>
-              <Layers size={12} /> Send back
-            </button>
-            <button
-              type="button"
-              className="btn-secondary btn-sm"
-              onClick={() => patchSelected({ visible: !(selected.visible !== false) })}
-            >
-              {selected.visible !== false ? <EyeOff size={12} /> : <Eye size={12} />}
-              {selected.visible !== false ? 'Hide' : 'Show'}
-            </button>
-            <button type="button" className="btn-ghost btn-sm" onClick={clearSelectedOverride} title="Reset overrides for this element">
-              Reset
-            </button>
-            <button type="button" className="btn-ghost btn-sm text-rose-600 dark:text-rose-300" onClick={removeSelected}>
-              <Trash2 size={12} /> Remove
-            </button>
-          </div>
-        )}
+        <Field label="Year">
+          <input
+            className="input h-9"
+            style={{ width: 90 }}
+            value={settings.auto_thumbnail_year ?? '2083'}
+            onChange={(e) => onChange('auto_thumbnail_year', e.target.value)}
+            placeholder="2083"
+          />
+        </Field>
+        <Field label="Chapter prefix">
+          <input
+            className="input h-9"
+            style={{ width: 110 }}
+            value={settings.auto_thumbnail_chapter_prefix ?? ''}
+            onChange={(e) => onChange('auto_thumbnail_chapter_prefix', e.target.value)}
+            placeholder="पाठ"
+          />
+        </Field>
+        <div className="ml-auto flex flex-wrap items-end gap-2">
+          <Field label="Canvas background">
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                className="h-9 w-12 rounded-md border border-slate-200 bg-white"
+                value={asHexColor(settings.auto_thumbnail_canvas_background ?? template.canvasBackground, '#1f6f3a')}
+                onChange={(e) => onChange('auto_thumbnail_canvas_background', e.target.value)}
+              />
+              {settings.auto_thumbnail_canvas_background && (
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm"
+                  onClick={() => onChange('auto_thumbnail_canvas_background', undefined)}
+                  title="Reset canvas background"
+                >
+                  <RotateCcw size={12} />
+                </button>
+              )}
+            </div>
+          </Field>
+          <button
+            type="button"
+            className="btn-ghost btn-sm"
+            onClick={resetAllOverrides}
+            title="Reset every customisation back to the defaults"
+          >
+            <RotateCcw size={12} /> Reset all
+          </button>
+        </div>
       </div>
 
-      {/* Hidden / removed elements list */}
-      {hidden.length > 0 && (
-        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs dark:border-white/10 dark:bg-white/[0.03]">
-          <div className="mb-1 font-medium text-slate-700 dark:text-slate-200">Hidden elements:</div>
-          <div className="flex flex-wrap gap-2">
-            {hidden.map((id) => (
+      {/* ── Workspace ────────────────────────────────────────────── */}
+      <div className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1fr),360px]">
+        {/* — Canvas + add bar — */}
+        <div className="min-w-0">
+          <div
+            ref={frameRef}
+            data-thumbnail-frame="true"
+            tabIndex={0}
+            onKeyDown={onKeyDown}
+            className="relative w-full overflow-hidden rounded-xl border border-slate-300 bg-slate-200 shadow-sm outline-none focus:ring-2 focus:ring-brand-500 dark:border-white/10 dark:bg-slate-900"
+            style={{ aspectRatio: `${template.canvasWidth} / ${template.canvasHeight}` }}
+            onPointerDown={(e) => {
+              if (e.target === e.currentTarget) setSelectedId(null)
+            }}
+          >
+            {previewSrc && (
+              <img
+                src={previewSrc}
+                alt="Thumbnail preview"
+                draggable={false}
+                className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+              />
+            )}
+            {!previewSrc && previewLoading && (
+              <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-500 dark:text-slate-400">
+                Rendering preview…
+              </div>
+            )}
+            {orderedElements.map((el) => (
+              <ThumbnailEditableElement
+                key={el.id}
+                element={el}
+                selected={selectedId === el.id}
+                canvasWidth={template.canvasWidth}
+                canvasHeight={template.canvasHeight}
+                onPointerDown={(event, mode) => startDrag(event, el, mode)}
+                onSelect={() => setSelectedId(el.id)}
+              />
+            ))}
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-2 dark:border-white/10 dark:bg-slate-950/40">
+            <span className="px-1 text-xs font-medium text-slate-600 dark:text-slate-300">Add element:</span>
+            <button type="button" className="btn-ghost btn-sm" onClick={() => addElement(createHeadingElement, 'heading')}>
+              <TypeIcon size={12} /> Heading
+            </button>
+            <button type="button" className="btn-ghost btn-sm" onClick={() => addElement(createTextElement, 'text')}>
+              <TypeIcon size={12} /> Text
+            </button>
+            <button type="button" className="btn-ghost btn-sm" onClick={() => addElement(createSubtitleElement, 'subtitle')}>
+              <TypeIcon size={12} /> Subtitle
+            </button>
+            <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createShapeElement(id, 'rectangle'), 'shape')}>
+              <Square size={12} /> Rect
+            </button>
+            <button type="button" className="btn-ghost btn-sm" onClick={() => addElement((id) => createShapeElement(id, 'circle'), 'shape')}>
+              <Circle size={12} /> Circle
+            </button>
+            <button type="button" className="btn-ghost btn-sm" onClick={() => addElement(createBadgeElement, 'badge')}>
+              <Sparkles size={12} /> Badge
+            </button>
+            <span className="ml-auto pr-1 text-[11px] text-slate-500 dark:text-slate-400">
+              Drag to move · Shift+arrows = 10px · ⌘D duplicates · Del removes
+            </span>
+          </div>
+        </div>
+
+        {/* — Inspector — */}
+        <div className="rounded-xl border border-slate-200 bg-white dark:border-white/10 dark:bg-slate-950/40">
+          {/* Selected element header */}
+          <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-white/10">
+            <div className="min-w-0">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                {selected ? 'Editing' : 'Inspector'}
+              </div>
+              <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
+                {selected ? elementDisplayName(selected) : 'Click anything on the canvas to edit it'}
+              </div>
+            </div>
+            {selected && (
+              <button
+                type="button"
+                className="btn-ghost btn-sm shrink-0"
+                onClick={() => setSelectedId(null)}
+                title="Deselect"
+              >
+                ×
+              </button>
+            )}
+          </div>
+
+          {/* Tab strip */}
+          <div className="flex items-center gap-0.5 border-b border-slate-200 bg-slate-50 px-2 dark:border-white/10 dark:bg-slate-900/40">
+            {([
+              ['content', 'Content', <TypeIcon key="i" size={12} />],
+              ['style',   'Style',   <Palette key="i" size={12} />],
+              ['layout',  'Layout',  <Move key="i" size={12} />],
+              ['layers',  'Layers',  <Layers key="i" size={12} />],
+            ] as Array<[InspectorTab, string, React.ReactNode]>).map(([id, label, icon]) => (
               <button
                 key={id}
                 type="button"
-                className="btn-ghost btn-sm"
-                onClick={() => restoreElement(id)}
+                onClick={() => setTab(id)}
+                className={
+                  'flex items-center gap-1 rounded-t-md px-3 py-2 text-xs font-medium transition-colors ' +
+                  (tab === id
+                    ? 'border-b-2 border-brand-500 bg-white text-slate-900 dark:bg-slate-950/60 dark:text-slate-50'
+                    : 'border-b-2 border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200')
+                }
               >
-                <Eye size={11} /> {id}
+                {icon} {label}
               </button>
             ))}
           </div>
-        </div>
-      )}
 
-      {/* Inspector */}
-      {selected && (
-        <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
-          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-600 dark:text-slate-300">
-            {elementDisplayName(selected)} • inspector
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <NumField step="thumbnail" name="sel_x" label="X" value={selected.posX} onChange={(v) => patchSelected({ posX: v })} />
-            <NumField step="thumbnail" name="sel_y" label="Y" value={selected.posY} onChange={(v) => patchSelected({ posY: v })} />
-            <NumField step="thumbnail" name="sel_z" label="Z-index" value={selected.zIndex ?? 5} onChange={(v) => patchSelected({ zIndex: v })} />
-            <NumField step="thumbnail" name="sel_w" label="Width" value={selected.width ?? 0} onChange={(v) => patchSelected({ width: Math.max(20, v) })} />
-            <NumField step="thumbnail" name="sel_h" label="Height" value={selected.height ?? 0} onChange={(v) => patchSelected({ height: Math.max(20, v) })} />
-            <NumField step="thumbnail" name="sel_rot" label="Rotation°" value={selected.rotation ?? 0} onChange={(v) => patchSelected({ rotation: v })} />
-            {selected.type !== 'panel' && selected.type !== 'shape' && selected.type !== 'image' && (
-              <>
-                <Field label="Text" className="sm:col-span-3">
-                  <textarea
-                    className="textarea h-20"
-                    value={selected.text}
-                    onChange={(e) => patchSelected({ text: e.target.value })}
-                  />
-                </Field>
-                <NumField
-                  step="thumbnail"
-                  name="selected_font_size"
-                  label="Font size"
-                  value={selected.fontSize}
-                  onChange={(v) => patchSelected({ fontSize: v })}
-                />
-                <Field label="Weight">
-                  <select
-                    className="input"
-                    value={selected.fontWeight}
-                    onChange={(e) => patchSelected({ fontWeight: e.target.value })}
-                  >
-                    <option value="400">Regular</option>
-                    <option value="500">Medium</option>
-                    <option value="600">Semibold</option>
-                    <option value="700">Bold</option>
-                    <option value="800">Extra-bold</option>
-                    <option value="900">Black</option>
-                  </select>
-                </Field>
-                <Field label="Align">
-                  <select
-                    className="input"
-                    value={selected.textAlign ?? 'center'}
-                    onChange={(e) =>
-                      patchSelected({ textAlign: e.target.value as ThumbnailElement['textAlign'] })
-                    }
-                  >
-                    <option value="left">Left</option>
-                    <option value="center">Center</option>
-                    <option value="right">Right</option>
-                  </select>
-                </Field>
-                <Field label="Text color">
-                  <input
-                    type="color"
-                    className="h-10 w-full rounded-md border border-slate-200 bg-white"
-                    value={asHexColor(selected.color, '#000000')}
-                    onChange={(e) => patchSelected({ color: e.target.value })}
-                  />
-                </Field>
-                <NumField
-                  step="thumbnail"
-                  name="sel_letter"
-                  label="Letter spacing"
-                  value={selected.letterSpacing ?? 0}
-                  onChange={(v) => patchSelected({ letterSpacing: v })}
-                />
-                <NumField
-                  step="thumbnail"
-                  name="sel_shadow_blur"
-                  label="Text shadow"
-                  value={selected.shadowBlur ?? 0}
-                  onChange={(v) => patchSelected({ shadowBlur: Math.max(0, v) })}
-                />
-                <NumField
-                  step="thumbnail"
-                  name="sel_stroke"
-                  label="Outline"
-                  value={selected.strokeWidth ?? 0}
-                  onChange={(v) => patchSelected({ strokeWidth: Math.max(0, v) })}
-                />
-                {(selected.strokeWidth ?? 0) > 0 && (
-                  <Field label="Outline color">
-                    <input
-                      type="color"
-                      className="h-10 w-full rounded-md border border-slate-200 bg-white"
-                      value={asHexColor(selected.strokeColor ?? '#000000', '#000000')}
-                      onChange={(e) => patchSelected({ strokeColor: e.target.value })}
-                    />
-                  </Field>
-                )}
-              </>
-            )}
-            {selected.type !== 'image' && (
-              <Field label="Background">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    className="h-10 w-16 rounded-md border border-slate-200 bg-white"
-                    value={asHexColor(selected.backgroundColor, '#ffffff')}
-                    onChange={(e) => patchSelected({ backgroundColor: e.target.value })}
-                  />
-                  <button
-                    type="button"
-                    className="btn-ghost btn-sm"
-                    onClick={() => patchSelected({ backgroundColor: 'transparent' })}
-                  >
-                    Clear
-                  </button>
+          {/* Tab body */}
+          <div className="p-4 text-sm">
+            {tab === 'layers' ? (
+              <LayersPanel
+                allElements={allElements}
+                selectedId={selectedId}
+                hidden={hidden}
+                added={added}
+                onSelect={setSelectedId}
+                onToggleVisibility={(el) => {
+                  if (isAddedElement(el.id)) {
+                    patchElement(el.id, { visible: !(el.visible !== false) })
+                    return
+                  }
+                  if (hidden.includes(el.id)) restoreElement(el.id)
+                  else onChange('auto_thumbnail_hidden_elements', [...hidden, el.id])
+                }}
+                onToggleLock={(el) => patchElement(el.id, { locked: !el.locked })}
+                onBringFront={(el) => patchElement(el.id, {
+                  zIndex: Math.max(0, ...Object.values(template.elements).map((e) => e.zIndex ?? 5)) + 1,
+                })}
+                onSendBack={(el) => patchElement(el.id, {
+                  zIndex: Math.min(0, ...Object.values(template.elements).map((e) => e.zIndex ?? 5)) - 1,
+                })}
+                onRemove={(el) => {
+                  setSelectedId(el.id)
+                  removeSelected()
+                }}
+              />
+            ) : !selected ? (
+              <div className="flex flex-col items-start gap-2 rounded-md border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400">
+                <Sparkles size={14} className="text-brand-500" />
+                <div>
+                  Click any element on the preview — the header bar, the chapter title, the side photo — to edit it here. Or use the toolbar below the canvas to add new text, shapes and badges.
                 </div>
-              </Field>
-            )}
-            {(selected.type === 'panel' || selected.type === 'shape' || selected.type === 'badge') && (
-              <NumField
-                step="thumbnail"
-                name="sel_radius"
-                label="Corner radius"
-                value={selected.borderRadius}
-                onChange={(v) => patchSelected({ borderRadius: Math.max(0, v) })}
+              </div>
+            ) : tab === 'content' ? (
+              <ContentTab
+                selected={selected}
+                settings={settings}
+                onChange={onChange}
+                patchSelected={patchSelected}
+                onAutoThumbnailSideImage={onAutoThumbnailSideImage}
+              />
+            ) : tab === 'style' ? (
+              <StyleTab selected={selected} patchSelected={patchSelected} />
+            ) : (
+              <LayoutTab
+                selected={selected}
+                patchSelected={patchSelected}
+                duplicateSelected={duplicateSelected}
+                bringToFront={bringToFront}
+                sendToBack={sendToBack}
+                clearSelectedOverride={clearSelectedOverride}
+                removeSelected={removeSelected}
+                isCustom={isAddedElement(selected.id)}
               />
             )}
-            {selected.type === 'shape' && (
-              <Field label="Shape">
-                <select
-                  className="input"
-                  value={selected.shapeType ?? 'rectangle'}
-                  onChange={(e) => patchSelected({ shapeType: e.target.value as ThumbnailShapeType })}
-                >
-                  <option value="rectangle">Rectangle</option>
-                  <option value="pill">Pill</option>
-                  <option value="circle">Circle</option>
-                  <option value="line">Line</option>
-                </select>
-              </Field>
-            )}
-            {selected.type === 'image' && (
-              <>
-                <Field label="Image" className="sm:col-span-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <label className="btn-secondary btn-sm cursor-pointer">
-                      <Upload size={12} /> Add or replace image
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp,image/bmp"
-                        className="hidden"
-                        onChange={(e) => onAutoThumbnailSideImage(e.target.files?.[0] ?? null)}
-                      />
-                    </label>
-                    {settings.auto_thumbnail_side_image_url && (
-                      <button
-                        type="button"
-                        className="btn-ghost btn-sm"
-                        onClick={() => onAutoThumbnailSideImage(null)}
-                      >
-                        Remove image
-                      </button>
-                    )}
-                  </div>
-                </Field>
-                <NumField
-                  step="thumbnail"
-                  name="auto_thumbnail_image_zoom"
-                  label="Zoom (%)"
-                  value={settings.auto_thumbnail_image_zoom ?? 100}
-                  onChange={(v) => onChange('auto_thumbnail_image_zoom', v)}
-                />
-                <NumField
-                  step="thumbnail"
-                  name="auto_thumbnail_image_offset_x"
-                  label="Crop X (%)"
-                  value={settings.auto_thumbnail_image_offset_x ?? 50}
-                  onChange={(v) => onChange('auto_thumbnail_image_offset_x', v)}
-                />
-                <NumField
-                  step="thumbnail"
-                  name="auto_thumbnail_image_offset_y"
-                  label="Crop Y (%)"
-                  value={settings.auto_thumbnail_image_offset_y ?? 50}
-                  onChange={(v) => onChange('auto_thumbnail_image_offset_y', v)}
-                />
-                <NumField
-                  step="thumbnail"
-                  name="sel_overlay"
-                  label="Dark overlay"
-                  value={selected.imageOverlay ?? 0}
-                  onChange={(v) => patchSelected({ imageOverlay: Math.max(0, Math.min(100, v)) })}
-                />
-              </>
-            )}
-            <NumField
-              step="thumbnail"
-              name="sel_opacity"
-              label="Opacity (%)"
-              value={selected.opacity ?? 100}
-              onChange={(v) => patchSelected({ opacity: Math.max(0, Math.min(100, v)) })}
-            />
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ───────────────────────── Inspector tabs ────────────────────────── */
+
+function ContentTab({
+  selected,
+  settings,
+  onChange,
+  patchSelected,
+  onAutoThumbnailSideImage,
+}: {
+  selected: ThumbnailElement
+  settings: GenerateSettings
+  onChange: Setter
+  patchSelected: (patch: Partial<ThumbnailElement>) => void
+  onAutoThumbnailSideImage: (file: File | null) => void
+}) {
+  if (selected.type === 'image') {
+    return (
+      <div className="space-y-3">
+        <Field label="Image">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="btn-secondary btn-sm cursor-pointer">
+              <Upload size={12} /> {settings.auto_thumbnail_side_image_url ? 'Replace' : 'Upload'} image
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/bmp"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) onAutoThumbnailSideImage(file)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+            {settings.auto_thumbnail_side_image_url && (
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => onAutoThumbnailSideImage(null)}
+              >
+                <Trash2 size={12} /> Remove
+              </button>
+            )}
+          </div>
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <NumField
+            step="thumbnail" name="auto_thumbnail_image_zoom" label="Zoom (%)"
+            value={settings.auto_thumbnail_image_zoom ?? 100}
+            onChange={(v) => onChange('auto_thumbnail_image_zoom', v)}
+          />
+          <NumField
+            step="thumbnail" name="sel_overlay" label="Dark overlay (%)"
+            value={selected.imageOverlay ?? 0}
+            onChange={(v) => patchSelected({ imageOverlay: Math.max(0, Math.min(100, v)) })}
+          />
+          <NumField
+            step="thumbnail" name="auto_thumbnail_image_offset_x" label="Crop X (%)"
+            value={settings.auto_thumbnail_image_offset_x ?? 50}
+            onChange={(v) => onChange('auto_thumbnail_image_offset_x', v)}
+          />
+          <NumField
+            step="thumbnail" name="auto_thumbnail_image_offset_y" label="Crop Y (%)"
+            value={settings.auto_thumbnail_image_offset_y ?? 50}
+            onChange={(v) => onChange('auto_thumbnail_image_offset_y', v)}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  if (selected.type === 'panel' || selected.type === 'shape') {
+    return (
+      <div className="text-xs text-slate-500 dark:text-slate-400">
+        Shapes don't carry text. Switch to the <b>Style</b> tab to recolour, or
+        the <b>Layout</b> tab to resize and reposition.
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <Field label="Text">
+        <textarea
+          className="textarea h-24"
+          value={selected.text}
+          onChange={(e) => patchSelected({ text: e.target.value })}
+        />
+      </Field>
+      {selected.id === 'classSubject' && (
+        <div className="rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+          Tip: this header is normally <code className="font-mono">{settings.class_name} {settings.subject}</code>. To restore the auto value, edit Class &amp; Subject above and click "Reset" on the Layout tab.
         </div>
       )}
     </div>
   )
 }
 
+function StyleTab({
+  selected,
+  patchSelected,
+}: {
+  selected: ThumbnailElement
+  patchSelected: (patch: Partial<ThumbnailElement>) => void
+}) {
+  const isText = selected.type !== 'panel' && selected.type !== 'shape' && selected.type !== 'image'
+  return (
+    <div className="space-y-4">
+      {isText && (
+        <div className="grid grid-cols-2 gap-3">
+          <NumField
+            step="thumbnail" name="selected_font_size" label="Font size"
+            value={selected.fontSize}
+            onChange={(v) => patchSelected({ fontSize: Math.max(8, v) })}
+          />
+          <Field label="Weight">
+            <select
+              className="input h-9"
+              value={selected.fontWeight}
+              onChange={(e) => patchSelected({ fontWeight: e.target.value })}
+            >
+              <option value="400">Regular</option>
+              <option value="500">Medium</option>
+              <option value="600">Semibold</option>
+              <option value="700">Bold</option>
+              <option value="800">Extra-bold</option>
+              <option value="900">Black</option>
+            </select>
+          </Field>
+          <Field label="Align">
+            <select
+              className="input h-9"
+              value={selected.textAlign ?? 'center'}
+              onChange={(e) =>
+                patchSelected({ textAlign: e.target.value as ThumbnailElement['textAlign'] })
+              }
+            >
+              <option value="left">Left</option>
+              <option value="center">Center</option>
+              <option value="right">Right</option>
+            </select>
+          </Field>
+          <NumField
+            step="thumbnail" name="sel_letter" label="Letter spacing"
+            value={selected.letterSpacing ?? 0}
+            onChange={(v) => patchSelected({ letterSpacing: v })}
+          />
+          <Field label="Text colour">
+            <input
+              type="color"
+              className="h-9 w-full rounded-md border border-slate-200 bg-white"
+              value={asHexColor(selected.color, '#000000')}
+              onChange={(e) => patchSelected({ color: e.target.value })}
+            />
+          </Field>
+          <NumField
+            step="thumbnail" name="sel_shadow_blur" label="Text shadow"
+            value={selected.shadowBlur ?? 0}
+            onChange={(v) => patchSelected({ shadowBlur: Math.max(0, v) })}
+          />
+          <NumField
+            step="thumbnail" name="sel_stroke" label="Outline width"
+            value={selected.strokeWidth ?? 0}
+            onChange={(v) => patchSelected({ strokeWidth: Math.max(0, v) })}
+          />
+          {(selected.strokeWidth ?? 0) > 0 && (
+            <Field label="Outline colour">
+              <input
+                type="color"
+                className="h-9 w-full rounded-md border border-slate-200 bg-white"
+                value={asHexColor(selected.strokeColor ?? '#000000', '#000000')}
+                onChange={(e) => patchSelected({ strokeColor: e.target.value })}
+              />
+            </Field>
+          )}
+        </div>
+      )}
+      {selected.type !== 'image' && (
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Fill">
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                className="h-9 w-12 rounded-md border border-slate-200 bg-white"
+                value={asHexColor(selected.backgroundColor, '#ffffff')}
+                onChange={(e) => patchSelected({ backgroundColor: e.target.value })}
+              />
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => patchSelected({ backgroundColor: 'transparent' })}
+                title="Make fill transparent"
+              >
+                Clear
+              </button>
+            </div>
+          </Field>
+          <NumField
+            step="thumbnail" name="sel_radius" label="Corner radius"
+            value={selected.borderRadius}
+            onChange={(v) => patchSelected({ borderRadius: Math.max(0, v) })}
+          />
+        </div>
+      )}
+      {selected.type === 'shape' && (
+        <Field label="Shape">
+          <select
+            className="input h-9"
+            value={selected.shapeType ?? 'rectangle'}
+            onChange={(e) => patchSelected({ shapeType: e.target.value as ThumbnailShapeType })}
+          >
+            <option value="rectangle">Rectangle</option>
+            <option value="pill">Pill</option>
+            <option value="circle">Circle</option>
+            <option value="line">Line</option>
+          </select>
+        </Field>
+      )}
+      <NumField
+        step="thumbnail" name="sel_opacity" label="Opacity (%)"
+        value={selected.opacity ?? 100}
+        onChange={(v) => patchSelected({ opacity: Math.max(0, Math.min(100, v)) })}
+      />
+    </div>
+  )
+}
+
+function LayoutTab({
+  selected,
+  patchSelected,
+  duplicateSelected,
+  bringToFront,
+  sendToBack,
+  clearSelectedOverride,
+  removeSelected,
+  isCustom,
+}: {
+  selected: ThumbnailElement
+  patchSelected: (patch: Partial<ThumbnailElement>) => void
+  duplicateSelected: () => void
+  bringToFront: () => void
+  sendToBack: () => void
+  clearSelectedOverride: () => void
+  removeSelected: () => void
+  isCustom: boolean
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <NumField step="thumbnail" name="sel_x" label="X" value={selected.posX} onChange={(v) => patchSelected({ posX: v })} />
+        <NumField step="thumbnail" name="sel_y" label="Y" value={selected.posY} onChange={(v) => patchSelected({ posY: v })} />
+        <NumField step="thumbnail" name="sel_w" label="Width" value={selected.width ?? 0} onChange={(v) => patchSelected({ width: Math.max(20, v) })} />
+        <NumField step="thumbnail" name="sel_h" label="Height" value={selected.height ?? 0} onChange={(v) => patchSelected({ height: Math.max(20, v) })} />
+        <NumField step="thumbnail" name="sel_rot" label="Rotation°" value={selected.rotation ?? 0} onChange={(v) => patchSelected({ rotation: v })} />
+        <NumField step="thumbnail" name="sel_z" label="Z-index" value={selected.zIndex ?? 5} onChange={(v) => patchSelected({ zIndex: v })} />
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn-secondary btn-sm" onClick={duplicateSelected}>
+          <CopyIcon size={12} /> Duplicate
+        </button>
+        <button type="button" className="btn-secondary btn-sm" onClick={bringToFront} title="Bring to front">
+          <Layers size={12} /> Front
+        </button>
+        <button type="button" className="btn-secondary btn-sm" onClick={sendToBack} title="Send to back">
+          <Layers size={12} /> Back
+        </button>
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          onClick={() => patchSelected({ locked: !selected.locked })}
+        >
+          {selected.locked ? <Unlock size={12} /> : <Lock size={12} />}
+          {selected.locked ? 'Unlock' : 'Lock'}
+        </button>
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          onClick={() => patchSelected({ visible: !(selected.visible !== false) })}
+        >
+          {selected.visible !== false ? <EyeOff size={12} /> : <Eye size={12} />}
+          {selected.visible !== false ? 'Hide' : 'Show'}
+        </button>
+        {!isCustom && (
+          <button type="button" className="btn-ghost btn-sm" onClick={clearSelectedOverride} title="Reset overrides for this element">
+            <RotateCcw size={12} /> Reset
+          </button>
+        )}
+        <button type="button" className="btn-ghost btn-sm text-rose-600 dark:text-rose-300" onClick={removeSelected}>
+          <Trash2 size={12} /> Remove
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function LayersPanel({
+  allElements,
+  selectedId,
+  hidden,
+  added,
+  onSelect,
+  onToggleVisibility,
+  onToggleLock,
+  onBringFront,
+  onSendBack,
+  onRemove,
+}: {
+  allElements: ThumbnailElement[]
+  selectedId: string | null
+  hidden: string[]
+  added: NonNullable<GenerateSettings['auto_thumbnail_added_elements']>
+  onSelect: (id: string) => void
+  onToggleVisibility: (el: ThumbnailElement) => void
+  onToggleLock: (el: ThumbnailElement) => void
+  onBringFront: (el: ThumbnailElement) => void
+  onSendBack: (el: ThumbnailElement) => void
+  onRemove: (el: ThumbnailElement) => void
+}) {
+  return (
+    <div className="space-y-1">
+      {allElements.map((el) => {
+        const isHidden = el.visible === false || hidden.includes(el.id)
+        const isCustom = Boolean(added[el.id])
+        const isSelected = selectedId === el.id
+        return (
+          <div
+            key={el.id}
+            className={
+              'flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs transition-colors ' +
+              (isSelected
+                ? 'border-brand-500 bg-brand-50 dark:bg-brand-500/10'
+                : 'border-transparent hover:bg-slate-50 dark:hover:bg-white/5')
+            }
+            onClick={() => onSelect(el.id)}
+          >
+            <button
+              type="button"
+              className="rounded p-1 text-slate-500 hover:bg-slate-100 dark:hover:bg-white/10"
+              onClick={(e) => { e.stopPropagation(); onToggleVisibility(el) }}
+              title={isHidden ? 'Show' : 'Hide'}
+            >
+              {isHidden ? <EyeOff size={12} /> : <Eye size={12} />}
+            </button>
+            <button
+              type="button"
+              className="rounded p-1 text-slate-500 hover:bg-slate-100 dark:hover:bg-white/10"
+              onClick={(e) => { e.stopPropagation(); onToggleLock(el) }}
+              title={el.locked ? 'Unlock' : 'Lock'}
+            >
+              {el.locked ? <Lock size={12} /> : <Unlock size={12} />}
+            </button>
+            <span className="ml-1 min-w-0 flex-1 truncate">
+              {elementDisplayName(el)}
+              {isCustom && <span className="ml-1 text-[10px] uppercase text-brand-600">+ added</span>}
+            </span>
+            <button
+              type="button"
+              className="rounded p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-white/10"
+              onClick={(e) => { e.stopPropagation(); onBringFront(el) }}
+              title="Bring forward"
+            >
+              ▲
+            </button>
+            <button
+              type="button"
+              className="rounded p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-white/10"
+              onClick={(e) => { e.stopPropagation(); onSendBack(el) }}
+              title="Send back"
+            >
+              ▼
+            </button>
+            <button
+              type="button"
+              className="rounded p-1 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10"
+              onClick={(e) => { e.stopPropagation(); onRemove(el) }}
+              title="Remove / hide"
+            >
+              <Trash2 size={12} />
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function elementDisplayName(el: ThumbnailElement): string {
-  const text = (el.text || '').replace(/\s+/g, ' ').trim().slice(0, 28)
-  const label = text ? `${el.id} — “${text}”` : el.id
-  return label
+  const friendly = PRESET_LABELS[el.id]
+  if (friendly) return friendly
+  const text = (el.text || '').replace(/\s+/g, ' ').trim().slice(0, 32)
+  if (text) return text
+  if (el.type === 'shape') return `Shape (${el.shapeType ?? 'rectangle'})`
+  if (el.type === 'image') return 'Image'
+  if (el.type === 'badge') return 'Badge'
+  return el.type
 }
 
 function ThumbnailEditableElement({

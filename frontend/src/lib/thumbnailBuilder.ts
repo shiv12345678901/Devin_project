@@ -1,13 +1,18 @@
 import type { GenerateSettings } from '../api/types'
 
 /**
- * Visual builder used by the auto-thumbnail panel and the YouTube intro
- * thumbnail slot. Each thumbnail is a fixed-size canvas containing a flat
- * dictionary of absolutely-positioned elements that we draw with the 2D
- * canvas API. The exact same model is rendered server-side later, so any
- * change here must keep the data JSON-serializable (no class instances,
- * no functions).
+ * Auto thumbnail builder for the Text-to-Video pipeline.
+ *
+ * One opinionated 1280×720 layout — the "Education Classic" theme —
+ * rendered into a flat, JSON-serializable element tree. Users can:
+ *   - tweak any preset element (`auto_thumbnail_overrides`)
+ *   - hide preset elements (`auto_thumbnail_hidden_elements`)
+ *   - add their own elements on top (`auto_thumbnail_added_elements`)
+ *
+ * The visual editor in `pages/TextToVideo.tsx` mutates exactly those three
+ * fields, and the run pipeline picks them back up here at "Use it" time.
  */
+
 export type ThumbnailElementType =
   | 'title'
   | 'label'
@@ -20,18 +25,6 @@ export type ThumbnailElementType =
   | 'badge'
 
 export type ThumbnailShapeType = 'rectangle' | 'circle' | 'pill' | 'line'
-
-export type CanvasFillType = 'solid' | 'linear' | 'radial'
-
-export interface CanvasFill {
-  type: CanvasFillType
-  /** Solid color when {@link type} is `solid`; first stop otherwise. */
-  color: string
-  /** Stops `[from, to]` for linear/radial. */
-  colors?: [string, string]
-  /** Linear-gradient angle in degrees (0 = top → bottom, 90 = left → right). */
-  angle?: number
-}
 
 export interface ThumbnailElement {
   id: string
@@ -78,359 +71,132 @@ export interface ThumbnailElement {
 export interface ThumbnailTemplateState {
   canvasWidth: number
   canvasHeight: number
-  /** Solid color shorthand. {@link canvasFill} takes precedence when set. */
   canvasBackground: string
-  canvasFill?: CanvasFill
   elements: Record<string, ThumbnailElement>
 }
 
-export interface ThumbnailTemplatePreset {
-  id: string
-  label: string
-  description: string
-  /** Aspect ratios supported by this preset; first one is default. */
-  aspects?: ThumbnailAspectId[]
-  build: (settings: GenerateSettings, text: string) => ThumbnailTemplateState
-}
+export const THUMBNAIL_CANVAS_WIDTH = 1280
+export const THUMBNAIL_CANVAS_HEIGHT = 720
 
-export type ThumbnailAspectId = '16:9' | '1:1' | '9:16'
-
-export const THUMBNAIL_ASPECTS: Record<ThumbnailAspectId, { width: number; height: number; label: string; description: string }> = {
-  '16:9': { width: 1280, height: 720, label: '16:9 — YouTube', description: '1280 × 720, the standard YouTube thumbnail size' },
-  '1:1': { width: 1080, height: 1080, label: '1:1 — Square', description: '1080 × 1080, ideal for Instagram or LinkedIn' },
-  '9:16': { width: 1080, height: 1920, label: '9:16 — Shorts', description: '1080 × 1920, for YouTube Shorts / TikTok / Reels' },
-}
-
-const DEFAULT_FONT = "'Inter', 'Noto Sans Devanagari', system-ui, Arial, sans-serif"
+const HEADING_FONT = "'Inter', 'Noto Sans Devanagari', system-ui, Arial, sans-serif"
 const DEVANAGARI_FONT = "'Noto Sans Devanagari', 'Inter', system-ui, Arial, sans-serif"
 
-/* ───────────────────────── Preset templates ─────────────────────────── */
+/* Education Classic palette — handpicked so backgrounds, badges, and
+ * text stay readable next to each other.  Tweaking these here
+ * automatically updates every freshly-generated thumbnail. */
+const PALETTE = {
+  canvas: '#1f6f3a',
+  cardBg: '#fdfaee',
+  headerBg: '#ffd400',
+  headerText: '#0f172a',
+  chapterLabel: '#1e3a8a',
+  chapterText: '#dc2626',
+  pillBg: '#dc2626',
+  pillText: '#ffffff',
+  badgeBg: '#ffd400',
+  badgeText: '#7f1d1d',
+  imageFrame: '#ffffff',
+  imageShadow: 'rgba(0, 0, 0, 0.35)',
+}
+
+/* ─────────────────────────── Education Classic ─────────────────────── */
+
+export function buildAutoThumbnailTemplate(
+  settings: GenerateSettings,
+  text: string,
+): ThumbnailTemplateState {
+  let template = educationClassic(settings, text)
+  if (settings.auto_thumbnail_canvas_background) {
+    template = { ...template, canvasBackground: settings.auto_thumbnail_canvas_background }
+  }
+  template = applyTemplateOverrides(template, settings.auto_thumbnail_overrides)
+  template = applyAddedElements(template, settings.auto_thumbnail_added_elements)
+  template = applyHiddenElements(template, settings.auto_thumbnail_hidden_elements)
+  return template
+}
 
 function educationClassic(settings: GenerateSettings, text: string): ThumbnailTemplateState {
   const className = cleanLine(settings.class_name, 'Class')
   const subject = cleanLine(settings.subject, 'Subject')
   const title = cleanLine(settings.title, 'Chapter')
   const [line1, line2] = splitTitle(title)
-  const chapterNum = cleanLine(settings.auto_thumbnail_chapter_num, title.match(/\d+/)?.[0] ?? '1')
+  const chapterNum = cleanLine(
+    settings.auto_thumbnail_chapter_num,
+    title.match(/\d+/)?.[0] ?? '1',
+  )
   const year = cleanLine(settings.auto_thumbnail_year, '2083')
+  const chapterPrefix = cleanLine(settings.auto_thumbnail_chapter_prefix, 'पाठ')
   const sideImageUrl = cleanLine(settings.auto_thumbnail_side_image_url, '')
 
   return {
-    canvasWidth: 1280,
-    canvasHeight: 720,
-    canvasBackground: '#4caf50',
+    canvasWidth: THUMBNAIL_CANVAS_WIDTH,
+    canvasHeight: THUMBNAIL_CANVAS_HEIGHT,
+    canvasBackground: PALETTE.canvas,
     elements: {
-      leftPanel: panel('leftPanel', { posX: 15, posY: 144, width: 665, height: 356, backgroundColor: '#d4e5f7', borderRadius: 8, zIndex: 1 }),
-      rightPanel: panel('rightPanel', { posX: 700, posY: 0, width: 580, height: 720, backgroundColor: '#1a1a1a', zIndex: 1 }),
-      title: textBox('title', `${className} ${subject}`, {
-        type: 'title', posX: 15, posY: 18, width: 665, height: 112,
-        fontSize: 70, fontWeight: '900', color: '#000000', backgroundColor: '#ffee00',
-        borderRadius: 12, paddingX: 32, paddingY: 10, zIndex: 5, textAlign: 'center',
+      /* Cream card behind the title block — gives the red headline a
+       * high-contrast surface to sit on. */
+      titleCard: panel('titleCard', {
+        posX: 32, posY: 156, width: 660, height: 376,
+        backgroundColor: PALETTE.cardBg, borderRadius: 16,
+        zIndex: 1,
       }),
-      chapterLabel: textBox('chapterLabel', `पाठ ${chapterNum} :`, {
-        type: 'label', posX: 190, posY: 188, width: 300, height: 68,
-        fontSize: 65, fontWeight: '800', color: '#1a1a3e', fontFamily: DEVANAGARI_FONT,
-        zIndex: 2, paddingY: 8, textAlign: 'left',
+      /* Yellow header bar — class & subject label. */
+      classSubject: textBox('classSubject', `${className} ${subject}`, {
+        type: 'title', posX: 32, posY: 30, width: 660, height: 110,
+        fontSize: 64, fontWeight: '900', color: PALETTE.headerText,
+        backgroundColor: PALETTE.headerBg, borderRadius: 16,
+        paddingX: 32, paddingY: 8, zIndex: 5, textAlign: 'center',
+        letterSpacing: 1,
       }),
+      /* "पाठ N :" Devanagari label sitting on the cream card. */
+      chapterLabel: textBox('chapterLabel', `${chapterPrefix} ${chapterNum} :`, {
+        type: 'label', posX: 56, posY: 178, width: 612, height: 80,
+        fontSize: 60, fontWeight: '800', color: PALETTE.chapterLabel,
+        fontFamily: DEVANAGARI_FONT, textAlign: 'left',
+        backgroundColor: 'transparent', paddingX: 12, paddingY: 0,
+        zIndex: 4,
+      }),
+      /* Chapter title — split across two lines for readability. */
       chapterLine1: textBox('chapterLine1', line1 || autoThumbnailSummary(text), {
-        type: 'chapter-text', posX: 70, posY: 300, width: 560, height: 125,
-        fontSize: 87, fontWeight: '900', color: '#e51c23', zIndex: 5, textAlign: 'center',
-      }),
-      chapterLine2: textBox('chapterLine2', line2, {
-        type: 'chapter-text', posX: 70, posY: 402, width: 560, height: 76,
-        fontSize: 74, fontWeight: '900', color: '#e51c23', zIndex: 5, textAlign: 'center',
-      }),
-      labelNew: textBox('labelNew', `New\n${year}`, {
-        type: 'label', posX: 15, posY: 532, width: 287, height: 172,
-        fontSize: 62, fontWeight: '800', color: '#ffffff', backgroundColor: '#e51c23',
-        borderRadius: 12, paddingX: 32, paddingY: 16, zIndex: 1, textAlign: 'center',
-      }),
-      labelChapter: textBox('labelChapter', `Chapter\n${chapterNum}`, {
-        type: 'label', posX: 324, posY: 536, width: 357, height: 168,
-        fontSize: 61, fontWeight: '800', color: '#ffffff', backgroundColor: '#e51c23',
-        borderRadius: 12, paddingX: 32, paddingY: 16, zIndex: 1, textAlign: 'center',
-      }),
-      rightImage: imageBox('rightImage', sideImageUrl, settings, {
-        posX: 696, posY: 24, width: 565, height: 680,
-        backgroundColor: '#ffffff', borderRadius: 12, zIndex: 3,
-      }),
-      badgeYear: badge('badgeYear', year, {
-        posX: 1150, posY: 10, width: 120, height: 120,
-        fontSize: 32, fontWeight: '900', color: '#e51c23', backgroundColor: '#ffee00',
-        zIndex: 10,
-      }),
-      badgeNew: badge('badgeNew', 'New', {
-        posX: 1160, posY: 600, width: 100, height: 100,
-        fontSize: 28, fontWeight: '900', color: '#e51c23', backgroundColor: '#ffee00',
-        zIndex: 10, paddingX: 16, paddingY: 12,
-      }),
-    },
-  }
-}
-
-function modernSplit(settings: GenerateSettings, text: string): ThumbnailTemplateState {
-  const className = cleanLine(settings.class_name, 'Class 10')
-  const subject = cleanLine(settings.subject, 'Subject').toUpperCase()
-  const title = cleanLine(settings.title, 'Chapter')
-  const [line1, line2] = splitTitle(title)
-  const chapterNum = cleanLine(settings.auto_thumbnail_chapter_num, title.match(/\d+/)?.[0] ?? '1')
-  const year = cleanLine(settings.auto_thumbnail_year, '2083')
-  const sideImageUrl = cleanLine(settings.auto_thumbnail_side_image_url, '')
-
-  return {
-    canvasWidth: 1280,
-    canvasHeight: 720,
-    canvasBackground: '#0f172a',
-    canvasFill: { type: 'linear', color: '#0f172a', colors: ['#0f172a', '#1e293b'], angle: 135 },
-    elements: {
-      leftPanel: panel('leftPanel', {
-        posX: 0, posY: 0, width: 720, height: 720,
-        backgroundColor: '#1d4ed8', borderRadius: 0, zIndex: 1,
-      }),
-      classBadge: textBox('classBadge', className.toUpperCase(), {
-        type: 'label', posX: 60, posY: 60, width: 260, height: 64,
-        fontSize: 32, fontWeight: '800', color: '#1e293b', backgroundColor: '#fde047',
-        borderRadius: 999, paddingX: 28, paddingY: 14, letterSpacing: 1.5, zIndex: 5,
-      }),
-      subject: textBox('subject', subject, {
-        type: 'subtitle', posX: 60, posY: 144, width: 600, height: 56,
-        fontSize: 36, fontWeight: '700', color: '#bfdbfe', textAlign: 'left',
-        letterSpacing: 4, zIndex: 5,
-      }),
-      title: textBox('title', line1 || title, {
-        type: 'title', posX: 60, posY: 220, width: 620, height: 220,
-        fontSize: 110, fontWeight: '900', color: '#ffffff', textAlign: 'left',
-        zIndex: 6, shadowBlur: 18, shadowColor: 'rgba(0,0,0,0.45)', shadowOffsetY: 4,
-      }),
-      titleLine2: textBox('titleLine2', line2, {
-        type: 'title', posX: 60, posY: 360, width: 620, height: 120,
-        fontSize: 90, fontWeight: '900', color: '#fde047', textAlign: 'left', zIndex: 6,
-      }),
-      chapterTag: textBox('chapterTag', `CHAPTER ${chapterNum}`, {
-        type: 'label', posX: 60, posY: 590, width: 320, height: 64,
-        fontSize: 30, fontWeight: '800', color: '#0f172a', backgroundColor: '#ffffff',
-        borderRadius: 12, paddingX: 24, paddingY: 14, letterSpacing: 4, zIndex: 5,
-      }),
-      yearTag: textBox('yearTag', year, {
-        type: 'label', posX: 400, posY: 590, width: 140, height: 64,
-        fontSize: 30, fontWeight: '800', color: '#fde047',
-        borderRadius: 12, paddingX: 18, paddingY: 14, letterSpacing: 2, zIndex: 5,
-        backgroundColor: 'transparent',
-      }),
-      rightImage: imageBox('rightImage', sideImageUrl, settings, {
-        posX: 720, posY: 0, width: 560, height: 720, borderRadius: 0,
-        backgroundColor: '#1e293b', imageOverlay: 35, zIndex: 3,
-      }),
-      summary: textBox('summary', autoThumbnailSummary(text), {
-        type: 'subtitle', posX: 760, posY: 580, width: 480, height: 100,
-        fontSize: 28, fontWeight: '600', color: '#ffffff', textAlign: 'left',
-        zIndex: 8,
-      }),
-    },
-  }
-}
-
-function photoHero(settings: GenerateSettings, text: string): ThumbnailTemplateState {
-  const subject = cleanLine(settings.subject, 'Topic').toUpperCase()
-  const title = cleanLine(settings.title, 'Chapter')
-  const [line1, line2] = splitTitle(title)
-  const chapterNum = cleanLine(settings.auto_thumbnail_chapter_num, title.match(/\d+/)?.[0] ?? '1')
-  const sideImageUrl = cleanLine(settings.auto_thumbnail_side_image_url, '')
-
-  return {
-    canvasWidth: 1280,
-    canvasHeight: 720,
-    canvasBackground: '#0b1120',
-    elements: {
-      heroImage: imageBox('heroImage', sideImageUrl, settings, {
-        posX: 0, posY: 0, width: 1280, height: 720, borderRadius: 0,
-        backgroundColor: '#1e293b', imageOverlay: 55, zIndex: 1,
-      }),
-      accent: panel('accent', {
-        posX: 0, posY: 660, width: 1280, height: 60,
-        backgroundColor: '#ef4444', zIndex: 5,
-      }),
-      chapterBadge: textBox('chapterBadge', `CH ${chapterNum}`, {
-        type: 'label', posX: 60, posY: 60, width: 200, height: 80,
-        fontSize: 38, fontWeight: '900', color: '#0b1120', backgroundColor: '#fde047',
-        borderRadius: 16, paddingX: 22, paddingY: 18, letterSpacing: 2, zIndex: 6,
-      }),
-      subjectBadge: textBox('subjectBadge', subject, {
-        type: 'label', posX: 60, posY: 160, width: 360, height: 60,
-        fontSize: 28, fontWeight: '700', color: '#ffffff', backgroundColor: 'transparent',
-        textAlign: 'left', letterSpacing: 6, zIndex: 6,
-      }),
-      title: textBox('title', line1 || title, {
-        type: 'title', posX: 60, posY: 280, width: 1160, height: 200,
-        fontSize: 140, fontWeight: '900', color: '#ffffff', textAlign: 'left',
-        zIndex: 7, shadowBlur: 22, shadowColor: 'rgba(0,0,0,0.6)', shadowOffsetY: 6,
-        strokeWidth: 0, strokeColor: '#000000',
-      }),
-      titleLine2: textBox('titleLine2', line2, {
-        type: 'title', posX: 60, posY: 460, width: 1160, height: 140,
-        fontSize: 120, fontWeight: '900', color: '#fde047', textAlign: 'left',
-        zIndex: 7, shadowBlur: 22, shadowColor: 'rgba(0,0,0,0.6)', shadowOffsetY: 6,
-      }),
-      summary: textBox('summary', autoThumbnailSummary(text), {
-        type: 'subtitle', posX: 60, posY: 612, width: 1160, height: 40,
-        fontSize: 24, fontWeight: '600', color: '#f1f5f9', textAlign: 'left',
-        zIndex: 7,
-      }),
-    },
-  }
-}
-
-function boldMinimal(settings: GenerateSettings, text: string): ThumbnailTemplateState {
-  const subject = cleanLine(settings.subject, 'Topic').toUpperCase()
-  const title = cleanLine(settings.title, 'Title')
-  const [line1, line2] = splitTitle(title)
-  const chapterNum = cleanLine(settings.auto_thumbnail_chapter_num, title.match(/\d+/)?.[0] ?? '1')
-  return {
-    canvasWidth: 1280,
-    canvasHeight: 720,
-    canvasBackground: '#1d4ed8',
-    canvasFill: { type: 'linear', color: '#1d4ed8', colors: ['#1e3a8a', '#2563eb'], angle: 160 },
-    elements: {
-      ribbon: panel('ribbon', {
-        posX: 0, posY: 0, width: 24, height: 720,
-        backgroundColor: '#fde047', zIndex: 2,
-      }),
-      classTag: textBox('classTag', subject, {
-        type: 'label', posX: 80, posY: 90, width: 600, height: 60,
-        fontSize: 32, fontWeight: '700', color: '#bfdbfe', textAlign: 'left',
-        letterSpacing: 8, zIndex: 5,
-      }),
-      title: textBox('title', line1 || title, {
-        type: 'title', posX: 80, posY: 200, width: 1120, height: 220,
-        fontSize: 160, fontWeight: '900', color: '#ffffff', textAlign: 'left',
-        zIndex: 6, shadowBlur: 16, shadowColor: 'rgba(0,0,0,0.35)', shadowOffsetY: 4,
-      }),
-      titleLine2: textBox('titleLine2', line2, {
-        type: 'title', posX: 80, posY: 380, width: 1120, height: 180,
-        fontSize: 140, fontWeight: '900', color: '#fde047', textAlign: 'left',
-        zIndex: 6,
-      }),
-      footer: textBox('footer', autoThumbnailSummary(text), {
-        type: 'subtitle', posX: 80, posY: 600, width: 900, height: 56,
-        fontSize: 28, fontWeight: '600', color: '#bfdbfe', textAlign: 'left',
+        type: 'chapter-text', posX: 56, posY: 270, width: 612, height: 116,
+        fontSize: 84, fontWeight: '900', color: PALETTE.chapterText,
+        textAlign: 'center', backgroundColor: 'transparent',
         zIndex: 5,
       }),
-      chapterDot: textBox('chapterDot', chapterNum, {
-        type: 'badge', posX: 1080, posY: 540, width: 140, height: 140,
-        fontSize: 80, fontWeight: '900', color: '#1d4ed8', backgroundColor: '#fde047',
-        borderRadius: 999, zIndex: 6, textAlign: 'center', paddingY: 30,
+      chapterLine2: textBox('chapterLine2', line2, {
+        type: 'chapter-text', posX: 56, posY: 388, width: 612, height: 110,
+        fontSize: 76, fontWeight: '900', color: PALETTE.chapterText,
+        textAlign: 'center', backgroundColor: 'transparent',
+        zIndex: 5,
       }),
-    },
-  }
-}
-
-function splitCard(settings: GenerateSettings, text: string): ThumbnailTemplateState {
-  const className = cleanLine(settings.class_name, 'Class')
-  const subject = cleanLine(settings.subject, 'Subject')
-  const title = cleanLine(settings.title, 'Chapter')
-  const [line1, line2] = splitTitle(title)
-  const chapterNum = cleanLine(settings.auto_thumbnail_chapter_num, title.match(/\d+/)?.[0] ?? '1')
-  const year = cleanLine(settings.auto_thumbnail_year, '2083')
-  const sideImageUrl = cleanLine(settings.auto_thumbnail_side_image_url, '')
-
-  return {
-    canvasWidth: 1280,
-    canvasHeight: 720,
-    canvasBackground: '#fef3c7',
-    canvasFill: { type: 'linear', color: '#fef3c7', colors: ['#fde68a', '#fef3c7'], angle: 180 },
-    elements: {
-      card: panel('card', {
-        posX: 40, posY: 40, width: 1200, height: 640,
-        backgroundColor: '#ffffff', borderRadius: 24, zIndex: 1,
+      /* Single chapter pill at the bottom — replaces the previous stack of
+       * red boxes that fought each other for attention. */
+      chapterPill: textBox('chapterPill', `Chapter ${chapterNum}  •  New ${year}`, {
+        type: 'label', posX: 32, posY: 552, width: 660, height: 116,
+        fontSize: 48, fontWeight: '900', color: PALETTE.pillText,
+        backgroundColor: PALETTE.pillBg, borderRadius: 18,
+        paddingX: 32, paddingY: 20, zIndex: 4, textAlign: 'center',
+        letterSpacing: 1,
       }),
-      cardBorder: panel('cardBorder', {
-        posX: 56, posY: 56, width: 1168, height: 608,
-        backgroundColor: 'transparent', borderRadius: 16, zIndex: 1,
-        borderColor: '#fbbf24', borderWidth: 4,
-      }),
-      header: textBox('header', `${className} • ${subject}`, {
-        type: 'subtitle', posX: 80, posY: 80, width: 720, height: 60,
-        fontSize: 30, fontWeight: '700', color: '#b45309', textAlign: 'left',
-        letterSpacing: 4, zIndex: 5,
-      }),
-      title: textBox('title', line1 || title, {
-        type: 'title', posX: 80, posY: 180, width: 720, height: 180,
-        fontSize: 110, fontWeight: '900', color: '#7c2d12', textAlign: 'left',
-        zIndex: 6,
-      }),
-      titleLine2: textBox('titleLine2', line2, {
-        type: 'title', posX: 80, posY: 340, width: 720, height: 140,
-        fontSize: 96, fontWeight: '900', color: '#dc2626', textAlign: 'left',
-        zIndex: 6,
-      }),
-      summary: textBox('summary', autoThumbnailSummary(text), {
-        type: 'subtitle', posX: 80, posY: 530, width: 720, height: 90,
-        fontSize: 26, fontWeight: '600', color: '#78350f', textAlign: 'left',
-        zIndex: 6,
-      }),
+      /* Side photo with rounded frame and subtle shadow. */
       rightImage: imageBox('rightImage', sideImageUrl, settings, {
-        posX: 820, posY: 100, width: 380, height: 520, borderRadius: 20,
-        backgroundColor: '#fef3c7', zIndex: 4,
+        posX: 720, posY: 32, width: 528, height: 656,
+        backgroundColor: PALETTE.imageFrame, borderRadius: 24,
+        zIndex: 3,
       }),
-      chapterPill: textBox('chapterPill', `CHAPTER ${chapterNum}`, {
-        type: 'label', posX: 820, posY: 80, width: 220, height: 56,
-        fontSize: 24, fontWeight: '800', color: '#ffffff', backgroundColor: '#dc2626',
-        borderRadius: 999, paddingX: 24, paddingY: 14, letterSpacing: 2, zIndex: 7,
-      }),
-      yearTag: textBox('yearTag', `New ${year}`, {
-        type: 'label', posX: 1060, posY: 80, width: 140, height: 56,
-        fontSize: 24, fontWeight: '800', color: '#7c2d12', backgroundColor: '#fde047',
-        borderRadius: 999, paddingX: 16, paddingY: 14, letterSpacing: 1, zIndex: 7,
+      /* Single yellow starburst with the year — the visual anchor in the
+       * top-right that sells the "new edition" framing. */
+      yearBadge: badge('yearBadge', year, {
+        posX: 1138, posY: 38, width: 122, height: 122,
+        fontSize: 36, fontWeight: '900', color: PALETTE.badgeText,
+        backgroundColor: PALETTE.badgeBg, borderRadius: 0,
+        zIndex: 9,
       }),
     },
   }
 }
 
-export const THUMBNAIL_TEMPLATES: ThumbnailTemplatePreset[] = [
-  {
-    id: 'education-classic',
-    label: 'Education classic',
-    description: 'Yellow + red + green textbook layout with chapter labels and side photo.',
-    aspects: ['16:9', '1:1'],
-    build: educationClassic,
-  },
-  {
-    id: 'modern-split',
-    label: 'Modern split',
-    description: 'Brand color panel with bold typography and a photo on the right.',
-    aspects: ['16:9', '9:16', '1:1'],
-    build: modernSplit,
-  },
-  {
-    id: 'photo-hero',
-    label: 'Photo hero',
-    description: 'Full-bleed photo with a dark gradient and overlaid title.',
-    aspects: ['16:9', '9:16', '1:1'],
-    build: photoHero,
-  },
-  {
-    id: 'bold-minimal',
-    label: 'Bold minimal',
-    description: 'Solid gradient background. Big typography, no photo.',
-    aspects: ['16:9', '9:16', '1:1'],
-    build: boldMinimal,
-  },
-  {
-    id: 'split-card',
-    label: 'Split card',
-    description: 'Light tinted background with a clean white card and photo.',
-    aspects: ['16:9', '1:1'],
-    build: splitCard,
-  },
-]
-
-export const DEFAULT_TEMPLATE_ID = 'education-classic'
-
-export function findTemplatePreset(id: string | undefined | null): ThumbnailTemplatePreset {
-  return THUMBNAIL_TEMPLATES.find((t) => t.id === id) ?? THUMBNAIL_TEMPLATES[0]
-}
-
-/* ───────────────────────── Element helpers ─────────────────────────── */
+/* ───────────────────────── Element factories ───────────────────────── */
 
 type Patch<T> = Partial<T>
 
@@ -457,7 +223,7 @@ function textBox(id: string, text: string, patch: Patch<ThumbnailElement>): Thum
     borderColor: 'transparent', borderWidth: 0, borderRadius: 0,
     paddingX: 16, paddingY: 12, zIndex: 5, visible: true,
     textAlign: 'left',
-    fontFamily: DEFAULT_FONT,
+    fontFamily: HEADING_FONT,
     ...patch,
   }
 }
@@ -490,67 +256,15 @@ function badge(id: string, text: string, patch: Patch<ThumbnailElement>): Thumbn
     id, type: 'badge', text,
     posX: 0, posY: 0, width: 120, height: 120,
     fontSize: 32, fontWeight: '900',
-    color: '#000000',
-    backgroundColor: '#fde047',
-    borderColor: 'transparent', borderWidth: 0, borderRadius: 999,
+    color: PALETTE.badgeText,
+    backgroundColor: PALETTE.badgeBg,
+    borderColor: 'transparent', borderWidth: 0, borderRadius: 0,
     paddingX: 0, paddingY: 0, zIndex: 8, visible: true, textAlign: 'center',
     ...patch,
   }
 }
 
-/* ───────────────────────── Public builder API ──────────────────────── */
-
-export function buildAutoThumbnailTemplate(settings: GenerateSettings, text: string): ThumbnailTemplateState {
-  const preset = findTemplatePreset(settings.auto_thumbnail_template_id)
-  let template = preset.build(settings, text)
-
-  const aspect = settings.auto_thumbnail_canvas_aspect
-  if (aspect && aspect in THUMBNAIL_ASPECTS) {
-    const target = THUMBNAIL_ASPECTS[aspect]
-    if (target.width !== template.canvasWidth || target.height !== template.canvasHeight) {
-      template = scaleTemplate(template, target.width / template.canvasWidth, target.height / template.canvasHeight)
-    }
-  }
-
-  if (settings.auto_thumbnail_canvas_background) {
-    template = {
-      ...template,
-      canvasBackground: settings.auto_thumbnail_canvas_background,
-      canvasFill: { type: 'solid', color: settings.auto_thumbnail_canvas_background },
-    }
-  }
-
-  template = applyTemplateOverrides(template, settings.auto_thumbnail_overrides)
-  template = applyAddedElements(template, settings.auto_thumbnail_added_elements)
-  template = applyHiddenElements(template, settings.auto_thumbnail_hidden_elements)
-
-  return template
-}
-
-function scaleTemplate(template: ThumbnailTemplateState, sx: number, sy: number): ThumbnailTemplateState {
-  if (sx === 1 && sy === 1) return template
-  const scaleK = (sx + sy) / 2
-  const elements: Record<string, ThumbnailElement> = {}
-  for (const [id, e] of Object.entries(template.elements)) {
-    elements[id] = {
-      ...e,
-      posX: Math.round(e.posX * sx),
-      posY: Math.round(e.posY * sy),
-      width: e.width != null ? Math.round(e.width * sx) : e.width,
-      height: e.height != null ? Math.round(e.height * sy) : e.height,
-      fontSize: Math.round(e.fontSize * scaleK),
-      paddingX: Math.round(e.paddingX * sx),
-      paddingY: Math.round(e.paddingY * sy),
-      borderRadius: Math.round(e.borderRadius * scaleK),
-    }
-  }
-  return {
-    ...template,
-    canvasWidth: Math.round(template.canvasWidth * sx),
-    canvasHeight: Math.round(template.canvasHeight * sy),
-    elements,
-  }
-}
+/* ───────────────────────── Override pipeline ───────────────────────── */
 
 function applyTemplateOverrides(
   template: ThumbnailTemplateState,
@@ -592,7 +306,12 @@ function applyHiddenElements(
   return { ...template, elements }
 }
 
-export async function buildAutoThumbnailFile(settings: GenerateSettings, text: string): Promise<File> {
+/* ───────────────────────── Public render API ───────────────────────── */
+
+export async function buildAutoThumbnailFile(
+  settings: GenerateSettings,
+  text: string,
+): Promise<File> {
   const template = buildAutoThumbnailTemplate(settings, text)
   const blob = await renderTemplateToBlob(template, 1.5)
   const safeTitle = cleanLine(settings.title, 'thumbnail').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 40)
@@ -666,7 +385,9 @@ function renderTemplate(
   template: ThumbnailTemplateState,
   images: Record<string, HTMLImageElement>,
 ) {
-  paintCanvasBackground(ctx, template)
+  ctx.fillStyle = template.canvasBackground
+  ctx.fillRect(0, 0, template.canvasWidth, template.canvasHeight)
+
   const elements = Object.values(template.elements)
     .filter((e) => e.visible !== false)
     .sort((a, b) => (a.zIndex ?? 5) - (b.zIndex ?? 5))
@@ -684,36 +405,6 @@ function renderTemplate(
     drawElement(ctx, e, images[e.id])
     ctx.restore()
   }
-}
-
-function paintCanvasBackground(ctx: CanvasRenderingContext2D, template: ThumbnailTemplateState) {
-  const fill = template.canvasFill ?? { type: 'solid' as const, color: template.canvasBackground }
-  if (fill.type === 'solid') {
-    ctx.fillStyle = fill.color
-  } else if (fill.type === 'linear') {
-    const [a, b] = fill.colors ?? [fill.color, fill.color]
-    const angle = ((fill.angle ?? 180) % 360) * (Math.PI / 180)
-    const w = template.canvasWidth
-    const h = template.canvasHeight
-    const dx = Math.sin(angle) * w
-    const dy = -Math.cos(angle) * h
-    const cx = w / 2
-    const cy = h / 2
-    const grad = ctx.createLinearGradient(cx - dx / 2, cy - dy / 2, cx + dx / 2, cy + dy / 2)
-    grad.addColorStop(0, a)
-    grad.addColorStop(1, b)
-    ctx.fillStyle = grad
-  } else {
-    const [a, b] = fill.colors ?? [fill.color, fill.color]
-    const cx = template.canvasWidth / 2
-    const cy = template.canvasHeight / 2
-    const r = Math.max(template.canvasWidth, template.canvasHeight) * 0.7
-    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r)
-    grad.addColorStop(0, a)
-    grad.addColorStop(1, b)
-    ctx.fillStyle = grad
-  }
-  ctx.fillRect(0, 0, template.canvasWidth, template.canvasHeight)
 }
 
 function drawElement(
@@ -797,10 +488,18 @@ function drawImageElement(
   const width = e.width ?? 0
   const height = e.height ?? 0
   ctx.save()
+  // Subtle drop shadow that gives the framed photo depth on the green canvas.
+  ctx.shadowColor = PALETTE.imageShadow
+  ctx.shadowBlur = 24
+  ctx.shadowOffsetY = 8
+  roundedRect(ctx, x, y, width, height, e.borderRadius)
+  ctx.fillStyle = e.backgroundColor || '#ffffff'
+  ctx.fill()
+  ctx.restore()
+
+  ctx.save()
   roundedRect(ctx, x, y, width, height, e.borderRadius)
   ctx.clip()
-  ctx.fillStyle = e.backgroundColor || '#ffffff'
-  ctx.fillRect(x, y, width, height)
   const zoom = (e.imageZoom ?? 100) / 100
   const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight) * zoom
   const drawWidth = image.naturalWidth * scale
@@ -820,7 +519,7 @@ function drawImageElement(
 
 function drawTextBox(ctx: CanvasRenderingContext2D, e: ThumbnailElement) {
   if (e.backgroundColor && e.backgroundColor !== 'transparent') fillBox(ctx, e)
-  const fontFamily = e.fontFamily ?? DEFAULT_FONT
+  const fontFamily = e.fontFamily ?? HEADING_FONT
   const align = e.textAlign ?? (e.width ? 'center' : 'left')
   ctx.textAlign = align
   ctx.textBaseline = 'top'
@@ -839,12 +538,10 @@ function drawTextBox(ctx: CanvasRenderingContext2D, e: ThumbnailElement) {
   }
   ctx.font = `${e.fontWeight} ${fontSize}px ${fontFamily}`
   if (e.letterSpacing) {
-    // Browsers: Canvas2D `letterSpacing` is supported in modern engines; fall
-    // back gracefully where it isn't recognized.
     try {
       (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${e.letterSpacing}px`
     } catch {
-      // ignore unsupported letterSpacing setter
+      // Browsers without Canvas2D letterSpacing support just render flush text.
     }
   }
   const x =
@@ -893,13 +590,13 @@ function drawImagePlaceholder(ctx: CanvasRenderingContext2D, e: ThumbnailElement
   ctx.save()
   roundedRect(ctx, x, y, width, height, e.borderRadius)
   ctx.clip()
-  // Soft tinted background
+  // Soft tinted background so the placeholder reads as "image area" and not
+  // an empty white box.
   const grad = ctx.createLinearGradient(x, y, x + width, y + height)
   grad.addColorStop(0, '#e2e8f0')
   grad.addColorStop(1, '#cbd5e1')
   ctx.fillStyle = grad
   ctx.fillRect(x, y, width, height)
-  // Generic mountain + sun glyph
   ctx.fillStyle = '#94a3b8'
   ctx.beginPath()
   ctx.arc(x + width * 0.3, y + height * 0.32, Math.min(width, height) * 0.08, 0, Math.PI * 2)
@@ -912,7 +609,6 @@ function drawImagePlaceholder(ctx: CanvasRenderingContext2D, e: ThumbnailElement
   ctx.lineTo(x + width * 0.95, y + height * 0.78)
   ctx.closePath()
   ctx.fill()
-  // "Add image" hint
   ctx.fillStyle = '#475569'
   ctx.font = '600 22px Inter, system-ui, Arial, sans-serif'
   ctx.textAlign = 'center'
@@ -926,7 +622,7 @@ function drawBadge(ctx: CanvasRenderingContext2D, e: ThumbnailElement) {
   const h = e.height ?? w
   const cx = e.posX + w / 2
   const cy = e.posY + h / 2
-  ctx.fillStyle = e.backgroundColor || '#fde047'
+  ctx.fillStyle = e.backgroundColor || PALETTE.badgeBg
   if ((e.borderRadius ?? 0) >= Math.min(w, h) / 2) {
     ctx.beginPath()
     ctx.ellipse(cx, cy, w / 2, h / 2, 0, 0, Math.PI * 2)
@@ -939,7 +635,7 @@ function drawBadge(ctx: CanvasRenderingContext2D, e: ThumbnailElement) {
     ctx.fill()
   }
   if (!e.text) return
-  ctx.font = `${e.fontWeight} ${e.fontSize}px ${e.fontFamily ?? DEFAULT_FONT}`
+  ctx.font = `${e.fontWeight} ${e.fontSize}px ${e.fontFamily ?? HEADING_FONT}`
   ctx.fillStyle = e.color
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
@@ -1044,14 +740,8 @@ export function createShapeElement(id: string, shape: ThumbnailShapeType = 'rect
 export function createBadgeElement(id: string, text = 'New'): ThumbnailElement {
   return badge(id, text, {
     posX: 1100, posY: 40, width: 140, height: 140,
-    fontSize: 38, fontWeight: '900', color: '#1e293b',
-    backgroundColor: '#fde047', borderRadius: 999, zIndex: 9,
-  })
-}
-
-export function createImageElement(id: string): ThumbnailElement {
-  return imageBox(id, '', {}, {
-    posX: 200, posY: 150, width: 400, height: 400, borderRadius: 24,
+    fontSize: 38, fontWeight: '900', color: PALETTE.badgeText,
+    backgroundColor: PALETTE.badgeBg, borderRadius: 999, zIndex: 9,
   })
 }
 
