@@ -146,12 +146,20 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
   const subject = cleanLine(settings.subject, 'Subject')
   const title = cleanLine(settings.title, 'Chapter')
   const [line1, line2, line3] = splitTitle(title)
+  // Auto-detect "Unit 3" / "Chapter 1" / "पाठ ४" etc. from the title and
+  // body text so the thumbnail renders the right prefix + number even when
+  // the user hasn't manually populated `auto_thumbnail_chapter_num` /
+  // `auto_thumbnail_chapter_prefix`. Manual overrides always win.
+  const detected = detectChapterMeta(text, settings)
   const chapterNum = cleanLine(
     settings.auto_thumbnail_chapter_num,
-    title.match(/\d+/)?.[0] ?? '1',
+    detected?.num ?? title.match(/\d+/)?.[0] ?? '1',
   )
   const year = cleanLine(settings.auto_thumbnail_year, '2083')
-  const chapterPrefix = cleanLine(settings.auto_thumbnail_chapter_prefix, 'पाठ')
+  const chapterPrefix = cleanLine(
+    settings.auto_thumbnail_chapter_prefix,
+    detected?.prefix ?? 'पाठ',
+  )
   const sideImageUrl = cleanLine(settings.auto_thumbnail_side_image_url, '')
 
   return {
@@ -862,9 +870,79 @@ function cleanLine(value: string | undefined, fallback: string): string {
   return line || fallback
 }
 
+// ─── Chapter / unit auto-detection ─────────────────────────────────────
+//
+// Extract a "Unit N" / "Chapter N" / "पाठ ४" reference from the user's
+// project info + body text so the auto-thumbnail renderer can pick the
+// right prefix and number when neither is set explicitly.
+//
+// First match wins, in priority order: numeric English forms first
+// (unambiguous), then Devanagari fallbacks. The regex on Devanagari
+// "अध्याय" rejects suffixed forms like "अध्यायको" so they don't match the
+// bare word.
+const CHAPTER_PATTERNS: ReadonlyArray<{ prefix: string; re: RegExp }> = [
+  { prefix: 'Unit', re: /\bunit[\s\-_:.]*([0-9]{1,3})\b/i },
+  { prefix: 'Chapter', re: /\bchapter[\s\-_:.]*([0-9]{1,3})\b/i },
+  { prefix: 'Lesson', re: /\blesson[\s\-_:.]*([0-9]{1,3})\b/i },
+  { prefix: 'Section', re: /\bsection[\s\-_:.]*([0-9]{1,3})\b/i },
+  { prefix: 'Part', re: /\b(?:part|pt\.?)[\s\-_:.]*([0-9]{1,3})\b/i },
+  { prefix: 'Chapter', re: /\bch\.?[\s\-_:.]*([0-9]{1,3})\b/i },
+  { prefix: 'पाठ', re: /पाठ[\s\-_:.]*([0-9\u0966-\u096F]{1,3})/ },
+  { prefix: 'एकाइ', re: /एकाइ[\s\-_:.]*([0-9\u0966-\u096F]{1,3})/ },
+  { prefix: 'अध्याय', re: /अध्याय(?![\u0900-\u097F])[\s\-_:.]*([0-9\u0966-\u096F]{1,3})/ },
+]
+
+export function detectChapterMeta(
+  text: string,
+  settings: GenerateSettings,
+): { prefix: string; num: string } | null {
+  const haystacks = [
+    settings.title ?? '',
+    settings.subject ?? '',
+    settings.class_name ?? '',
+    text.slice(0, 800),
+  ]
+  for (const h of haystacks) {
+    if (!h) continue
+    for (const { prefix, re } of CHAPTER_PATTERNS) {
+      const m = h.match(re)
+      if (m) return { prefix, num: m[1] }
+    }
+  }
+  return null
+}
+
+/** Parse an ASCII-or-Devanagari numeric string to an integer, or null. */
+export function parseChapterNum(num: string): number | null {
+  const ascii = num.replace(/[\u0966-\u096F]/g, (d) => String(d.charCodeAt(0) - 0x0966))
+  const n = parseInt(ascii, 10)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Increment a chapter-number string while preserving its script. Devanagari
+ * digits stay Devanagari. Returns the original string if it isn't numeric.
+ */
+export function incrementChapterNum(num: string): string {
+  const n = parseChapterNum(num)
+  if (n == null) return num
+  const next = String(n + 1)
+  if (!/[\u0966-\u096F]/.test(num)) return next
+  return next.replace(/[0-9]/g, (d) => String.fromCharCode(0x0966 + d.charCodeAt(0) - 48))
+}
+
 function splitTitle(title: string): [string, string, string] {
   const normalized = title.replace(/\u2013|\u2014/g, '-')
-  const words = normalized.replace(/^Chapter\s*\d+\s*[-:]?\s*/i, '').split(/\s+/).filter(Boolean)
+  // Strip a leading "Unit 3:", "Chapter 1 -", "Lesson 2 –", "पाठ ४:", etc.
+  // The chapter pill already shows that prefix + number; we don't want it
+  // duplicated in the title block.
+  const stripped = normalized
+    .replace(
+      /^(?:unit|chapter|ch\.?|lesson|section|part|pt\.?|पाठ|एकाइ|अध्याय)[\s\-_:.]*[\d\u0966-\u096F]+\s*[-:.]?\s*/i,
+      '',
+    )
+    .trim()
+  const words = stripped.split(/\s+/).filter(Boolean)
   if (words.length <= 2) return [words.join(' '), '', '']
   if (words.length <= 5) {
     const mid = Math.ceil(words.length / 2)

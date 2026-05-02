@@ -41,6 +41,8 @@ import {
   renderTemplateToDataUrl,
   duplicateElement,
   nextElementId,
+  detectChapterMeta,
+  incrementChapterNum,
   type ThumbnailElement,
   type ThumbnailShapeType,
 } from '../lib/thumbnailBuilder'
@@ -421,6 +423,18 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     }
   }, [settings.auto_thumbnail_side_image_url])
 
+  // Compute the chapter / unit number that *would* be used by the
+  // auto-thumbnail renderer right now. Manual override beats auto-detection
+  // beats the "Chapter 1" fallback. Used to derive the outro number, which
+  // is one greater than whatever the intro renders with.
+  const currentChapterNum = (): string => {
+    const manual = (settings.auto_thumbnail_chapter_num ?? '').trim()
+    if (manual) return manual
+    const detected = detectChapterMeta(text, settings)
+    if (detected) return detected.num
+    return '1'
+  }
+
   const useAutoThumbnailNow = async (slot: 'intro' | 'outro' | 'both' = 'intro') => {
     if (autoThumbnailSaving) return
     setAutoThumbnailSaving(true)
@@ -429,12 +443,31 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
       // 2× pixel ratio gives a 3840×2160 master file for sharper YouTube
       // uploads; the default 1.5× already exceeds the on-screen 1920×1080.
       const pixelRatio = settings.auto_thumbnail_export_2x ? 2 : 1.5
-      const file = await buildAutoThumbnailFile(settings, text, pixelRatio)
+      // Build the intro file from the current settings as-is.
+      // Build the outro file from a clone with `auto_thumbnail_chapter_num`
+      // bumped by one — so unit 2's outro reads "Unit 3", chapter 5's outro
+      // reads "Chapter 6", पाठ ४'s outro reads पाठ ५, etc. The on-screen
+      // settings stay at their current value so re-saving the intro after
+      // doesn't accidentally bump it. (Use for both = intro at N + outro at
+      // N+1 in one click.)
+      let introFile: File | null = null
+      if (slot === 'intro' || slot === 'both') {
+        introFile = await buildAutoThumbnailFile(settings, text, pixelRatio)
+      }
+      let outroFile: File | null = null
+      if (slot === 'outro' || slot === 'both') {
+        const outroSettings: GenerateSettings = {
+          ...settings,
+          auto_thumbnail_chapter_num: incrementChapterNum(currentChapterNum()),
+        }
+        outroFile = await buildAutoThumbnailFile(outroSettings, text, pixelRatio)
+      }
+
       // Each slot uploads its own file so updating one never disturbs the
       // other. ('both' uploads twice; tiny cost vs. the surprise of one
       // shared file overwriting both slots when only one was edited.)
-      if (slot === 'intro' || slot === 'both') {
-        const { filename } = await api.uploadThumbnail(file)
+      if (introFile) {
+        const { filename } = await api.uploadThumbnail(introFile)
         setSettings((prev) => ({
           ...prev,
           intro_thumbnail_enabled: true,
@@ -442,8 +475,8 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
           auto_thumbnail_generated: true,
         }))
       }
-      if (slot === 'outro' || slot === 'both') {
-        const { filename } = await api.uploadThumbnail(file)
+      if (outroFile) {
+        const { filename } = await api.uploadThumbnail(outroFile)
         setSettings((prev) => ({
           ...prev,
           outro_thumbnail_enabled: true,
