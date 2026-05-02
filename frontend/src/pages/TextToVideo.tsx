@@ -22,6 +22,7 @@ import {
   Lock,
   Unlock,
   RotateCcw,
+  ArrowLeftRight,
 } from 'lucide-react'
 
 import PreflightModal from '../components/PreflightModal'
@@ -468,6 +469,24 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     })
   }
 
+  // Swap intro ↔ outro thumbnail file references. Useful when the end-card
+  // saved as outro of one unit should become the intro of the next ("Reuse
+  // previous run" → swap → ready). Files on disk are untouched; only the
+  // pointers and the auto-generated flags are exchanged.
+  const swapIntroOutroThumbnails = () => {
+    setSettings((prev) => ({
+      ...prev,
+      intro_thumbnail_filename: prev.outro_thumbnail_filename,
+      outro_thumbnail_filename: prev.intro_thumbnail_filename,
+      intro_thumbnail_enabled:
+        prev.outro_thumbnail_filename?.trim() ? true : prev.intro_thumbnail_enabled,
+      outro_thumbnail_enabled:
+        prev.intro_thumbnail_filename?.trim() ? true : prev.outro_thumbnail_enabled,
+      auto_thumbnail_generated: prev.auto_thumbnail_outro_generated,
+      auto_thumbnail_outro_generated: prev.auto_thumbnail_generated,
+    }))
+  }
+
   const perStepErrors: Record<StepId, FieldErrors> = useMemo(() => ({
     project: validateStep('project', settings, text, sourceMode, shouldAutoBuildThumbnail),
     content: validateStep('content', settings, text, sourceMode, shouldAutoBuildThumbnail),
@@ -708,6 +727,7 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
             onUseAutoThumbnail={useAutoThumbnailNow}
             onToggleAutoThumbnailEdit={() => setAutoThumbnailEditOpen((v) => !v)}
             onAutoThumbnailSideImage={setAutoThumbnailSideImage}
+            onSwapIntroOutroThumbnails={swapIntroOutroThumbnails}
           />
         )}
 
@@ -1378,6 +1398,7 @@ function ThumbnailStep({
   onUseAutoThumbnail,
   onToggleAutoThumbnailEdit,
   onAutoThumbnailSideImage,
+  onSwapIntroOutroThumbnails,
 }: {
   settings: GenerateSettings
   text: string
@@ -1391,6 +1412,7 @@ function ThumbnailStep({
   onUseAutoThumbnail: (slot?: 'intro' | 'outro' | 'both') => void
   onToggleAutoThumbnailEdit: () => void
   onAutoThumbnailSideImage: (file: File | null) => void
+  onSwapIntroOutroThumbnails: () => void
 }) {
   return (
     <>
@@ -1445,6 +1467,7 @@ function ThumbnailStep({
           onUseAutoThumbnail={onUseAutoThumbnail}
           onToggleAutoThumbnailEdit={onToggleAutoThumbnailEdit}
           onAutoThumbnailSideImage={onAutoThumbnailSideImage}
+          onSwapIntroOutroThumbnails={onSwapIntroOutroThumbnails}
         />
       )}
     </>
@@ -1461,6 +1484,7 @@ function AutoThumbnailPanel({
   onUseAutoThumbnail,
   onToggleAutoThumbnailEdit,
   onAutoThumbnailSideImage,
+  onSwapIntroOutroThumbnails,
 }: {
   settings: GenerateSettings
   text: string
@@ -1471,6 +1495,7 @@ function AutoThumbnailPanel({
   onUseAutoThumbnail: (slot?: 'intro' | 'outro' | 'both') => void
   onToggleAutoThumbnailEdit: () => void
   onAutoThumbnailSideImage: (file: File | null) => void
+  onSwapIntroOutroThumbnails: () => void
 }) {
   const hasSavedIntro = Boolean((settings.intro_thumbnail_filename ?? '').trim())
   const hasSavedOutro = Boolean((settings.outro_thumbnail_filename ?? '').trim())
@@ -1722,6 +1747,19 @@ function AutoThumbnailPanel({
               title="Save the current template as both the intro and outro thumbnail in one click."
             >
               <Check size={13} /> Use for both
+            </button>
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={onSwapIntroOutroThumbnails}
+              disabled={autoThumbnailSaving || (!hasSavedIntro && !hasSavedOutro)}
+              title={
+                hasSavedIntro || hasSavedOutro
+                  ? 'Swap the intro and outro thumbnail files. Useful when the end-card you saved as the outro of the previous unit should become the intro of this one.'
+                  : 'Save an intro or outro thumbnail first to enable swap.'
+              }
+            >
+              <ArrowLeftRight size={13} /> Swap intro ↔ outro
             </button>
             <button
               type="button"
@@ -2526,9 +2564,9 @@ function ContentTab({
             <input
               type="range"
               min={12}
-              max={120}
+              max={200}
               className="w-full"
-              value={selected.fontSize}
+              value={Math.min(selected.fontSize, 200)}
               onChange={(e) => patchSelected({ fontSize: Number(e.target.value) })}
             />
           </Field>
@@ -2670,7 +2708,10 @@ function StyleTab({
           <NumField
             step="thumbnail" name="selected_font_size" label="Font size"
             value={selected.fontSize}
-            onChange={(v) => patchSelected({ fontSize: Math.max(8, v) })}
+            // Clamp to 8–200 to match the slider above; lets the user type
+            // very large headings without losing the 200 px ceiling that the
+            // slider enforces.
+            onChange={(v) => patchSelected({ fontSize: Math.min(200, Math.max(8, v)) })}
           />
           <Field label="Weight">
             <select
