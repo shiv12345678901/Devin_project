@@ -440,6 +440,7 @@ _API_EXACT = {
     '/runs/queue',
     '/youtube/videos',
     '/upload-thumbnail',
+    '/thumbnail-templates',
 }
 _API_PATH_PREFIXES = (
     '/cancel/',
@@ -447,6 +448,7 @@ _API_PATH_PREFIXES = (
     '/screenshots/',
     '/html/',
     '/thumbnails/',
+    '/thumbnail-templates/',
     '/download/',
     '/delete/',
     '/cache/',

@@ -75,8 +75,11 @@ export interface ThumbnailTemplateState {
   elements: Record<string, ThumbnailElement>
 }
 
-export const THUMBNAIL_CANVAS_WIDTH = 1280
-export const THUMBNAIL_CANVAS_HEIGHT = 720
+const TEMPLATE_BASE_WIDTH = 1280
+const TEMPLATE_BASE_HEIGHT = 720
+
+export const THUMBNAIL_CANVAS_WIDTH = 1920
+export const THUMBNAIL_CANVAS_HEIGHT = 1080
 
 const HEADING_FONT = "'Inter', 'Noto Sans Devanagari', system-ui, Arial, sans-serif"
 const DEVANAGARI_FONT = "'Noto Sans Devanagari', 'Inter', system-ui, Arial, sans-serif"
@@ -85,17 +88,18 @@ const DEVANAGARI_FONT = "'Noto Sans Devanagari', 'Inter', system-ui, Arial, sans
  * text stay readable next to each other.  Tweaking these here
  * automatically updates every freshly-generated thumbnail. */
 const PALETTE = {
-  canvas: '#1f6f3a',
-  cardBg: '#fdfaee',
-  headerBg: '#ffd400',
-  headerText: '#0f172a',
-  chapterLabel: '#1e3a8a',
-  chapterText: '#dc2626',
-  pillBg: '#dc2626',
+  canvas: '#4caf50',
+  leftPanel: '#d4e5f7',
+  rightPanel: '#1a1a1a',
+  headerBg: '#ffee00',
+  headerText: '#000000',
+  chapterLabel: '#1a1a3e',
+  chapterText: '#e51c23',
+  pillBg: '#e51c23',
   pillText: '#ffffff',
-  badgeBg: '#ffd400',
-  badgeText: '#7f1d1d',
-  imageFrame: '#ffffff',
+  badgeBg: '#ffee00',
+  badgeText: '#e51c23',
+  imageFrame: '#111111',
   imageShadow: 'rgba(0, 0, 0, 0.35)',
 }
 
@@ -119,7 +123,7 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
   const className = cleanLine(settings.class_name, 'Class')
   const subject = cleanLine(settings.subject, 'Subject')
   const title = cleanLine(settings.title, 'Chapter')
-  const [line1, line2] = splitTitle(title)
+  const [line1, line2, line3] = splitTitle(title)
   const chapterNum = cleanLine(
     settings.auto_thumbnail_chapter_num,
     title.match(/\d+/)?.[0] ?? '1',
@@ -132,71 +136,120 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
     canvasWidth: THUMBNAIL_CANVAS_WIDTH,
     canvasHeight: THUMBNAIL_CANVAS_HEIGHT,
     canvasBackground: PALETTE.canvas,
-    elements: {
+    elements: scaleTemplateElements({
       /* Cream card behind the title block — gives the red headline a
        * high-contrast surface to sit on. */
-      titleCard: panel('titleCard', {
-        posX: 32, posY: 156, width: 660, height: 376,
-        backgroundColor: PALETTE.cardBg, borderRadius: 16,
+      leftPanel: panel('leftPanel', {
+        posX: 15, posY: 144, width: 665, height: 356,
+        backgroundColor: PALETTE.leftPanel,
+        borderColor: '#ffffff',
+        borderStyle: 'dashed',
+        borderRadius: 8,
         zIndex: 1,
       }),
       /* Yellow header bar — class & subject label. */
-      classSubject: textBox('classSubject', `${className} ${subject}`, {
-        type: 'title', posX: 32, posY: 30, width: 660, height: 110,
-        fontSize: 64, fontWeight: '900', color: PALETTE.headerText,
-        backgroundColor: PALETTE.headerBg, borderRadius: 16,
-        paddingX: 32, paddingY: 8, zIndex: 5, textAlign: 'center',
-        letterSpacing: 1,
+      rightPanel: panel('rightPanel', {
+        posX: 700, posY: 0, width: 580, height: 720,
+        backgroundColor: PALETTE.rightPanel,
+        zIndex: 1,
+      }),
+      title: textBox('title', `${className} ${subject}`, {
+        type: 'title', posX: 13, posY: 18, width: 665, height: 96,
+        fontSize: 75, fontWeight: '900', color: PALETTE.headerText,
+        backgroundColor: PALETTE.headerBg, borderRadius: 12,
+        paddingX: 0, paddingY: 10, zIndex: 5, textAlign: 'center',
       }),
       /* "पाठ N :" Devanagari label sitting on the cream card. */
       chapterLabel: textBox('chapterLabel', `${chapterPrefix} ${chapterNum} :`, {
-        type: 'label', posX: 56, posY: 178, width: 612, height: 80,
-        fontSize: 60, fontWeight: '800', color: PALETTE.chapterLabel,
+        type: 'label', posX: 23, posY: 163, width: 230, height: 84,
+        fontSize: 65, fontWeight: '800', color: PALETTE.chapterLabel,
         fontFamily: DEVANAGARI_FONT, textAlign: 'left',
-        backgroundColor: 'transparent', paddingX: 12, paddingY: 0,
-        zIndex: 4,
+        backgroundColor: 'transparent', paddingX: 0, paddingY: 8,
+        zIndex: 2,
       }),
       /* Chapter title — split across two lines for readability. */
       chapterLine1: textBox('chapterLine1', line1 || autoThumbnailSummary(text), {
-        type: 'chapter-text', posX: 56, posY: 270, width: 612, height: 116,
-        fontSize: 84, fontWeight: '900', color: PALETTE.chapterText,
-        textAlign: 'center', backgroundColor: 'transparent',
+        type: 'chapter-text', posX: 270, posY: 161, width: 390, height: 110,
+        fontSize: 87, fontWeight: '900', color: PALETTE.chapterText,
+        textAlign: 'left', backgroundColor: 'transparent',
         zIndex: 5,
       }),
       chapterLine2: textBox('chapterLine2', line2, {
-        type: 'chapter-text', posX: 56, posY: 388, width: 612, height: 110,
-        fontSize: 76, fontWeight: '900', color: PALETTE.chapterText,
+        type: 'chapter-text', posX: 44, posY: 279, width: 614, height: 82,
+        fontSize: 75, fontWeight: '900', color: PALETTE.chapterText,
         textAlign: 'center', backgroundColor: 'transparent',
         zIndex: 5,
       }),
       /* Single chapter pill at the bottom — replaces the previous stack of
        * red boxes that fought each other for attention. */
-      chapterPill: textBox('chapterPill', `Chapter ${chapterNum}  •  New ${year}`, {
-        type: 'label', posX: 32, posY: 552, width: 660, height: 116,
-        fontSize: 48, fontWeight: '900', color: PALETTE.pillText,
-        backgroundColor: PALETTE.pillBg, borderRadius: 18,
-        paddingX: 32, paddingY: 20, zIndex: 4, textAlign: 'center',
-        letterSpacing: 1,
+      chapterLine3: textBox('chapterLine3', line3, {
+        type: 'chapter-text', posX: 46, posY: 379, width: 614, height: 82,
+        fontSize: 75, fontWeight: '900', color: PALETTE.chapterText,
+        textAlign: 'center', backgroundColor: 'transparent',
+        zIndex: 4,
+      }),
+      labelNew: textBox('labelNew', `New ${year}`, {
+        type: 'label', posX: 15, posY: 517, width: 287, height: 133,
+        fontSize: 62, fontWeight: '800', color: PALETTE.pillText,
+        backgroundColor: PALETTE.pillBg, borderRadius: 12,
+        paddingX: 0, paddingY: 16, zIndex: 4, textAlign: 'center',
+      }),
+      labelChapter: textBox('labelChapter', `Chapter\n${chapterNum}`, {
+        type: 'label', posX: 324, posY: 520, width: 357, height: 115,
+        fontSize: 61, fontWeight: '800', color: PALETTE.pillText,
+        backgroundColor: PALETTE.pillBg, borderRadius: 12,
+        paddingX: 0, paddingY: 16, zIndex: 4, textAlign: 'center',
       }),
       /* Side photo with rounded frame and subtle shadow. */
       rightImage: imageBox('rightImage', sideImageUrl, settings, {
-        posX: 720, posY: 32, width: 528, height: 656,
-        backgroundColor: PALETTE.imageFrame, borderRadius: 24,
+        posX: 696, posY: 24, width: 565, height: 680,
+        backgroundColor: PALETTE.imageFrame, borderRadius: 12,
         zIndex: 3,
       }),
       /* Single yellow starburst with the year — the visual anchor in the
        * top-right that sells the "new edition" framing. */
-      yearBadge: badge('yearBadge', year, {
-        posX: 1138, posY: 38, width: 122, height: 122,
-        fontSize: 36, fontWeight: '900', color: PALETTE.badgeText,
+      badgeYear: badge('badgeYear', year, {
+        posX: 1150, posY: 10, width: 120, height: 120,
+        fontSize: 32, fontWeight: '900', color: PALETTE.badgeText,
         backgroundColor: PALETTE.badgeBg, borderRadius: 0,
-        zIndex: 9,
+        paddingX: 20, paddingY: 16, zIndex: 10,
       }),
-    },
+      badgeNew: badge('badgeNew', 'New', {
+        posX: 1160, posY: 600, width: 100, height: 100,
+        fontSize: 28, fontWeight: '900', color: PALETTE.badgeText,
+        backgroundColor: PALETTE.badgeBg, borderRadius: 0,
+        paddingX: 16, paddingY: 12, zIndex: 10,
+      }),
+    }),
   }
 }
 
 /* ───────────────────────── Element factories ───────────────────────── */
+
+function scaleTemplateElements(
+  elements: Record<string, ThumbnailElement>,
+): Record<string, ThumbnailElement> {
+  const scaleX = THUMBNAIL_CANVAS_WIDTH / TEMPLATE_BASE_WIDTH
+  const scaleY = THUMBNAIL_CANVAS_HEIGHT / TEMPLATE_BASE_HEIGHT
+  const scaleRadius = (scaleX + scaleY) / 2
+
+  return Object.fromEntries(
+    Object.entries(elements).map(([id, element]) => [
+      id,
+      {
+        ...element,
+        posX: Math.round(element.posX * scaleX),
+        posY: Math.round(element.posY * scaleY),
+        width: element.width === undefined ? undefined : Math.round(element.width * scaleX),
+        height: element.height === undefined ? undefined : Math.round(element.height * scaleY),
+        fontSize: Math.round(element.fontSize * scaleY),
+        borderRadius: Math.round(element.borderRadius * scaleRadius),
+        paddingX: Math.round(element.paddingX * scaleX),
+        paddingY: Math.round(element.paddingY * scaleY),
+      },
+    ]),
+  )
+}
 
 type Patch<T> = Partial<T>
 
@@ -685,12 +738,20 @@ function cleanLine(value: string | undefined, fallback: string): string {
   return line || fallback
 }
 
-function splitTitle(title: string): [string, string] {
+function splitTitle(title: string): [string, string, string] {
   const normalized = title.replace(/\u2013|\u2014/g, '-')
   const words = normalized.replace(/^Chapter\s*\d+\s*[-:]?\s*/i, '').split(/\s+/).filter(Boolean)
-  if (words.length <= 2) return [words.join(' '), '']
-  const mid = Math.ceil(words.length / 2)
-  return [words.slice(0, mid).join(' '), words.slice(mid).join(' ')]
+  if (words.length <= 2) return [words.join(' '), '', '']
+  if (words.length <= 5) {
+    const mid = Math.ceil(words.length / 2)
+    return [words.slice(0, mid).join(' '), words.slice(mid).join(' '), '']
+  }
+  const chunk = Math.ceil(words.length / 3)
+  return [
+    words.slice(0, chunk).join(' '),
+    words.slice(chunk, chunk * 2).join(' '),
+    words.slice(chunk * 2).join(' '),
+  ]
 }
 
 function autoThumbnailSummary(text: string): string {

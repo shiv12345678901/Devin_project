@@ -5,16 +5,19 @@ import re
 import uuid
 import zipfile
 import time
+import json
 
 from flask import Blueprint, request, jsonify, send_file, Response
 from core.thumbnail_builder import ThumbnailParams, render_thumbnail_png
 
 THUMBNAILS_FOLDER = 'output/thumbnails'
+THUMBNAIL_TEMPLATES_FILE = 'output/thumbnail_templates.json'
 PRESENTATIONS_FOLDER = 'output/presentations'
 VIDEOS_FOLDER = 'output/videos'
 os.makedirs(THUMBNAILS_FOLDER, exist_ok=True)
 os.makedirs(PRESENTATIONS_FOLDER, exist_ok=True)
 os.makedirs(VIDEOS_FOLDER, exist_ok=True)
+os.makedirs(os.path.dirname(THUMBNAIL_TEMPLATES_FILE), exist_ok=True)
 
 from core.ai_client import cache
 from utils.performance_metrics import metrics_tracker
@@ -41,6 +44,24 @@ def _safe_child(base_folder, user_path):
     if candidate == abs_base or candidate.startswith(abs_base + os.sep):
         return candidate
     return None
+
+
+def _read_thumbnail_templates():
+    try:
+        with open(THUMBNAIL_TEMPLATES_FILE, 'r', encoding='utf-8') as fp:
+            data = json.load(fp)
+        return data if isinstance(data, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+
+
+def _write_thumbnail_templates(templates):
+    tmp_path = f'{THUMBNAIL_TEMPLATES_FILE}.tmp'
+    with open(tmp_path, 'w', encoding='utf-8') as fp:
+        json.dump(templates, fp, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, THUMBNAIL_TEMPLATES_FILE)
 
 
 @resources_bp.route('/screenshots/<path:filename>')
@@ -143,6 +164,74 @@ def generate_thumbnail():
         mimetype='image/png',
         headers={'Cache-Control': 'public, max-age=86400'},
     )
+
+
+@resources_bp.route('/thumbnail-templates', methods=['GET'])
+def list_thumbnail_templates():
+    """Return saved editable thumbnail templates, optionally scoped by class/subject."""
+    class_name = (request.args.get('className') or '').strip().lower()
+    subject = (request.args.get('subject') or '').strip().lower()
+    templates = _read_thumbnail_templates()
+    if class_name:
+        templates = [
+            item for item in templates
+            if str(item.get('className', '')).strip().lower() == class_name
+        ]
+    if subject:
+        templates = [
+            item for item in templates
+            if str(item.get('subject', '')).strip().lower() == subject
+        ]
+    return jsonify({'success': True, 'templates': templates})
+
+
+@resources_bp.route('/thumbnail-templates', methods=['POST'])
+def save_thumbnail_template():
+    """Create or update one saved editable thumbnail template."""
+    data = request.get_json(silent=True) or {}
+    name = str(data.get('name') or '').strip()
+    class_name = str(data.get('className') or '').strip()
+    subject = str(data.get('subject') or '').strip()
+    settings = data.get('settings') if isinstance(data.get('settings'), dict) else {}
+    if not name or not class_name or not subject:
+        return jsonify({'error': 'name, className, and subject are required'}), 400
+
+    now = time.time()
+    templates = _read_thumbnail_templates()
+    existing_index = next(
+        (
+            idx for idx, item in enumerate(templates)
+            if str(item.get('className', '')).strip().lower() == class_name.lower()
+            and str(item.get('subject', '')).strip().lower() == subject.lower()
+            and str(item.get('name', '')).strip().lower() == name.lower()
+        ),
+        -1,
+    )
+    template = {
+        'id': templates[existing_index].get('id') if existing_index >= 0 else f'tpl_{uuid.uuid4().hex[:12]}',
+        'name': name,
+        'className': class_name,
+        'subject': subject,
+        'createdAt': templates[existing_index].get('createdAt') if existing_index >= 0 else now,
+        'updatedAt': now,
+        'settings': settings,
+    }
+    if existing_index >= 0:
+        templates[existing_index] = template
+    else:
+        templates.append(template)
+    _write_thumbnail_templates(templates)
+    return jsonify({'success': True, 'template': template})
+
+
+@resources_bp.route('/thumbnail-templates/<template_id>', methods=['DELETE'])
+def delete_thumbnail_template(template_id):
+    templates = _read_thumbnail_templates()
+    next_templates = [item for item in templates if str(item.get('id')) != template_id]
+    if len(next_templates) == len(templates):
+        return jsonify({'error': 'Template not found'}), 404
+    _write_thumbnail_templates(next_templates)
+    return jsonify({'success': True})
 
 
 @resources_bp.route('/download/<path:filepath>')

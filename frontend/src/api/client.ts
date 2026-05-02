@@ -8,6 +8,7 @@ import type {
   SseEvent,
   BackendRunStartResponse,
   BackendRunDetail,
+  SavedThumbnailTemplate,
   YoutubeVideosResponse,
 } from './types'
 
@@ -237,6 +238,23 @@ export const api = {
     buildUrl(`/download/${filepath.split(/[\\/]/).map(encodeURIComponent).join('/')}`),
   thumbnailUrl: (filename: string) =>
     buildUrl(`/thumbnails/${encodeURIComponent(filename)}`),
+
+  listThumbnailTemplates: (className?: string, subject?: string) => {
+    const params = new URLSearchParams()
+    if (className) params.set('className', className)
+    if (subject) params.set('subject', subject)
+    const qs = params.toString()
+    return getJson<{ success: boolean; templates: SavedThumbnailTemplate[] }>(
+      `/thumbnail-templates${qs ? `?${qs}` : ''}`,
+    )
+  },
+
+  saveThumbnailTemplate: (template: Omit<SavedThumbnailTemplate, 'id' | 'createdAt' | 'updatedAt'>) =>
+    postJson<{ success: boolean; template: SavedThumbnailTemplate }>('/thumbnail-templates', template),
+
+  deleteThumbnailTemplate: (id: string) =>
+    fetch(buildUrl(`/thumbnail-templates/${encodeURIComponent(id)}`), { method: 'DELETE' })
+      .then((res) => parseJson<{ success?: boolean; error?: string }>(res)),
 
   uploadThumbnail: async (
     file: File,

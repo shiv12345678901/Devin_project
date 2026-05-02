@@ -75,6 +75,16 @@ export interface GenerateSettings {
   outro_thumbnail_duration_sec?: number
 }
 
+export interface SavedThumbnailTemplate {
+  id: string
+  name: string
+  className: string
+  subject: string
+  createdAt: number
+  updatedAt: number
+  settings: Partial<GenerateSettings>
+}
+
 export interface GenerateResponse {
   success: boolean
   message?: string
