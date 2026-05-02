@@ -76,6 +76,11 @@ export interface GenerateSettings {
   outro_thumbnail_enabled?: boolean
   outro_thumbnail_filename?: string
   outro_thumbnail_duration_sec?: number
+  /** Set to true after rendering the outro from the auto-thumbnail editor.
+   * Mirrors `auto_thumbnail_generated` for the intro slot — used to decide
+   * whether the saved outro file should be re-rendered from the current
+   * editor state at submit time. */
+  auto_thumbnail_outro_generated?: boolean
 }
 
 export interface SavedThumbnailTemplate {
