@@ -420,7 +420,10 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     setAutoThumbnailSaving(true)
     setAutoThumbnailError(null)
     try {
-      const file = await buildAutoThumbnailFile(settings, text)
+      // 2× pixel ratio gives a 3840×2160 master file for sharper YouTube
+      // uploads; the default 1.5× already exceeds the on-screen 1920×1080.
+      const pixelRatio = settings.auto_thumbnail_export_2x ? 2 : 1.5
+      const file = await buildAutoThumbnailFile(settings, text, pixelRatio)
       const { filename } = await api.uploadThumbnail(file)
       setSettings((prev) => ({
         ...prev,
@@ -532,7 +535,8 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
         payload.intro_thumbnail_enabled = true
       } else {
         try {
-          const file = await buildAutoThumbnailFile(payload, text)
+          const pixelRatio = payload.auto_thumbnail_export_2x ? 2 : 1.5
+          const file = await buildAutoThumbnailFile(payload, text, pixelRatio)
           const { filename } = await api.uploadThumbnail(file)
           payload.intro_thumbnail_enabled = true
           payload.intro_thumbnail_filename = filename
@@ -1443,13 +1447,15 @@ function AutoThumbnailPanel({
   const [templateVersion, setTemplateVersion] = useState(0)
   const [savedTemplates, setSavedTemplates] = useState<SavedThumbnailTemplate[]>([])
   const [templateSaveStatus, setTemplateSaveStatus] = useState<string | null>(null)
-  const [templateName, setTemplateName] = useState(
-    `${settings.class_name ?? 'Class'} ${settings.subject ?? 'Subject'}`.trim(),
+  // Auto-suggested name derives from the current class/subject. We only
+  // store an override when the user has actually edited the field, so the
+  // suggestion follows class/subject changes without a setState-in-effect.
+  const [templateNameOverride, setTemplateNameOverride] = useState<string | null>(null)
+  const suggestedTemplateName = useMemo(
+    () => `${settings.class_name ?? 'Class'} ${settings.subject ?? 'Subject'}`.trim(),
+    [settings.class_name, settings.subject],
   )
-
-  useEffect(() => {
-    setTemplateName(`${settings.class_name ?? 'Class'} ${settings.subject ?? 'Subject'}`.trim())
-  }, [settings.class_name, settings.subject])
+  const templateName = templateNameOverride ?? suggestedTemplateName
 
   useEffect(() => {
     let cancelled = false
@@ -1467,6 +1473,22 @@ function AutoThumbnailPanel({
       return
     }
     const name = templateName.trim() || `${className} ${subject}`
+
+    // Server-side dedup is keyed on (className, subject, name) — warn the
+    // user before silently overwriting an existing entry.
+    const collision = savedTemplates.find(
+      (item) =>
+        item.className.trim().toLowerCase() === className.toLowerCase() &&
+        item.subject.trim().toLowerCase() === subject.toLowerCase() &&
+        item.name.trim().toLowerCase() === name.toLowerCase(),
+    )
+    if (collision && !window.confirm(
+      `A template named "${name}" already exists for ${className} ${subject}. Overwrite it?`,
+    )) {
+      setTemplateSaveStatus('Save cancelled.')
+      return
+    }
+
     setTemplateSaveStatus('Saving...')
     try {
       await api.saveThumbnailTemplate({
@@ -1475,7 +1497,7 @@ function AutoThumbnailPanel({
         subject,
         settings: captureThumbnailTemplateSettings(settings),
       })
-      setTemplateSaveStatus('Saved.')
+      setTemplateSaveStatus(collision ? 'Overwritten.' : 'Saved.')
       setTemplateVersion((v) => v + 1)
     } catch (err) {
       setTemplateSaveStatus(err instanceof Error ? err.message : 'Could not save template.')
@@ -1568,8 +1590,19 @@ function AutoThumbnailPanel({
               </span>
             )}
             <span className="text-slate-500 dark:text-slate-400">
-              {template.canvasWidth} × {template.canvasHeight} · PNG
+              {settings.auto_thumbnail_export_2x ? '3840 × 2160' : `${template.canvasWidth} × ${template.canvasHeight}`} · PNG
             </span>
+            <label className="ml-auto inline-flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 rounded border-slate-300"
+                checked={Boolean(settings.auto_thumbnail_export_2x)}
+                onChange={(e) => onChange('auto_thumbnail_export_2x', e.target.checked)}
+              />
+              <span title="Export at 2× pixel ratio (3840×2160). Slower but sharper for YouTube uploads.">
+                Export at 2× (4K)
+              </span>
+            </label>
           </div>
           <div className="rounded-md border border-slate-200 bg-white p-3 dark:border-white/10 dark:bg-white/[0.03]">
             <div className="mb-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
@@ -1579,7 +1612,7 @@ function AutoThumbnailPanel({
               <input
                 className="input h-9 min-w-[180px] flex-1"
                 value={templateName}
-                onChange={(e) => setTemplateName(e.target.value)}
+                onChange={(e) => setTemplateNameOverride(e.target.value)}
                 placeholder="Template name"
               />
               <button type="button" className="btn-secondary btn-sm" onClick={saveCurrentTemplate}>
@@ -1703,6 +1736,11 @@ function ThumbnailVisualEditor({
   const tab = 'content' as InspectorTab
   const [canvasScale, setCanvasScale] = useState(1)
   const frameRef = useRef<HTMLDivElement | null>(null)
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    elementId: string
+  } | null>(null)
 
   // Render the canvas-derived preview every time the template changes — the
   // <img> *is* the real output, so the editor matches the saved PNG exactly.
@@ -1971,6 +2009,13 @@ function ThumbnailVisualEditor({
                 canvasScale={canvasScale}
                 onPointerDown={(event, mode) => startDrag(event, el, mode)}
                 onSelect={() => setSelectedId(el.id)}
+                onContextMenu={(event) =>
+                  setContextMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    elementId: el.id,
+                  })
+                }
               />
             ))}
           </div>
@@ -2074,6 +2119,151 @@ function ThumbnailVisualEditor({
           </div>
         </div>
       </div>
+      {contextMenu && (
+        <ThumbnailContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          element={template.elements[contextMenu.elementId]}
+          isAdded={isAddedElement(contextMenu.elementId)}
+          isHidden={hidden.includes(contextMenu.elementId)}
+          onClose={() => setContextMenu(null)}
+          onDuplicate={() => {
+            setSelectedId(contextMenu.elementId)
+            duplicateSelected()
+          }}
+          onBringFront={() => {
+            const target = template.elements[contextMenu.elementId]
+            if (!target) return
+            const maxZ = Math.max(0, ...Object.values(template.elements).map((e) => e.zIndex ?? 5))
+            patchElement(target.id, { zIndex: maxZ + 1 })
+          }}
+          onSendBack={() => {
+            const target = template.elements[contextMenu.elementId]
+            if (!target) return
+            const minZ = Math.min(0, ...Object.values(template.elements).map((e) => e.zIndex ?? 5))
+            patchElement(target.id, { zIndex: minZ - 1 })
+          }}
+          onToggleLock={() => {
+            const target = template.elements[contextMenu.elementId]
+            if (!target) return
+            patchElement(target.id, { locked: !target.locked })
+          }}
+          onToggleVisibility={() => {
+            const id = contextMenu.elementId
+            if (isAddedElement(id)) {
+              const target = template.elements[id]
+              if (target) patchElement(id, { visible: !(target.visible !== false) })
+              return
+            }
+            if (hidden.includes(id)) restoreElement(id)
+            else onChange('auto_thumbnail_hidden_elements', [...hidden, id])
+          }}
+          onDelete={() => {
+            setSelectedId(contextMenu.elementId)
+            removeSelected()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+/* ───────────────── Right-click element context menu ────────────────── */
+
+function ThumbnailContextMenu({
+  x,
+  y,
+  element,
+  isAdded,
+  isHidden,
+  onClose,
+  onDuplicate,
+  onBringFront,
+  onSendBack,
+  onToggleLock,
+  onToggleVisibility,
+  onDelete,
+}: {
+  x: number
+  y: number
+  element: ThumbnailElement | undefined
+  isAdded: boolean
+  isHidden: boolean
+  onClose: () => void
+  onDuplicate: () => void
+  onBringFront: () => void
+  onSendBack: () => void
+  onToggleLock: () => void
+  onToggleVisibility: () => void
+  onDelete: () => void
+}) {
+  // Close on Esc or any click outside the menu — same model as native
+  // OS context menus, no scrim needed.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    const onClick = () => onClose()
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('click', onClick)
+    window.addEventListener('contextmenu', onClick)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('click', onClick)
+      window.removeEventListener('contextmenu', onClick)
+    }
+  }, [onClose])
+
+  if (!element) return null
+
+  const wrap = (handler: () => void) => (e: React.MouseEvent) => {
+    e.stopPropagation()
+    handler()
+    onClose()
+  }
+
+  // Clamp to viewport so the menu never opens off-screen.
+  const left = Math.min(x, window.innerWidth - 220)
+  const top = Math.min(y, window.innerHeight - 260)
+
+  const item =
+    'flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs hover:bg-slate-100 dark:hover:bg-white/10'
+
+  return (
+    <div
+      role="menu"
+      className="fixed z-[1000] min-w-[200px] rounded-md border border-slate-200 bg-white py-1 text-slate-800 shadow-lg dark:border-white/10 dark:bg-slate-900 dark:text-slate-100"
+      style={{ left, top }}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="px-3 py-1 text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        {elementDisplayName(element)}
+      </div>
+      <button type="button" className={item} onClick={wrap(onDuplicate)}>
+        Duplicate <span className="text-slate-400">⌘D</span>
+      </button>
+      <button type="button" className={item} onClick={wrap(onBringFront)}>
+        Bring to front
+      </button>
+      <button type="button" className={item} onClick={wrap(onSendBack)}>
+        Send to back
+      </button>
+      <div className="my-1 border-t border-slate-200 dark:border-white/10" />
+      <button type="button" className={item} onClick={wrap(onToggleLock)}>
+        {element.locked ? 'Unlock' : 'Lock'}
+      </button>
+      <button type="button" className={item} onClick={wrap(onToggleVisibility)}>
+        {isHidden || element.visible === false ? 'Show' : 'Hide'}
+      </button>
+      <div className="my-1 border-t border-slate-200 dark:border-white/10" />
+      <button
+        type="button"
+        className={`${item} text-rose-600 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-500/15`}
+        onClick={wrap(onDelete)}
+      >
+        {isAdded ? 'Delete' : 'Hide from canvas'} <span className="text-slate-400">Del</span>
+      </button>
     </div>
   )
 }
@@ -2528,6 +2718,7 @@ function ThumbnailEditableElement({
   canvasScale,
   onPointerDown,
   onSelect,
+  onContextMenu,
 }: {
   element: ThumbnailElement
   selected: boolean
@@ -2536,6 +2727,7 @@ function ThumbnailEditableElement({
   canvasScale: number
   onPointerDown: (event: React.PointerEvent<HTMLElement>, mode: 'move' | ResizeHandle) => void
   onSelect: () => void
+  onContextMenu?: (event: React.MouseEvent<HTMLDivElement>) => void
 }) {
   const style: React.CSSProperties = {
     position: 'absolute',
@@ -2600,6 +2792,13 @@ function ThumbnailEditableElement({
       onClick={(e) => {
         e.stopPropagation()
         onSelect()
+      }}
+      onContextMenu={(e) => {
+        if (!onContextMenu) return
+        e.preventDefault()
+        e.stopPropagation()
+        onSelect()
+        onContextMenu(e)
       }}
       onMouseEnter={(e) => {
         if (!selected) (e.currentTarget as HTMLElement).style.border = '1px dashed rgba(148, 163, 184, 0.65)'

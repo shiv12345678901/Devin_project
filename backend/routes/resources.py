@@ -9,6 +9,7 @@ import json
 
 from flask import Blueprint, request, jsonify, send_file, Response
 from core.thumbnail_builder import ThumbnailParams, render_thumbnail_png
+from core.thumbnail_template_renderer import render_template_png
 
 THUMBNAILS_FOLDER = 'output/thumbnails'
 THUMBNAIL_TEMPLATES_FILE = 'output/thumbnail_templates.json'
@@ -163,6 +164,33 @@ def generate_thumbnail():
         png,
         mimetype='image/png',
         headers={'Cache-Control': 'public, max-age=86400'},
+    )
+
+
+@resources_bp.route('/render-thumbnail-template', methods=['POST'])
+def render_thumbnail_template():
+    """Render a frontend-style JSON thumbnail template into a PNG.
+
+    Body: ``{"canvasWidth": 1920, "canvasHeight": 1080, "canvasBackground": ...,
+    "elements": {...}, "pixelRatio": 1}``. The shape is identical to the
+    ``ThumbnailTemplateState`` produced by the React editor — server-side
+    parity means a backend-rendered PNG matches the editor preview pixel-for-
+    pixel within the limits of available fonts.
+    """
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'JSON object body required'}), 400
+    pixel_ratio = payload.get('pixelRatio') or 1
+    try:
+        png = render_template_png(payload, pixel_ratio=float(pixel_ratio))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - defensive catch-all
+        return jsonify({'error': f'Could not render thumbnail: {exc}'}), 500
+    return Response(
+        png,
+        mimetype='image/png',
+        headers={'Cache-Control': 'no-store'},
     )
 
 

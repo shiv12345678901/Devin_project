@@ -69,6 +69,9 @@ export interface GenerateSettings {
   auto_thumbnail_added_elements?: Record<string, Record<string, unknown>>
   /** IDs of preset elements the user explicitly hid. */
   auto_thumbnail_hidden_elements?: string[]
+  /** Render the saved auto thumbnail at 2× pixel ratio (3840×2160) instead
+   * of the default 1.5× (2880×1620). The editor preview itself stays at 1×. */
+  auto_thumbnail_export_2x?: boolean
   // Outro thumbnail — inserted on the 2nd-to-last slide.
   outro_thumbnail_enabled?: boolean
   outro_thumbnail_filename?: string

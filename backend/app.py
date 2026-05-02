@@ -441,6 +441,7 @@ _API_EXACT = {
     '/youtube/videos',
     '/upload-thumbnail',
     '/thumbnail-templates',
+    '/render-thumbnail-template',
 }
 _API_PATH_PREFIXES = (
     '/cancel/',
