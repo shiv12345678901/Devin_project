@@ -77,6 +77,7 @@ class _Element:
     image_offset_x: float
     image_offset_y: float
     image_zoom: float
+    image_fit_mode: str
     image_overlay: float
     shape_type: str
 
@@ -147,6 +148,7 @@ def _normalise(eid: str, raw: dict) -> _Element:
         image_zoom=float(
             raw.get("imageZoom") if raw.get("imageZoom") is not None else 100
         ),
+        image_fit_mode=str(raw.get("imageFitMode") or "cover"),
         image_overlay=float(raw.get("imageOverlay") or 0),
         shape_type=str(raw.get("shapeType") or "rectangle"),
     )
@@ -264,9 +266,21 @@ def _draw_image_element(image: Image.Image, el: _Element, ratio: float) -> None:
     else:
         photo = photo.convert("RGB")
         zoom = max(0.1, el.image_zoom / 100.0)
-        scale = max(box_w / photo.width, box_h / photo.height) * zoom
-        new_w = max(1, int(round(photo.width * scale)))
-        new_h = max(1, int(round(photo.height * scale)))
+        # Same fit-mode logic as the canvas renderer:
+        #  * cover (default) — scale so the box is fully covered, may crop
+        #  * contain — scale so the whole image fits, may letterbox
+        #  * stretch — ignore aspect ratio, fill the box exactly
+        if el.image_fit_mode == "stretch":
+            new_w = max(1, int(round(box_w * zoom)))
+            new_h = max(1, int(round(box_h * zoom)))
+        elif el.image_fit_mode == "contain":
+            scale = min(box_w / photo.width, box_h / photo.height) * zoom
+            new_w = max(1, int(round(photo.width * scale)))
+            new_h = max(1, int(round(photo.height * scale)))
+        else:
+            scale = max(box_w / photo.width, box_h / photo.height) * zoom
+            new_w = max(1, int(round(photo.width * scale)))
+            new_h = max(1, int(round(photo.height * scale)))
         photo = photo.resize((new_w, new_h), Image.Resampling.LANCZOS)
         offset_x = int((el.image_offset_x / 100.0) * (box_w - new_w))
         offset_y = int((el.image_offset_y / 100.0) * (box_h - new_h))
