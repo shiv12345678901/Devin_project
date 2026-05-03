@@ -331,23 +331,162 @@ def list_runs(limit: int = 100) -> list[dict[str, Any]]:
         return [dict(item) for item in _load_index()[:limit] if isinstance(item, dict)]
 
 
-def mark_interrupted_active_runs() -> int:
+def _recovered_outputs_for_interrupted_run(run: dict[str, Any]) -> dict[str, Any] | None:
+    """Detect outputs already on disk for a run that was interrupted at restart.
+
+    When the backend is restarted while a generation is queued/running, the
+    run's status is still queued/running in the index even though the
+    workflow's MP4 / PPTX may already be fully written to disk. Mark such
+    runs as ``completed`` instead of ``failed`` so the user isn't told the
+    run failed when they actually have a working video.
+
+    Returns a dict of output keys (matching the keys ``ctx.complete()`` would
+    have written) when the canonical output for the run's tool exists on
+    disk with a non-trivial size and a modification time after the run
+    started. Returns ``None`` otherwise (caller falls back to the failed
+    "interrupted by app restart" behavior).
+    """
+    if not isinstance(run, dict):
+        return None
+    tool = str(run.get("tool") or "")
+    settings = run.get("settings") or {}
+    if not isinstance(settings, dict):
+        settings = {}
+    input_text = str(run.get("input") or "")
+    output_format = str(settings.get("output_format") or "").lower()
+
+    # Lazy imports — ``run_manager`` lives in ``backend/src/core`` and the
+    # canonical-stem helper lives under ``backend/routes``. Importing at
+    # module load would create a cycle.
+    try:
+        import sys as _sys
+        _here = Path(__file__).resolve()
+        _backend = _here.parents[2]
+        for _path in (_backend, _backend / "routes", _backend / "config"):
+            if str(_path) not in _sys.path:
+                _sys.path.insert(0, str(_path))
+        from helpers import youtube_video_stem  # type: ignore
+        try:
+            from config import (  # type: ignore
+                POWERPOINT_OUTPUT_FOLDER,
+                POWERPOINT_VIDEO_FOLDER,
+            )
+        except Exception:
+            POWERPOINT_OUTPUT_FOLDER = "output/presentations"
+            POWERPOINT_VIDEO_FOLDER = "output/videos"
+    except Exception:
+        return None
+
+    project_info = {
+        "class_name": settings.get("class_name") or "",
+        "subject": settings.get("subject") or "",
+        "title": settings.get("title") or "",
+        "exercise_year": settings.get("exercise_year") or "",
+    }
+    output_name = str(settings.get("output_name") or settings.get("title") or "")
+    try:
+        stem = youtube_video_stem(project_info, output_name, input_text)
+    except Exception:
+        return None
+
+    started_at = 0.0
+    for key in ("started_at", "queued_at", "created_at"):
+        try:
+            value = float(run.get(key) or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value:
+            started_at = value
+            break
+
+    def _check(rel: str, min_size: int) -> bool:
+        path = Path(rel)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        try:
+            stat = path.stat()
+        except OSError:
+            return False
+        if stat.st_size < min_size:
+            return False
+        # Guard against marking a run as completed because of a stale file
+        # left over from a *previous* run that wrote the same canonical
+        # path. Require the file to have been touched at or after this
+        # run's start (with a small clock skew margin).
+        if started_at and stat.st_mtime + 5 < started_at:
+            return False
+        return True
+
+    is_video_tool = (
+        tool in {"text-to-video", "html-to-video", "screenshots-to-video", "image-to-video"}
+        or output_format == "video"
+    )
+    is_pptx_tool = (
+        tool in {"text-to-pptx", "html-to-pptx"}
+        or output_format == "pptx"
+    )
+
+    outputs: dict[str, Any] = {}
+    if is_video_tool:
+        video_rel = f"{POWERPOINT_VIDEO_FOLDER}/{stem}.mp4"
+        if _check(video_rel, 100_000):
+            outputs["video_file"] = video_rel
+            outputs["video_path"] = video_rel
+            pptx_rel = f"{POWERPOINT_OUTPUT_FOLDER}/{stem}.pptx"
+            if _check(pptx_rel, 10_000):
+                outputs["presentation_file"] = pptx_rel
+                outputs["presentation_path"] = pptx_rel
+    elif is_pptx_tool:
+        pptx_rel = f"{POWERPOINT_OUTPUT_FOLDER}/{stem}.pptx"
+        if _check(pptx_rel, 10_000):
+            outputs["presentation_file"] = pptx_rel
+            outputs["presentation_path"] = pptx_rel
+
+    return outputs or None
+
+
+def mark_interrupted_active_runs() -> dict[str, int]:
+    """Reconcile queued/running/paused runs with what's actually on disk.
+
+    Called once on app startup. Runs whose canonical video/pptx output
+    already exists on disk are marked ``completed`` (the workflow ran to
+    completion, the user just didn't see it because the app restarted
+    before the run JSON reached the ``completed`` state). Everything else
+    is marked ``failed`` with the legacy "interrupted" message.
+    """
     with _LOCK:
         interrupted = 0
+        recovered = 0
         for item in list(_load_index()):
             if str(item.get("status") or "").lower() not in {"queued", "running", "paused"}:
                 continue
             run_id = str(item.get("run_id") or "")
             if not run_id:
                 continue
-            finish_run(
-                run_id,
-                status="failed",
-                message="Interrupted by app restart before the queue could finish.",
-                progress=item.get("progress"),
+            full_run = _read_json(_run_path(run_id), None)
+            recovered_outputs = (
+                _recovered_outputs_for_interrupted_run(full_run)
+                if isinstance(full_run, dict)
+                else None
             )
-            interrupted += 1
-        return interrupted
+            if recovered_outputs:
+                finish_run(
+                    run_id,
+                    status="completed",
+                    message="Recovered after app restart — output was already written to disk.",
+                    progress=100,
+                    outputs=recovered_outputs,
+                )
+                recovered += 1
+            else:
+                finish_run(
+                    run_id,
+                    status="failed",
+                    message="Interrupted by app restart before the queue could finish.",
+                    progress=item.get("progress"),
+                )
+                interrupted += 1
+        return {"interrupted": interrupted, "recovered": recovered}
 
 
 def find_active_run_by_fingerprint(

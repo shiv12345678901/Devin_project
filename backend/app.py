@@ -150,9 +150,17 @@ app.register_blueprint(image_bp)
 app.register_blueprint(resources_bp)
 app.register_blueprint(runs_bp)
 
-_interrupted_runs = mark_interrupted_active_runs()
-if _interrupted_runs:
-    print(f"Marked {_interrupted_runs} stale queued/running process(es) as interrupted", flush=True)
+_restart_recovery = mark_interrupted_active_runs()
+_interrupted_count = _restart_recovery.get("interrupted", 0) if isinstance(_restart_recovery, dict) else 0
+_recovered_count = _restart_recovery.get("recovered", 0) if isinstance(_restart_recovery, dict) else 0
+if _interrupted_count:
+    print(f"Marked {_interrupted_count} stale queued/running process(es) as interrupted", flush=True)
+if _recovered_count:
+    print(
+        f"Recovered {_recovered_count} stale queued/running process(es) as completed "
+        f"(output already on disk)",
+        flush=True,
+    )
 
 
 # ─── Health & Preflight ───────────────────────────────────────────────────
