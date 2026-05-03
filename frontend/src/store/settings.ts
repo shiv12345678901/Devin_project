@@ -157,7 +157,46 @@ export interface AppSettings {
   backendUrl: string
   concurrentPipelineRuns: boolean
   autoThumbnailBuilder: boolean
+  /**
+   * Per-user override of the wizard's Class options. Empty array uses
+   * the curated default list (Nepali curriculum classes 1–12).
+   */
+  customClassOptions: string[]
+  /**
+   * Per-user override of the wizard's Subject options. Empty array uses
+   * the curated default list.
+   */
+  customSubjectOptions: string[]
+  /** Sidebar collapsed-to-icon-rail mode (desktop only). */
+  sidebarCollapsed: boolean
 }
+
+export const DEFAULT_CLASS_OPTIONS: readonly string[] = [
+  'Class 1',
+  'Class 2',
+  'Class 3',
+  'Class 4',
+  'Class 5',
+  'Class 6',
+  'Class 7',
+  'Class 8',
+  'Class 9',
+  'Class 10',
+  'Class 11',
+  'Class 12',
+]
+
+export const DEFAULT_SUBJECT_OPTIONS: readonly string[] = [
+  'Nepali',
+  'English',
+  'Mathematics',
+  'Science',
+  'Social Studies',
+  'Health',
+  'Computer',
+  'Account',
+  'Economics',
+]
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
@@ -166,6 +205,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   backendUrl: '',
   concurrentPipelineRuns: false,
   autoThumbnailBuilder: false,
+  customClassOptions: [],
+  customSubjectOptions: [],
+  sidebarCollapsed: false,
 }
 
 export const SETTINGS_STORAGE_KEY = 'textbro:settings:v1'

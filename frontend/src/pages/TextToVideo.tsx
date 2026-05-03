@@ -11,18 +11,22 @@ import {
   StopCircle,
   Video,
   AlertCircle,
+  AlertTriangle,
   Upload,
   Wand2,
   Trash2,
   Copy as CopyIcon,
   Eye,
   EyeOff,
+  Gauge,
   Sparkles,
+  Sliders,
   Layers,
   Lock,
   Unlock,
   RotateCcw,
   ArrowLeftRight,
+  Zap,
 } from 'lucide-react'
 
 import PreflightModal from '../components/PreflightModal'
@@ -31,7 +35,11 @@ import Toggle from '../components/Toggle'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import { useBackendCapabilities } from '../hooks/useBackendPlatform'
 import { api } from '../api/client'
-import { useSettings } from '../store/settings'
+import {
+  useSettings,
+  DEFAULT_CLASS_OPTIONS,
+  DEFAULT_SUBJECT_OPTIONS,
+} from '../store/settings'
 import type { GenerateSettings, OutputFormat, SavedThumbnailTemplate } from '../api/types'
 import { consumeProcessEditHandoff } from '../lib/processEditHandoff'
 import type { ReplacementTargets } from '../lib/processEditHandoff'
@@ -83,8 +91,11 @@ const DEFAULT_SETTINGS: GenerateSettings = {
 const LAST_RUN_STORAGE_KEY = 'textbro:text-to-video:last-run:v2'
 const HTML_LAST_RUN_STORAGE_KEY = 'textbro:html-to-video:last-run:v1'
 const LEGACY_PROJECT_DETAILS_STORAGE_KEY = 'textbro:text-to-video:project-details:v1'
-const CLASS_OPTIONS = ['Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12']
-const SUBJECT_OPTIONS = ['Nepali', 'English', 'Science', 'Math', 'Social', 'Model Question']
+// C3: keys for the always-on draft autosave (every 5s while editing).
+const TEXT_DRAFT_STORAGE_KEY = 'textbro:text-to-video:draft:v1'
+const HTML_DRAFT_STORAGE_KEY = 'textbro:html-to-video:draft:v1'
+const DRAFT_AUTOSAVE_MS = 5_000
+
 type SourceMode = 'text' | 'html'
 
 type LegacyProjectDetails = Pick<GenerateSettings, 'class_name' | 'subject' | 'title' | 'output_format'>
@@ -157,6 +168,52 @@ function saveLastRunSnapshot(
     /* ignore storage failures */
   }
   return snapshot
+}
+
+// C3: every-5s draft autosave keys are independent from the
+// "Reuse previous run" snapshot — we always write the in-progress state
+// here so a refresh / accidental tab close doesn't lose work.
+function readDraftSnapshot(mode: SourceMode = 'text'): LastRunSnapshot | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(
+      mode === 'html' ? HTML_DRAFT_STORAGE_KEY : TEXT_DRAFT_STORAGE_KEY,
+    )
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as unknown
+    if (isRecord(parsed) && isRecord(parsed.settings)) {
+      return {
+        text: typeof parsed.text === 'string' ? parsed.text : '',
+        settings: parsed.settings as GenerateSettings,
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function saveDraftSnapshot(text: string, settings: GenerateSettings, mode: SourceMode = 'text') {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(
+      mode === 'html' ? HTML_DRAFT_STORAGE_KEY : TEXT_DRAFT_STORAGE_KEY,
+      JSON.stringify({ text, settings, savedAt: Date.now() }),
+    )
+  } catch {
+    /* quota errors etc — ignore, user can still submit */
+  }
+}
+
+function clearDraftSnapshot(mode: SourceMode = 'text') {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(
+      mode === 'html' ? HTML_DRAFT_STORAGE_KEY : TEXT_DRAFT_STORAGE_KEY,
+    )
+  } catch {
+    /* ignore */
+  }
 }
 
 function captureThumbnailTemplateSettings(settings: GenerateSettings): Partial<GenerateSettings> {
@@ -343,6 +400,15 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
   /** Step ids whose inline errors should be visible (only populated after the
    * user clicks Next on an invalid step). Silent until then. */
   const [erroredSteps, setErroredSteps] = useState<Set<StepId>>(new Set())
+  /** C1: live-validation toggle. Once any step has been touched / visited
+   *  past the first one, we set this and per-step error icons appear in
+   *  the tab strip even before the user clicks Next. */
+  const [liveValidate, setLiveValidate] = useState(false)
+  /** C3: surface a "you have unsaved progress" prompt whenever a draft was
+   *  found at mount time and not yet consumed. */
+  const [draftSnapshot, setDraftSnapshot] = useState<LastRunSnapshot | null>(() =>
+    readDraftSnapshot(sourceMode),
+  )
 
   useEffect(() => {
     const draft = consumeProcessEditHandoff(sourceMode === 'html' ? 'html-to-video' : 'text-to-video')
@@ -352,12 +418,55 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     setReplaceTargets(draft.replaceTargets)
     setStepId('project')
     setErroredSteps(new Set())
+    setDraftSnapshot(null)
   }, [])
 
   const set = <K extends keyof GenerateSettings>(key: K, v: GenerateSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: v }))
-    // Re-validate this step silently so errors clear as the user types.
-    // We don't need to; perStepErrors is derived below.
+    // C1: as soon as the user starts editing, flip on live validation so
+    // the per-step error icons update without waiting for a Next click.
+    if (!liveValidate) setLiveValidate(true)
+  }
+
+  /**
+   * C3: every 5s while the user is making progress, snapshot the current
+   * state into localStorage. We skip the save when the page is idle (no
+   * text and no overrides past defaults) so we don't write empty drafts.
+   */
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const hasContent =
+        text.trim().length > 0 ||
+        (settings.title ?? '').trim().length > 0 ||
+        (settings.auto_thumbnail_chapter_num ?? '').trim().length > 0 ||
+        (settings.intro_thumbnail_filename ?? '').trim().length > 0 ||
+        (settings.outro_thumbnail_filename ?? '').trim().length > 0
+      if (!hasContent) return
+      saveDraftSnapshot(text, settings, sourceMode)
+    }, DRAFT_AUTOSAVE_MS)
+    return () => window.clearInterval(id)
+  }, [text, settings, sourceMode])
+
+  // Beforeunload safety: write a final snapshot synchronously when the user
+  // closes the tab. The 5s interval may have just fired; this is a belt for
+  // the case where they edit the very last 4s before quitting.
+  useEffect(() => {
+    const handler = () => saveDraftSnapshot(text, settings, sourceMode)
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [text, settings, sourceMode])
+
+  const restoreDraft = () => {
+    if (!draftSnapshot) return
+    setSettings((prev) => ({ ...prev, ...draftSnapshot.settings }))
+    if (typeof draftSnapshot.text === 'string') setText(draftSnapshot.text)
+    setStepId('project')
+    setErroredSteps(new Set())
+    setDraftSnapshot(null)
+  }
+  const dismissDraft = () => {
+    clearDraftSnapshot(sourceMode)
+    setDraftSnapshot(null)
   }
 
   const shouldAutoBuildThumbnail =
@@ -688,6 +797,10 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     // Snapshot the full wizard state (text + settings) so the next
     // session can restore everything via "Reuse previous run".
     setLastRunSnapshot(saveLastRunSnapshot(text, payload, sourceMode))
+    // C3: the run was actually started, so the in-progress draft is no
+    // longer relevant — clear it. Reuse-previous-run still works through
+    // the LAST_RUN snapshot we just saved.
+    clearDraftSnapshot(sourceMode)
     // Enqueues and (if idle) kicks off immediately. Navigate right away so
     // the user sees either the running run or the queue entry without
     // staying on the wizard.
@@ -744,12 +857,43 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
         </p>
       </div>
 
+      {draftSnapshot && (
+        <div
+          role="status"
+          className="flex flex-wrap items-start gap-3 rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+        >
+          <Sparkles size={16} className="mt-0.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium">Unsaved draft from your last visit</div>
+            <div className="mt-0.5 text-[12.5px] opacity-90">
+              {draftSnapshot.text.trim().length > 0
+                ? `${draftSnapshot.text.length.toLocaleString()} characters of text plus settings.`
+                : 'Project info and settings preserved.'}
+              {' '}Resume where you left off, or discard.
+            </div>
+          </div>
+          <div className="flex shrink-0 gap-1.5">
+            <button type="button" className="btn-secondary btn-sm" onClick={restoreDraft}>
+              Resume draft
+            </button>
+            <button
+              type="button"
+              className="btn-ghost btn-sm !text-amber-800 hover:!bg-amber-100 dark:!text-amber-200"
+              onClick={dismissDraft}
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
+
       <Tabs
         steps={visibleSteps}
         currentId={activeStepId}
         onPick={onPickTab}
         canNavigateTo={canNavigateTo}
         stepValid={stepValid}
+        showErrors={(id) => liveValidate || erroredSteps.has(id)}
       />
 
       <div
@@ -768,6 +912,16 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
             running={running}
             errors={showCurrentErrors ? currentErrors : {}}
             sourceMode={sourceMode}
+            classOptions={
+              appSettings.customClassOptions.length > 0
+                ? appSettings.customClassOptions
+                : DEFAULT_CLASS_OPTIONS
+            }
+            subjectOptions={
+              appSettings.customSubjectOptions.length > 0
+                ? appSettings.customSubjectOptions
+                : DEFAULT_SUBJECT_OPTIONS
+            }
           />
         )}
 
@@ -842,39 +996,42 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
         )}
       </div>
 
-      {/* Back / Next */}
-      {activeStepId !== 'advanced' && (
-        <div className="flex items-center justify-between">
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={goPrev}
-            disabled={stepIndex === 0 || running}
-          >
-            <ArrowLeft size={14} /> Back
-          </button>
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={goNext}
-            disabled={running}
-          >
-            Next <ArrowRight size={14} />
-          </button>
+      {/* Back / Next + C14 Start-on-every-step */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={goPrev}
+          disabled={stepIndex === 0 || running}
+        >
+          <ArrowLeft size={14} /> Back
+        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* C14: as soon as every visible step validates, expose Start
+              Process here too — no need to tab all the way to Advanced. */}
+          {allValid && activeStepId !== 'advanced' && (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={onStart}
+              disabled={running}
+              title="All steps look good — start the run now"
+            >
+              <Play size={14} /> Start Process
+            </button>
+          )}
+          {activeStepId !== 'advanced' && (
+            <button
+              type="button"
+              className={allValid ? 'btn-secondary' : 'btn-primary'}
+              onClick={goNext}
+              disabled={running}
+            >
+              Next <ArrowRight size={14} />
+            </button>
+          )}
         </div>
-      )}
-      {activeStepId === 'advanced' && (
-        <div>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={goPrev}
-            disabled={running}
-          >
-            <ArrowLeft size={14} /> Back
-          </button>
-        </div>
-      )}
+      </div>
 
       {showPreflight && (
         <PreflightModal
@@ -895,12 +1052,14 @@ function Tabs({
   onPick,
   canNavigateTo,
   stepValid,
+  showErrors,
 }: {
   steps: StepDef[]
   currentId: StepId
   onPick: (id: StepId) => void
   canNavigateTo: (id: StepId) => boolean
   stepValid: (id: StepId) => boolean
+  showErrors: (id: StepId) => boolean
 }) {
   const currentIndex = steps.findIndex((s) => s.id === currentId)
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -941,8 +1100,14 @@ function Tabs({
     <ol role="tablist" aria-label="Wizard steps" className="flex w-full flex-wrap items-center gap-1">
       {steps.map((s, i) => {
         const active = s.id === currentId
-        const isDone = i < currentIndex && stepValid(s.id)
+        const valid = stepValid(s.id)
+        const isDone = i < currentIndex && valid
         const reachable = canNavigateTo(s.id)
+        // C2: per-step error badge — only when validation has been
+        // surfaced (after Next on an invalid step, or once the user has
+        // started typing) AND the step is actually invalid AND it's not
+        // the one currently being edited.
+        const hasError = showErrors(s.id) && !valid && !active
         return (
           <li key={s.id} role="presentation" className="flex min-w-0 flex-1 items-center gap-1">
             <button
@@ -954,15 +1119,24 @@ function Tabs({
               id={`wizard-tab-${s.id}`}
               aria-selected={active}
               aria-controls={`wizard-panel-${s.id}`}
+              aria-invalid={hasError || undefined}
               aria-disabled={!reachable || undefined}
               tabIndex={active ? 0 : -1}
               onClick={() => onPick(s.id)}
               onKeyDown={(e) => onKey(e, i)}
-              title={!reachable ? 'Fill earlier steps first' : s.label}
+              title={
+                !reachable
+                  ? 'Fill earlier steps first'
+                  : hasError
+                  ? `${s.label} — needs attention`
+                  : s.label
+              }
               className={
                 'flex min-w-0 flex-1 items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors ' +
                 (active
                   ? 'border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-500/10 dark:text-brand-200'
+                  : hasError
+                  ? 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-200'
                   : isDone
                   ? 'border-brand-200 bg-brand-50/60 text-brand-600 hover:bg-brand-50 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-200'
                   : reachable
@@ -975,6 +1149,8 @@ function Tabs({
                   'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] ' +
                   (active
                     ? 'bg-brand-500 text-white'
+                    : hasError
+                    ? 'bg-rose-500 text-white'
                     : isDone
                     ? 'bg-brand-500/80 text-white'
                     : reachable
@@ -982,7 +1158,13 @@ function Tabs({
                     : 'bg-slate-100 text-slate-400 dark:bg-white/5 dark:text-slate-500')
                 }
               >
-                {isDone ? <Check size={12} /> : i + 1}
+                {hasError ? (
+                  <AlertTriangle size={12} />
+                ) : isDone ? (
+                  <Check size={12} />
+                ) : (
+                  i + 1
+                )}
               </span>
               <span className="truncate">{s.shortLabel}</span>
             </button>
@@ -1018,6 +1200,8 @@ function ProjectStep({
   running,
   errors,
   sourceMode,
+  classOptions,
+  subjectOptions,
 }: {
   settings: GenerateSettings
   onChange: Setter
@@ -1026,6 +1210,8 @@ function ProjectStep({
   running: boolean
   errors: FieldErrors
   sourceMode: SourceMode
+  classOptions: readonly string[]
+  subjectOptions: readonly string[]
 }) {
   // "Reuse previous run" is offered whenever we have any captured
   // signal from last time — project info, typed text, or non-default
@@ -1069,7 +1255,7 @@ function ProjectStep({
             onChange={(e) => onChange('class_name', e.target.value)}
             disabled={running}
           >
-            {CLASS_OPTIONS.map((value) => (
+            {classOptions.map((value) => (
               <option key={value} value={value}>
                 {value}
               </option>
@@ -1084,7 +1270,7 @@ function ProjectStep({
             onChange={(e) => onChange('subject', e.target.value)}
             disabled={running}
           >
-            {SUBJECT_OPTIONS.map((value) => (
+            {subjectOptions.map((value) => (
               <option key={value} value={value}>
                 {value}
               </option>
@@ -1169,6 +1355,17 @@ function OutputFormatPicker({
                 (disabledByPlatform ? ' cursor-not-allowed opacity-60 hover:border-slate-200' : '')
               }
             >
+              <div
+                className={
+                  'mt-0.5 flex h-12 w-16 shrink-0 items-center justify-center rounded-md border ' +
+                  (active
+                    ? 'border-brand-300 bg-brand-100/60 dark:border-brand-400/40 dark:bg-brand-500/15'
+                    : 'border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/[0.04]')
+                }
+                aria-hidden
+              >
+                <OutputFormatThumb format={o.value} active={active} />
+              </div>
               <Icon
                 size={18}
                 className={active ? 'mt-0.5 text-brand-600' : 'mt-0.5 text-slate-400'}
@@ -1207,6 +1404,56 @@ function OutputFormatPicker({
   )
 }
 
+/**
+ * C5: tiny visual mini-illustration of each output format. Pure SVG so it
+ * scales cleanly in dark/light themes without bringing in a sprite asset.
+ * Sits in the 16×12 (h-12 w-16) frame next to each format card.
+ */
+function OutputFormatThumb({ format, active }: { format: OutputFormat; active: boolean }) {
+  const stroke = active ? 'currentColor' : 'rgb(148 163 184)' // brand-active vs slate-400
+  const fill = active ? 'rgba(99,102,241,0.12)' : 'rgba(148,163,184,0.12)'
+  const accent = active ? 'rgb(99 102 241)' : 'rgb(100 116 139)' // brand-500 vs slate-500
+  const svgClass = active ? 'text-brand-600 dark:text-brand-300' : 'text-slate-500 dark:text-slate-300'
+  switch (format) {
+    case 'html':
+      return (
+        <svg viewBox="0 0 56 36" width={48} height={32} className={svgClass}>
+          <rect x="3" y="3" width="50" height="30" rx="3" fill={fill} stroke={stroke} strokeWidth="1.2" />
+          <text x="28" y="22" textAnchor="middle" fontSize="11" fontWeight="700" fill={accent} fontFamily="ui-monospace, Menlo, monospace">{'</>'}</text>
+        </svg>
+      )
+    case 'images':
+      return (
+        <svg viewBox="0 0 56 36" width={48} height={32} className={svgClass}>
+          <rect x="3" y="3" width="20" height="30" rx="2" fill={fill} stroke={stroke} strokeWidth="1.2" />
+          <rect x="18" y="3" width="20" height="30" rx="2" fill={fill} stroke={stroke} strokeWidth="1.2" />
+          <rect x="33" y="3" width="20" height="30" rx="2" fill={fill} stroke={stroke} strokeWidth="1.2" />
+          <circle cx="40" cy="14" r="2.2" fill={accent} />
+          <path d="M36 25 L41 20 L47 26 L52 22 L52 31 L36 31 Z" fill={accent} opacity="0.7" />
+        </svg>
+      )
+    case 'pptx':
+      return (
+        <svg viewBox="0 0 56 36" width={48} height={32} className={svgClass}>
+          <rect x="4" y="6" width="48" height="24" rx="2" fill={fill} stroke={stroke} strokeWidth="1.2" />
+          <rect x="9" y="11" width="22" height="3" rx="1" fill={accent} opacity="0.85" />
+          <rect x="9" y="17" width="32" height="2" rx="1" fill={accent} opacity="0.45" />
+          <rect x="9" y="21" width="28" height="2" rx="1" fill={accent} opacity="0.45" />
+          <rect x="9" y="25" width="20" height="2" rx="1" fill={accent} opacity="0.45" />
+        </svg>
+      )
+    case 'video':
+      return (
+        <svg viewBox="0 0 56 36" width={48} height={32} className={svgClass}>
+          <rect x="3" y="3" width="50" height="30" rx="3" fill={fill} stroke={stroke} strokeWidth="1.2" />
+          <rect x="3" y="3" width="50" height="4" fill={accent} opacity="0.2" />
+          <rect x="3" y="29" width="50" height="4" fill={accent} opacity="0.2" />
+          <polygon points="22,12 22,24 34,18" fill={accent} />
+        </svg>
+      )
+  }
+}
+
 function WindowsOnlyWarning({ outputFormat }: { outputFormat: OutputFormat }) {
   const { platform, videoEngineReady, pptxReady } = useBackendCapabilities()
   const needsEngine = outputFormat === 'pptx' || outputFormat === 'video'
@@ -1237,6 +1484,231 @@ function WindowsOnlyWarning({ outputFormat }: { outputFormat: OutputFormat }) {
     )
   }
   return null
+}
+
+/**
+ * C7: card-based AI-model chooser. Each card shows the model's tradeoff
+ * dimensions (speed / quality / context) at a glance instead of a raw
+ * dropdown. Same canonical `model_choice` values as before so backend
+ * routing is unchanged.
+ */
+type ModelTier = 'fast' | 'medium' | 'good' | 'best'
+const MODEL_OPTIONS: Array<{
+  value: string
+  label: string
+  vendor: string
+  speed: ModelTier
+  quality: ModelTier
+  context: string
+  blurb: string
+  icon: typeof Zap
+}> = [
+  { value: 'default',  label: 'Default',           vendor: 'Qwen 3.5 122B',          speed: 'good',   quality: 'good',   context: 'Standard', blurb: 'Balanced default for textbook chapters.',     icon: Sparkles },
+  { value: 'fast',     label: 'Fast (1M ctx)',     vendor: 'DeepSeek V4 Flash',      speed: 'best',   quality: 'medium', context: '1M tokens', blurb: 'Whole books in one go, fastest turnaround.',  icon: Zap },
+  { value: 'short',    label: 'Shortest & fastest', vendor: 'Llama 3.1 8B',          speed: 'best',   quality: 'fast',   context: 'Standard', blurb: 'Tiny chapters / quick drafts.',               icon: Gauge },
+  { value: 'balanced', label: 'Balanced',          vendor: 'GLM 4.7',                speed: 'good',   quality: 'good',   context: 'Standard', blurb: 'Higher fidelity for the same time budget.',   icon: Sliders },
+  { value: 'quality',  label: 'Highest quality',   vendor: 'DeepSeek V3.2',          speed: 'medium', quality: 'best',   context: 'Standard', blurb: 'Slow but the best at structured exercises.',  icon: Wand2 },
+  { value: 'long',     label: 'Long context',      vendor: 'DeepSeek V4 Pro',        speed: 'medium', quality: 'good',   context: '1M tokens', blurb: 'Very long inputs, careful tone.',             icon: Layers },
+]
+function tierBars(tier: ModelTier): number {
+  switch (tier) {
+    case 'fast': return 1
+    case 'medium': return 2
+    case 'good': return 3
+    case 'best': return 4
+  }
+}
+function ModelTierBar({ tier, label }: { tier: ModelTier; label: string }) {
+  const filled = tierBars(tier)
+  return (
+    <div className="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
+      <span className="w-12 truncate">{label}</span>
+      <div className="flex gap-0.5">
+        {[1, 2, 3, 4].map((i) => (
+          <span
+            key={i}
+            className={
+              'h-1.5 w-3 rounded-sm ' +
+              (i <= filled
+                ? 'bg-brand-500 dark:bg-brand-400'
+                : 'bg-slate-200 dark:bg-white/10')
+            }
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+function ModelChooser({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string
+  onChange: (v: string) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {MODEL_OPTIONS.map((m) => {
+        const active = value === m.value
+        const Icon = m.icon
+        return (
+          <button
+            key={m.value}
+            type="button"
+            onClick={() => !disabled && onChange(m.value)}
+            disabled={disabled}
+            aria-pressed={active}
+            className={
+              'flex flex-col gap-2 rounded-md border px-3 py-2.5 text-left transition-colors ' +
+              (active
+                ? 'border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-500/10'
+                : 'border-slate-200 bg-white hover:border-slate-300 dark:border-white/10 dark:bg-white/[0.03]')
+            }
+          >
+            <div className="flex items-start gap-2">
+              <Icon size={16} className={active ? 'mt-0.5 text-brand-600' : 'mt-0.5 text-slate-400'} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-50">
+                  {m.label}
+                </div>
+                <div className="mt-0.5 truncate text-[11px] text-slate-500 dark:text-slate-400">
+                  {m.vendor}
+                </div>
+              </div>
+              {m.context !== 'Standard' && (
+                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-slate-500 dark:bg-white/10 dark:text-slate-300">
+                  {m.context}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <ModelTierBar tier={m.speed} label="Speed" />
+              <ModelTierBar tier={m.quality} label="Quality" />
+            </div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400">{m.blurb}</div>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * C12: tabbed Default / Custom system prompt editor with a small set of
+ * presets for the most common tones. Plain textarea inside (no CodeMirror
+ * dependency added) but mono font + larger height.
+ */
+const SYSTEM_PROMPT_PRESETS: { label: string; value: string }[] = [
+  {
+    label: 'Tabular',
+    value:
+      'Render the chapter as a clean, dense table-of-contents style HTML page. Use <table> for any list structures. Keep the visual rhythm consistent.',
+  },
+  {
+    label: 'Simple narrative',
+    value:
+      'Use short paragraphs, simple sentence structure, and friendly tone. Aim for clarity over comprehensiveness. Avoid bullet lists.',
+  },
+  {
+    label: 'Bilingual (Nepali ↔ English)',
+    value:
+      'Render every heading in both Nepali (Devanagari) and English. Body paragraphs may stay monolingual, but the structure must be presented in both languages.',
+  },
+  {
+    label: 'Exam-prep flashcards',
+    value:
+      'Format the output as a flashcard deck: each concept becomes a <section> with a question on top and the answer below in a contrasting block. No paragraphs longer than 3 sentences.',
+  },
+]
+function SystemPromptEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string
+  onChange: (v: string) => void
+  disabled?: boolean
+}) {
+  const [tab, setTab] = useState<'default' | 'custom'>(value.trim().length > 0 ? 'custom' : 'default')
+  const onPickPreset = (preset: string) => {
+    setTab('custom')
+    onChange(preset)
+  }
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-1">
+        <button
+          type="button"
+          className={
+            'rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ' +
+            (tab === 'default'
+              ? 'border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-500/10 dark:text-brand-200'
+              : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300')
+          }
+          onClick={() => {
+            setTab('default')
+            if (value.trim()) onChange('')
+          }}
+          disabled={disabled}
+        >
+          Default prompt
+        </button>
+        <button
+          type="button"
+          className={
+            'rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ' +
+            (tab === 'custom'
+              ? 'border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-500/10 dark:text-brand-200'
+              : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300')
+          }
+          onClick={() => setTab('custom')}
+          disabled={disabled}
+        >
+          Custom
+        </button>
+        {tab === 'custom' && (
+          <div className="ml-1 flex flex-wrap items-center gap-1 border-l border-slate-200 pl-2 dark:border-white/10">
+            <span className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Presets
+            </span>
+            {SYSTEM_PROMPT_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => onPickPreset(p.value)}
+                disabled={disabled}
+                className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300"
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {tab === 'default' ? (
+        <p className="rounded-md border border-dashed border-slate-200 px-3 py-3 text-xs text-slate-500 dark:border-white/10 dark:text-slate-400">
+          Using the default backend system prompt — tuned for textbook chapters.
+          Switch to <span className="font-medium">Custom</span> to override or pick a preset.
+        </p>
+      ) : (
+        <textarea
+          className="textarea h-32 resize-y font-mono text-[12.5px] leading-5"
+          placeholder="Optional extra instructions for HTML generation…"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          spellCheck={false}
+        />
+      )}
+      {tab === 'custom' && (
+        <div className="text-right text-[11px] text-slate-500 dark:text-slate-400">
+          {value.length.toLocaleString()} / 8000
+        </div>
+      )}
+    </div>
+  )
 }
 
 function ContentStep({
@@ -1282,22 +1754,15 @@ function ContentStep({
         }
       />
 
-      {!isHtml && <Field label="AI Model">
-        <select
-          id={fieldId('content', 'model_choice')}
-          className="input"
-          value={settings.model_choice ?? 'default'}
-          onChange={(e) => onChange('model_choice', e.target.value)}
-          disabled={running}
-        >
-          <option value="default">Default — Qwen 3.5 122B</option>
-          <option value="fast">Fast — DeepSeek V4 Flash (1M ctx)</option>
-          <option value="short">Short &amp; fastest — Llama 3.1 8B</option>
-          <option value="balanced">Balanced — GLM 4.7</option>
-          <option value="quality">Quality — DeepSeek V3.2</option>
-          <option value="long">Long context — DeepSeek V4 Pro (1M ctx)</option>
-        </select>
-      </Field>}
+      {!isHtml && (
+        <Field label="AI Model">
+          <ModelChooser
+            value={settings.model_choice ?? 'default'}
+            onChange={(v) => onChange('model_choice', v)}
+            disabled={running}
+          />
+        </Field>
+      )}
 
       {isHtml && (
         <div className="flex flex-wrap gap-2">
@@ -1337,15 +1802,15 @@ function ContentStep({
         </div>
       </Field>
 
-      {!isHtml && <Field label="System prompt (optional)">
-        <textarea
-          className="textarea h-24 resize-y"
-          placeholder="Optional extra instructions for HTML generation…"
-          value={settings.system_prompt ?? ''}
-          onChange={(e) => onChange('system_prompt', e.target.value)}
-          disabled={running}
-        />
-      </Field>}
+      {!isHtml && (
+        <Field label="System prompt (optional)">
+          <SystemPromptEditor
+            value={settings.system_prompt ?? ''}
+            onChange={(v) => onChange('system_prompt', v)}
+            disabled={running}
+          />
+        </Field>
+      )}
     </>
   )
 }

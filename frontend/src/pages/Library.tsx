@@ -3,6 +3,7 @@ import type React from 'react'
 import {
   Archive,
   Download,
+  ExternalLink,
   Eye,
   FileText,
   Film,
@@ -465,6 +466,13 @@ export default function Library() {
             onToggle={toggleOne}
             onPreview={(name) => setPreview({ kind, filename: name })}
             onDownload={onDownloadOne}
+            onOpenExternal={(name) => {
+              // E3: PowerPoint is not previewable inline — opening the
+              // download URL in a new tab lets the OS hand off to the
+              // user's preferred editor (PowerPoint / Keynote / web).
+              const url = urlFor(name)
+              window.open(url, '_blank', 'noopener')
+            }}
           />
           <LibraryPaginator
             sentinelRef={sentinelRef}
@@ -477,7 +485,7 @@ export default function Library() {
       )}
       </div>
 
-      {preview && (
+      {preview && preview.kind !== 'presentation' && (
         <AssetPreviewModal
           kind={preview.kind === 'screenshot' ? 'image' : preview.kind === 'html' ? 'html' : 'video'}
           src={urlFor(preview.filename)}
@@ -662,6 +670,7 @@ function GroupedGeneratedFiles({
   onToggle,
   onPreview,
   onDownload,
+  onOpenExternal,
 }: {
   kind: 'presentation' | 'video'
   files: string[]
@@ -670,6 +679,7 @@ function GroupedGeneratedFiles({
   onToggle: (name: string) => void
   onPreview: (name: string) => void
   onDownload: (name: string) => void
+  onOpenExternal?: (name: string) => void
 }) {
   const groups = groupGeneratedFiles(files)
   return (
@@ -699,6 +709,11 @@ function GroupedGeneratedFiles({
                       selected={selected.has(name)}
                       onToggle={() => onToggle(name)}
                       onPreview={kind === 'video' ? () => onPreview(name) : undefined}
+                      onOpenExternal={
+                        kind === 'presentation' && onOpenExternal
+                          ? () => onOpenExternal(name)
+                          : undefined
+                      }
                       onDownload={() => onDownload(name)}
                     />
                   ))}
@@ -719,6 +734,7 @@ function GeneratedFileRow({
   selected,
   onToggle,
   onPreview,
+  onOpenExternal,
   onDownload,
 }: {
   kind: 'presentation' | 'video'
@@ -727,6 +743,7 @@ function GeneratedFileRow({
   selected: boolean
   onToggle: () => void
   onPreview?: () => void
+  onOpenExternal?: () => void
   onDownload: () => void
 }) {
   const Icon = kind === 'presentation' ? Presentation : Film
@@ -751,6 +768,17 @@ function GeneratedFileRow({
       {onPreview && (
         <button type="button" onClick={onPreview} className="btn-ghost !px-2 !py-1" aria-label="Preview">
           <Eye size={14} />
+        </button>
+      )}
+      {onOpenExternal && (
+        <button
+          type="button"
+          onClick={onOpenExternal}
+          className="btn-ghost !px-2 !py-1"
+          aria-label="Open externally"
+          title="Open in PowerPoint / web viewer"
+        >
+          <ExternalLink size={14} />
         </button>
       )}
       <button type="button" onClick={onDownload} className="btn-ghost !px-2 !py-1" aria-label="Download">
