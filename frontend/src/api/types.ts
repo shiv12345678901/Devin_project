@@ -81,6 +81,11 @@ export interface GenerateSettings {
    * whether the saved outro file should be re-rendered from the current
    * editor state at submit time. */
   auto_thumbnail_outro_generated?: boolean
+  /** Optional outro-specific title/topic. When set, the outro thumbnail uses
+   * this text while still auto-incrementing Unit/Chapter number. */
+  auto_thumbnail_outro_title?: string
+  /** Optional outro-specific side image. Falls back to the intro side image. */
+  auto_thumbnail_outro_side_image_url?: string
 }
 
 export interface SavedThumbnailTemplate {
@@ -117,6 +122,7 @@ export interface BackendRunStartResponse {
   run_id: string
   operation_id: string
   queue_position?: number
+  estimated_total_seconds?: number
   error?: string
 }
 
@@ -130,6 +136,8 @@ export interface BackendRunDetail {
     message?: string
     progress?: number
     queue_position?: number
+    settings?: Record<string, unknown>
+    metrics?: Record<string, unknown>
     outputs?: {
       html_filename?: string
       html_file?: string
@@ -142,6 +150,18 @@ export interface BackendRunDetail {
     }
   }
   error?: string
+}
+
+export interface PendingClientQueueItem {
+  id: string
+  tool: 'text-to-video' | 'html-to-video'
+  kind: 'text' | 'html'
+  inputPreview: string
+  inputText?: string
+  queuedAt: number
+  settings?: GenerateSettings
+  text?: string
+  html?: string
 }
 
 export type SseEvent =
@@ -237,6 +257,9 @@ export interface ListResponse {
   html_files: string[]
   presentation_files?: string[]
   video_files?: string[]
+  html_sizes?: Record<string, number>
+  presentation_sizes?: Record<string, number>
+  video_sizes?: Record<string, number>
 }
 
 export interface CacheStats {

@@ -130,13 +130,15 @@ function subjectName(value: string): string {
   return raw ? raw[0].toUpperCase() + raw.slice(1) : 'Subject'
 }
 
-function chapterNumber(...values: string[]): string {
+function unitOrChapterRef(...values: string[]): { label: 'Unit' | 'Chapter'; number: string } | null {
   for (const value of values) {
-    const match = String(value || '').match(/chapter\s*[_-]?\s*(\d+)/i)
-    if (match) return match[1]
+    const text = String(value || '')
+    const unit = text.match(/\bunit\s*[_\-:]?\s*(\d{1,3})\b/i)
+    if (unit) return { label: 'Unit', number: unit[1] }
+    const chapter = text.match(/\bchapter\s*[_\-:]?\s*(\d{1,3})\b/i)
+    if (chapter) return { label: 'Chapter', number: chapter[1] }
   }
-  const numeric = values.join(' ').match(/\b(\d{1,2})\b/)
-  return numeric?.[1] ?? ''
+  return null
 }
 
 function nepaliChapterName(...values: string[]): string {
@@ -150,12 +152,24 @@ function nepaliChapterName(...values: string[]): string {
 function englishChapterName(...values: string[]): string {
   for (const value of values) {
     const text = String(value || '')
+    const afterUnit = text.match(/\bunit\s*\d+\s*[:\-]?\s*([A-Za-z][A-Za-z\s'&,-]{2,90})/i)
+    if (afterUnit) return cleanupEnglishTitle(afterUnit[1])
     const beforeNepaliParen = text.match(/([A-Za-z][A-Za-z\s'-]{2,80})\s*\([\u0900-\u097F]/)
-    if (beforeNepaliParen) return beforeNepaliParen[1].trim()
+    if (beforeNepaliParen) return cleanupEnglishTitle(beforeNepaliParen[1])
     const afterChapter = text.match(/chapter\s*\d+[^A-Za-z]+([A-Za-z][A-Za-z\s'-]{2,60})/i)
-    if (afterChapter) return afterChapter[1].trim()
+    if (afterChapter) return cleanupEnglishTitle(afterChapter[1])
   }
   return ''
+}
+
+function cleanupEnglishTitle(value: string): string {
+  return String(value || '')
+    .replace(/\bexercise\s*\d{4}\b.*$/i, '')
+    .replace(/\bexercise\b\s*$/i, '')
+    .replace(/\bchapter\s*\/\s*reading material\b.*$/i, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[,:\-\s]+$/g, '')
+    .trim()
 }
 
 function withKo(name: string): string {
@@ -167,17 +181,22 @@ function withKo(name: string): string {
 function buildExactTitle(video: YoutubeVideoItem, metadataInput: string): string {
   const className = normalizeClassName(video.class_name)
   const subject = subjectName(video.subject)
-  const chapter = chapterNumber(metadataInput, video.chapter_name, video.title)
+  const ref = unitOrChapterRef(metadataInput, video.chapter_name, video.title)
   const nepali = nepaliChapterName(metadataInput, video.input_text ?? '', video.input_preview ?? '', video.chapter_name)
-  const chapterPart = chapter ? ` Chapter ${chapter}` : ''
-  return `${withKo(nepali)} सम्पूर्ण अभ्यास | ${className} ${subject}${chapterPart} Exercise | ${className} ${subject} Guide 2083`
+  const englishTitle = englishChapterName(metadataInput, video.chapter_name, video.title, video.input_text ?? '', video.input_preview ?? '')
+  const refPart = ref ? ` ${ref.label} ${ref.number}` : ''
+  if (subject.toLowerCase() === 'english' || !nepali) {
+    const topic = englishTitle || `${className} ${subject}${refPart}`.trim()
+    return `${topic} Exercise | ${className} ${subject}${refPart} exercise | SEE guide 2083`
+  }
+  return `${withKo(nepali)} सम्पूर्ण अभ्यास | ${className} ${subject}${refPart} Exercise | ${className} ${subject} Guide 2083`
 }
 
 function compactKey(video: YoutubeVideoItem): string {
   const className = normalizeClassName(video.class_name).replace(/\s+/g, '')
   const subject = subjectName(video.subject).replace(/\s+/g, '')
-  const chapter = chapterNumber(video.chapter_name, video.title)
-  return `${className}${subject}${chapter ? `Chapter${chapter}` : ''}`
+  const ref = unitOrChapterRef(video.chapter_name, video.title)
+  return `${className}${subject}${ref ? `${ref.label}${ref.number}` : ''}`
 }
 
 function defaultHashtags(video: YoutubeVideoItem, exactTitle: string): string[] {
@@ -199,8 +218,8 @@ function defaultHashtags(video: YoutubeVideoItem, exactTitle: string): string[] 
 function defaultQueries(video: YoutubeVideoItem): string[] {
   const className = normalizeClassName(video.class_name).toLowerCase()
   const subject = subjectName(video.subject).toLowerCase()
-  const chapter = chapterNumber(video.chapter_name, video.title)
-  const prefix = `${className} ${subject}${chapter ? ` chapter ${chapter}` : ''}`
+  const ref = unitOrChapterRef(video.chapter_name, video.title)
+  const prefix = `${className} ${subject}${ref ? ` ${ref.label.toLowerCase()} ${ref.number}` : ''}`
   return [
     `${prefix} exercise`,
     `${prefix} question answer`,
@@ -216,13 +235,13 @@ function defaultQueries(video: YoutubeVideoItem): string[] {
 function defaultAdditionalQueries(video: YoutubeVideoItem): string[] {
   const className = normalizeClassName(video.class_name)
   const subject = subjectName(video.subject)
-  const chapter = chapterNumber(video.chapter_name, video.title)
-  const base = `${className} ${subject}${chapter ? ` Chapter ${chapter}` : ''}`
+  const ref = unitOrChapterRef(video.chapter_name, video.title)
+  const base = `${className} ${subject}${ref ? ` ${ref.label} ${ref.number}` : ''}`
   return [
     `${base} Solution`,
     `${base} Summary`,
     `NEB ${base} All Exercise Answer`,
-    `${subject} ${chapter ? `Chapter ${chapter}` : 'Chapter'} Complete Guide`,
+    `${subject} ${ref ? `${ref.label} ${ref.number}` : 'Chapter'} Complete Guide`,
     `${base} Complete Notes`,
     `${base} Important Questions`,
     `NEB Curriculum 2083 ${className} ${subject}`,
@@ -232,8 +251,8 @@ function defaultAdditionalQueries(video: YoutubeVideoItem): string[] {
 function defaultTags(video: YoutubeVideoItem): string[] {
   const className = normalizeClassName(video.class_name)
   const subject = subjectName(video.subject)
-  const chapter = chapterNumber(video.chapter_name, video.title)
-  const base = `${className} ${subject}${chapter ? ` Chapter ${chapter}` : ''}`
+  const ref = unitOrChapterRef(video.chapter_name, video.title)
+  const base = `${className} ${subject}${ref ? ` ${ref.label} ${ref.number}` : ''}`
   const englishChapter = englishChapterName(
     video.input_text ?? '',
     video.input_preview ?? '',
@@ -261,12 +280,101 @@ function defaultTagsText(video: YoutubeVideoItem): string {
   return defaultTags(video).join(',')
 }
 
+function textFromHtmlOrPlain(value: string): string {
+  return String(value || '')
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/\s*(p|div|li|tr|h[1-6]|section|article)\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+}
+
+function cleanProblemLine(value: string): string {
+  return String(value || '')
+    .replace(/^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s*[\).:\-]\s*/i, '')
+    .replace(/^\s*[\(\[]?[a-z][\)\].:\-]\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s"'“”]+|[\s"'“”]+$/g, '')
+    .trim()
+}
+
+function looksLikeProblem(value: string): boolean {
+  const text = cleanProblemLine(value)
+  if (text.length < 12 || text.length > 180) return false
+  if (/^(chapter|unit|lesson|exercise|summary|answer|solution|glossary|youtube|class)\b/i.test(text)) return false
+  if (/[?？]\s*$/.test(text)) return true
+  if (/^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s*[\).:\-]/i.test(value)) return true
+  return /\b(what|why|how|when|where|which|who|calculate|find|write|answer|explain|describe|discuss|solve|fill|choose|match|complete|translate|rearrange|convert|prove|show)\b/i.test(text)
+}
+
+function extractProblemQuestions(video: YoutubeVideoItem, metadataInput: string): string[] {
+  const source = textFromHtmlOrPlain([
+    video.input_text,
+    video.input_preview,
+    video.chapter_name,
+    video.title,
+    metadataInput,
+  ].filter(Boolean).join('\n'))
+  const lines = source
+    .split(/\n+/)
+    .filter(Boolean)
+  const seen = new Set<string>()
+  const problems: string[] = []
+  for (const line of lines) {
+    if (!looksLikeProblem(line)) continue
+    const problem = cleanProblemLine(line)
+    const key = problem.toLowerCase().replace(/[^a-z0-9\u0900-\u097F]+/g, ' ')
+    if (seen.has(key)) continue
+    seen.add(key)
+    problems.push(problem)
+    if (problems.length >= 15) break
+  }
+  return problems
+}
+
+function formatProblemTimestamp(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(safe / 3600)
+  const minutes = Math.floor((safe % 3600) / 60)
+  const seconds = safe % 60
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+function buildProblemsText(video: YoutubeVideoItem, metadataInput: string): string {
+  const problems = extractProblemQuestions(video, metadataInput)
+  if (!problems.length) return ''
+  const duration = video.duration_seconds && video.duration_seconds > 0 ? video.duration_seconds : 0
+  const first = duration ? Math.min(32, Math.max(8, Math.floor(duration * 0.08))) : 32
+  const interval = duration && problems.length > 1
+    ? Math.max(35, Math.floor((duration - first - 20) / problems.length))
+    : 75
+  const lastAllowedSecond = duration ? Math.max(0, Math.floor(duration) - 1) : null
+  const lines: string[] = []
+  for (let index = 0; index < problems.length; index += 1) {
+    const timestampSecond = first + (index * interval)
+    if (lastAllowedSecond != null && timestampSecond > lastAllowedSecond) break
+    const line = `${formatProblemTimestamp(timestampSecond)} ${problems[index]}`
+    const next = [...lines, line].join('\n')
+    if (next.length > 800) break
+    lines.push(line)
+  }
+  return lines.join('\n')
+}
+
 function buildMetadata(video: YoutubeVideoItem, metadataInput: string, template: string) {
   const exactTitle = buildExactTitle(video, metadataInput)
   return {
     title: exactTitle,
     description: descriptionFromTemplate(template, video, exactTitle),
     tags: defaultTagsText(video),
+    problems: buildProblemsText(video, metadataInput),
   }
 }
 
@@ -480,6 +588,7 @@ function PublishDetail({
   const [metadataInput, setMetadataInput] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  const [problems, setProblems] = useState('')
   const [tags, setTags] = useState('')
   const [preview, setPreview] = useState<'video' | 'thumbnail' | null>(null)
 
@@ -491,6 +600,7 @@ function PublishDetail({
       setMetadataInput(nextInput)
       setTitle(metadata.title)
       setDescription(metadata.description)
+      setProblems(metadata.problems)
       setTags(metadata.tags)
     }, 0)
     return () => window.clearTimeout(t)
@@ -506,6 +616,7 @@ function PublishDetail({
     const metadata = buildMetadata(video, metadataInput, template)
     setTitle(metadata.title)
     setDescription(metadata.description)
+    setProblems(metadata.problems)
     setTags(metadata.tags)
     toast.push({ variant: 'success', message: 'Metadata regenerated.' })
   }
@@ -625,6 +736,17 @@ function PublishDetail({
               rows={13}
               showCounter
               maxChars={5000}
+            />
+            <Field
+              label="Problems"
+              value={problems}
+              onChange={setProblems}
+              onCopy={() => copy('Problems', problems)}
+              multiline
+              rows={7}
+              showCounter
+              maxChars={800}
+              controlClassName="font-mono text-xs leading-relaxed"
             />
             <Field
               label="Tags"

@@ -23,6 +23,7 @@ import { useConfirm } from '../components/ConfirmDialog'
 
 type AssetKind = 'html' | 'screenshot' | 'presentation' | 'video'
 type SortKey = 'name-asc' | 'name-desc'
+type FileSizes = Record<string, number>
 
 interface Preview {
   kind: AssetKind
@@ -43,6 +44,49 @@ function kindIcon(kind: AssetKind): React.ReactNode {
   return <Film size={20} />
 }
 
+function formatBytes(bytes?: number): string {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return 'Size unknown'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB']
+  let value = bytes / 1024
+  let idx = 0
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024
+    idx += 1
+  }
+  return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[idx]}`
+}
+
+function classifyGeneratedFile(name: string): { className: string; subject: string } {
+  const clean = name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ')
+  const classMatch = clean.match(/\bclass\s*(\d{1,2})\b/i)
+  const className = classMatch ? `Class ${classMatch[1]}` : 'Unsorted'
+  const afterClass = classMatch ? clean.slice((classMatch.index ?? 0) + classMatch[0].length).trim() : clean
+  const subject = afterClass.match(/^[a-zA-Z]+/)?.[0]
+  return {
+    className,
+    subject: subject ? subject[0].toUpperCase() + subject.slice(1).toLowerCase() : 'General',
+  }
+}
+
+function groupGeneratedFiles(files: string[]) {
+  const map = new Map<string, Map<string, string[]>>()
+  for (const file of files) {
+    const { className, subject } = classifyGeneratedFile(file)
+    if (!map.has(className)) map.set(className, new Map())
+    const subjects = map.get(className)!
+    subjects.set(subject, [...(subjects.get(subject) ?? []), file])
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+    .map(([className, subjects]) => ({
+      className,
+      subjects: [...subjects.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([subject, items]) => ({ subject, items })),
+    }))
+}
+
 /**
  * How many library entries to render per "page". On a full repo a section
  * can contain several hundred files — rendering the whole grid at once
@@ -59,6 +103,9 @@ export default function Library() {
   const [htmlFiles, setHtmlFiles] = useState<string[]>([])
   const [presentationFiles, setPresentationFiles] = useState<string[]>([])
   const [videoFiles, setVideoFiles] = useState<string[]>([])
+  const [htmlSizes, setHtmlSizes] = useState<FileSizes>({})
+  const [presentationSizes, setPresentationSizes] = useState<FileSizes>({})
+  const [videoSizes, setVideoSizes] = useState<FileSizes>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -78,6 +125,9 @@ export default function Library() {
       setHtmlFiles(r.html_files ?? [])
       setPresentationFiles(r.presentation_files ?? [])
       setVideoFiles(r.video_files ?? [])
+      setHtmlSizes(r.html_sizes ?? {})
+      setPresentationSizes(r.presentation_sizes ?? {})
+      setVideoSizes(r.video_sizes ?? {})
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -389,6 +439,7 @@ export default function Library() {
               <HtmlRow
                 key={name}
                 name={name}
+                size={htmlSizes[name]}
                 selected={selected.has(name)}
                 onToggle={() => toggleOne(name)}
                 onPreview={() => setPreview({ kind: 'html', filename: name })}
@@ -406,19 +457,15 @@ export default function Library() {
         </>
       ) : (
         <>
-          <div className="card divide-y divide-slate-100 dark:divide-white/5">
-            {visible.map((name) => (
-              <GeneratedFileRow
-                key={name}
-                kind={kind}
-                name={name}
-                selected={selected.has(name)}
-                onToggle={() => toggleOne(name)}
-                onPreview={kind === 'video' ? () => setPreview({ kind: 'video', filename: name }) : undefined}
-                onDownload={() => onDownloadOne(name)}
-              />
-            ))}
-          </div>
+          <GroupedGeneratedFiles
+            kind={kind}
+            files={visible}
+            sizes={kind === 'presentation' ? presentationSizes : videoSizes}
+            selected={selected}
+            onToggle={toggleOne}
+            onPreview={(name) => setPreview({ kind, filename: name })}
+            onDownload={onDownloadOne}
+          />
           <LibraryPaginator
             sentinelRef={sentinelRef}
             hasMore={hasMore}
@@ -550,12 +597,14 @@ function ScreenshotCard({
 
 function HtmlRow({
   name,
+  size,
   selected,
   onToggle,
   onPreview,
   onDownload,
 }: {
   name: string
+  size?: number
   selected: boolean
   onToggle: () => void
   onPreview: () => void
@@ -579,6 +628,7 @@ function HtmlRow({
         className="min-w-0 flex-1 text-left text-sm font-medium text-slate-800 hover:text-brand-700 dark:text-slate-100 dark:hover:text-brand-300"
       >
         <span className="block truncate">{name}</span>
+        <span className="text-xs font-normal text-slate-500 dark:text-slate-400">{formatBytes(size)}</span>
       </button>
       <button
         type="button"
@@ -604,9 +654,68 @@ function HtmlRow({
 // WAI-ARIA tablist pattern with roving-tabindex + arrow-key navigation, so
 // Left/Right, Home/End walk between "Screenshots" and "HTML files" and the
 // active tab is the one in the document tab order.
+function GroupedGeneratedFiles({
+  kind,
+  files,
+  sizes,
+  selected,
+  onToggle,
+  onPreview,
+  onDownload,
+}: {
+  kind: 'presentation' | 'video'
+  files: string[]
+  sizes: FileSizes
+  selected: Set<string>
+  onToggle: (name: string) => void
+  onPreview: (name: string) => void
+  onDownload: (name: string) => void
+}) {
+  const groups = groupGeneratedFiles(files)
+  return (
+    <div className="space-y-4">
+      {groups.map((group) => (
+        <section key={group.className} className="rounded-lg border border-slate-200 bg-[rgb(var(--bg-surface))] p-4 dark:border-white/10">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-[rgb(var(--text-strong))]">{group.className}</h2>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              {group.subjects.reduce((sum, subject) => sum + subject.items.length, 0)} file(s)
+            </span>
+          </div>
+          <div className="space-y-3">
+            {group.subjects.map((subject) => (
+              <div key={`${group.className}-${subject.subject}`} className="rounded-md border border-slate-200 bg-slate-50/60 dark:border-white/10 dark:bg-white/[0.03]">
+                <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-2 dark:border-white/10">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">{subject.subject}</h3>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">{subject.items.length} item(s)</span>
+                </div>
+                <div className="divide-y divide-slate-200 px-3 dark:divide-white/10">
+                  {subject.items.map((name) => (
+                    <GeneratedFileRow
+                      key={name}
+                      kind={kind}
+                      name={name}
+                      size={sizes[name]}
+                      selected={selected.has(name)}
+                      onToggle={() => onToggle(name)}
+                      onPreview={kind === 'video' ? () => onPreview(name) : undefined}
+                      onDownload={() => onDownload(name)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  )
+}
+
 function GeneratedFileRow({
   kind,
   name,
+  size,
   selected,
   onToggle,
   onPreview,
@@ -614,6 +723,7 @@ function GeneratedFileRow({
 }: {
   kind: 'presentation' | 'video'
   name: string
+  size?: number
   selected: boolean
   onToggle: () => void
   onPreview?: () => void
@@ -635,7 +745,7 @@ function GeneratedFileRow({
       <div className="min-w-0 flex-1 text-sm font-medium text-slate-800 dark:text-slate-100">
         <span className="block truncate">{name}</span>
         <span className="text-xs font-normal text-slate-500 dark:text-slate-400">
-          {kind === 'presentation' ? 'PowerPoint deck' : 'MP4 video'}
+          {kind === 'presentation' ? 'PowerPoint deck' : 'MP4 video'} · {formatBytes(size)}
         </span>
       </div>
       {onPreview && (

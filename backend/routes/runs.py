@@ -44,10 +44,64 @@ from utils.eta_tracker import eta_tracker
 
 runs_bp = Blueprint("runs", __name__)
 MIN_VIDEO_SECONDS = 500.0
+PENDING_CLIENT_QUEUE_FILE = Path("output") / "pending_client_queue.json"
+_PENDING_CLIENT_QUEUE_LOCK = threading.RLock()
 
 
 def _emit(evt: dict) -> str:
     return f"data: {json.dumps(evt)}\n\n"
+
+
+def _read_pending_client_queue() -> list[dict]:
+    with _PENDING_CLIENT_QUEUE_LOCK:
+        try:
+            if not PENDING_CLIENT_QUEUE_FILE.exists():
+                return []
+            with PENDING_CLIENT_QUEUE_FILE.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+
+def _write_pending_client_queue(items: list[dict]) -> None:
+    with _PENDING_CLIENT_QUEUE_LOCK:
+        PENDING_CLIENT_QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = PENDING_CLIENT_QUEUE_FILE.with_suffix(".json.tmp")
+        with tmp_path.open("w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, PENDING_CLIENT_QUEUE_FILE)
+
+
+def _clean_pending_client_queue_item(item) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    kind = str(item.get("kind") or "")
+    tool = str(item.get("tool") or "")
+    if kind not in {"text", "html"}:
+        return None
+    if tool not in {"text-to-video", "html-to-video"}:
+        return None
+    text = str(item.get("text") if kind == "text" else item.get("html") or "")
+    if not text.strip():
+        return None
+    settings = item.get("settings") if isinstance(item.get("settings"), dict) else {}
+    queued_at = item.get("queuedAt")
+    try:
+        queued_at = int(queued_at)
+    except (TypeError, ValueError):
+        queued_at = int(time.time() * 1000)
+    cleaned = {
+        "id": _safe_name(str(item.get("id") or f"queue-{queued_at}"), f"queue-{queued_at}"),
+        "tool": tool,
+        "kind": kind,
+        "inputPreview": str(item.get("inputPreview") or text[:200])[:200],
+        "inputText": str(item.get("inputText") or text),
+        "queuedAt": queued_at,
+        "settings": settings,
+    }
+    cleaned[kind] = text
+    return cleaned
 
 
 def _safe_name(name: str, fallback: str) -> str:
@@ -91,6 +145,56 @@ def _canonical_output_path(folder: str, project_info: dict, output_name: str, in
     return _rel(Path(folder) / f"{stem}{suffix}") or ""
 
 
+def _canonical_powerpoint_paths(project_info: dict, output_name: str, input_text: str) -> tuple[str, str]:
+    import sys
+
+    config_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config"))
+    if config_dir not in sys.path:
+        sys.path.insert(0, config_dir)
+    from config import POWERPOINT_OUTPUT_FOLDER, POWERPOINT_VIDEO_FOLDER  # type: ignore
+
+    return (
+        _canonical_output_path(POWERPOINT_OUTPUT_FOLDER, project_info, output_name, input_text, ".pptx"),
+        _canonical_output_path(POWERPOINT_VIDEO_FOLDER, project_info, output_name, input_text, ".mp4"),
+    )
+
+
+def _find_resume_pptx(tool: str, input_fingerprint: str, expected_pptx: str) -> str | None:
+    """Return an existing PPTX only when it belongs to the same failed job.
+
+    The filename stem is human-readable and can repeat, so existence alone is
+    not enough. We require a previous failed/cancelled run with the exact same
+    fingerprint, then make sure the PPTX was written during or after that run.
+    """
+    path = Path(expected_pptx)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    if stat.st_size < 10_000:
+        return None
+    for item in list_runs(limit=500):
+        if item.get("tool") != tool:
+            continue
+        if item.get("input_fingerprint") != input_fingerprint:
+            continue
+        if item.get("status") not in {"failed", "cancelled"}:
+            continue
+        try:
+            started_at = float(item.get("started_at") or item.get("created_at") or 0)
+            updated_at = float(item.get("updated_at") or item.get("completed_at") or time.time())
+        except (TypeError, ValueError):
+            continue
+        if stat.st_mtime + 2 < started_at:
+            continue
+        if updated_at and stat.st_mtime > updated_at + 120:
+            continue
+        return _rel(path)
+    return None
+
+
 def _bool_value(value, default: bool = False) -> bool:
     if value is None:
         return default
@@ -120,6 +224,59 @@ def _thumbnail_path(filename: str | None) -> str | None:
     except ValueError:
         return None
     return str(candidate) if candidate.is_file() else None
+
+
+def _cancel_after_stage_requested(run_id: str, stage: str) -> bool:
+    run = get_run(run_id)
+    settings = run.get("settings", {}) if isinstance(run, dict) else {}
+    return isinstance(settings, dict) and settings.get("cancel_after_stage") == stage
+
+
+def _cancel_at_checkpoint(ctx, run_id: str, stage: str, message: str, outputs: dict) -> bool:
+    if not _cancel_after_stage_requested(run_id, stage):
+        return False
+    ctx.cancel(message, outputs=outputs)
+    return True
+
+
+def _delete_generated_outputs(outputs: dict) -> None:
+    targets: list[tuple[str, str | None]] = [
+        ("output/html", outputs.get("html_filename") or outputs.get("html_file")),
+        ("output/presentations", outputs.get("presentation_file") or outputs.get("presentation_path")),
+        ("output/videos", outputs.get("video_file") or outputs.get("video_path")),
+    ]
+    for name in outputs.get("screenshot_files") or []:
+        targets.append(("output/screenshots", name))
+    folder = outputs.get("screenshot_folder")
+    if folder:
+        targets.append(("output/screenshots", folder))
+    for base, name in targets:
+        if not name:
+            continue
+        base_path = Path(base).resolve()
+        candidate = (base_path / str(name)).resolve()
+        try:
+            candidate.relative_to(base_path)
+        except ValueError:
+            continue
+        try:
+            if candidate.is_dir():
+                for child in sorted(candidate.rglob("*"), reverse=True):
+                    if child.is_file():
+                        child.unlink(missing_ok=True)
+                    elif child.is_dir():
+                        child.rmdir()
+                candidate.rmdir()
+            elif candidate.is_file():
+                candidate.unlink()
+        except Exception:
+            pass
+
+
+def _delete_outputs_on_cancel_requested(run_id: str) -> bool:
+    run = get_run(run_id)
+    settings = run.get("settings", {}) if isinstance(run, dict) else {}
+    return isinstance(settings, dict) and _bool_value(settings.get("delete_outputs_on_cancel"), False)
 
 
 def _run_powerpoint_export(
@@ -227,8 +384,42 @@ def _run_powerpoint_export(
             ctx.progress(stage, progress, str(payload.get("message") or "PowerPoint is working..."), data=payload)
 
         if output_format == "video":
-            ctx.progress("powerpoint", 90, "Building presentation and exporting MP4...")
             studio = VideoStudio()
+            if studio.use_powerpoint:
+                controller = PowerPointController()
+                ctx.progress("powerpoint", 90, "Building PowerPoint deck...")
+                presentation_file = controller.create_template_presentation(
+                    template_path=POWERPOINT_TEMPLATE_PATH,
+                    output_pptx_path=pptx_path,
+                    image_files=screenshot_files,
+                    slide_duration=screenshot_slide_duration,
+                    intro_thumbnail_path=intro_thumbnail_path,
+                    intro_thumbnail_duration=intro_thumbnail_duration,
+                    outro_thumbnail_path=outro_thumbnail_path,
+                    outro_thumbnail_duration=outro_thumbnail_duration,
+                    progress_callback=_ppt_progress,
+                    cancel_event=ctx.cancel_event,
+                )
+                presentation_file = _rel(presentation_file)
+                if _cancel_after_stage_requested(ctx.run_id, "pptx_built"):
+                    return presentation_file, None
+
+                ctx.progress("video_export", 95, "Exporting MP4 video...")
+                exported = controller.export_to_video(
+                    presentation_path=pptx_path,
+                    output_video_path=video_path,
+                    resolution=(width, height),
+                    fps=fps,
+                    quality=max(1, min(5, int(round(quality / 20)) or 1)),
+                    progress_callback=_ppt_progress,
+                    cancel_event=ctx.cancel_event,
+                )
+                video_file = _rel(exported)
+                if not video_file or not Path(video_file).exists():
+                    raise RuntimeError("PowerPoint did not produce an MP4 file")
+                return presentation_file, video_file
+
+            ctx.progress("powerpoint", 90, "Building presentation and exporting MP4...")
             try:
                 result = studio.build_video(
                     {
@@ -272,6 +463,40 @@ def _run_powerpoint_export(
             presentation_file = _rel(presentation_file)
 
     return presentation_file, video_file
+
+
+def _export_video_from_existing_pptx(
+    ctx,
+    *,
+    pptx_path: str,
+    video_path: str,
+    close_powerpoint: bool,
+    concurrent_pipeline_runs: bool,
+    width: int,
+    height: int,
+    fps: int,
+    quality: int,
+) -> tuple[str, str]:
+    with export_slot(ctx, concurrent_pipeline_runs):
+        if close_powerpoint:
+            ctx.progress("powerpoint_cleanup", 88, "Closing existing PowerPoint instances...")
+            _close_powerpoint_best_effort()
+            time.sleep(1)
+        ctx.check_cancelled()
+        ctx.progress("powerpoint_resume", 90, "Using existing PowerPoint deck; exporting MP4...")
+        Path(video_path).parent.mkdir(parents=True, exist_ok=True)
+        controller = PowerPointController()
+        exported = controller.export_to_video(
+            presentation_path=pptx_path,
+            output_video_path=video_path,
+            resolution=(width, height),
+            fps=fps,
+            quality=max(1, min(5, int(round(quality / 20)) or 1)),
+            cancel_event=ctx.cancel_event,
+        )
+        if not exported or not Path(exported).exists():
+            raise RuntimeError("PowerPoint did not produce an MP4 file from the existing deck")
+        return _rel(pptx_path) or pptx_path, _rel(exported) or exported
 
 
 def _close_powerpoint_best_effort() -> None:
@@ -420,6 +645,26 @@ def queue_status():
     return jsonify({"success": True, "queue": get_queue_snapshot()})
 
 
+@runs_bp.route("/runs/pending-client-queue", methods=["GET"])
+def pending_client_queue():
+    return jsonify({"success": True, "items": _read_pending_client_queue()})
+
+
+@runs_bp.route("/runs/pending-client-queue", methods=["PUT", "POST"])
+def save_pending_client_queue():
+    data = request.get_json(silent=True) or {}
+    raw_items = data.get("items") if isinstance(data, dict) else []
+    if not isinstance(raw_items, list):
+        return jsonify({"success": False, "error": "items must be a list"}), 400
+    items = []
+    for item in raw_items[:200]:
+        cleaned = _clean_pending_client_queue_item(item)
+        if cleaned:
+            items.append(cleaned)
+    _write_pending_client_queue(items)
+    return jsonify({"success": True, "items": items})
+
+
 @runs_bp.route("/runs/<run_id>", methods=["GET"])
 def run_detail(run_id: str):
     run = get_run(run_id)
@@ -458,7 +703,10 @@ def run_events(run_id: str):
 
 @runs_bp.route("/runs/<run_id>/cancel", methods=["POST"])
 def cancel_run(run_id: str):
-    if cancel_job(run_id):
+    data = request.get_json(silent=True) or {}
+    mode = str(data.get("mode") or "now")
+    delete_outputs = _bool_value(data.get("delete_outputs"), False)
+    if cancel_job(run_id, mode=mode, delete_outputs=delete_outputs):
         return jsonify({"success": True, "message": "Cancellation requested"})
     return jsonify({"success": False, "error": "Run is not queued or running"}), 404
 
@@ -582,12 +830,20 @@ def start_text_to_video():
             "operation_id": recent.get("operation_id"),
         }), 409
 
+    resume_pptx_path = None
+    resume_video_path = None
+    if output_format == "video":
+        expected_pptx, expected_video = _canonical_powerpoint_paths(project_info, output_name, text)
+        resume_pptx_path = _find_resume_pptx("text-to-video", input_fingerprint, expected_pptx)
+        resume_video_path = expected_video if resume_pptx_path else None
+
     operation_id = f"text_video_{time.time_ns()}"
     cancel_event = register_operation(operation_id)
     settings = dict(data)
     settings.update({
         "output_name": output_name,
         "input_fingerprint": input_fingerprint,
+        "estimated_total_seconds": estimated_total_seconds,
     })
     run = create_run(
         tool="text-to-video",
@@ -616,6 +872,55 @@ def start_text_to_video():
                 if estimated_total_seconds is not None
                 else None
             )
+            if resume_pptx_path and resume_video_path:
+                presentation_file, video_file = _export_video_from_existing_pptx(
+                    ctx,
+                    pptx_path=resume_pptx_path,
+                    video_path=resume_video_path,
+                    close_powerpoint=close_powerpoint,
+                    concurrent_pipeline_runs=concurrent_pipeline_runs,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    quality=quality,
+                )
+                outputs = {
+                    "html_filename": None,
+                    "html_file": None,
+                    "screenshot_folder": None,
+                    "screenshot_files": [],
+                    "screenshot_count": 0,
+                    "presentation_file": presentation_file,
+                    "presentation_path": presentation_file,
+                    "video_file": video_file,
+                    "video_path": video_file,
+                    "resume_source": "pptx",
+                }
+                log_generation({
+                    "tool": "text-to-video",
+                    "input_preview": text[:200],
+                    "output_name": output_name,
+                    "html_file": None,
+                    "screenshot_folder": None,
+                    "screenshot_count": 0,
+                    "presentation_file": presentation_file,
+                    "video_file": video_file,
+                    "operation_id": operation_id,
+                    "settings": settings,
+                    "resume_source": "pptx",
+                })
+                if _cancel_at_checkpoint(ctx, run_id, "video_export_done", "Cancelled after MP4 export finished", outputs):
+                    return
+                ctx.complete("Successfully exported MP4 from existing PowerPoint deck", outputs=outputs)
+                eta_tracker.record_process_completion(
+                    model_choice,
+                    len(ai_input_text),
+                    time.time() - process_started,
+                    resolution=resolution_label,
+                    concurrent=concurrent_pipeline_runs,
+                )
+                return
+
             ai_started = time.time()
             with ai_slot(ctx, concurrent_pipeline_runs):
                 ctx.progress("ai", 5, f"Generating HTML with model {model_choice}...", data=progress_data)
@@ -674,6 +979,17 @@ def start_text_to_video():
             ctx.output("html_file", html_filename)
             ctx.progress("html_saved", 30, "HTML saved")
 
+            html_outputs = {
+                "html_filename": html_filename,
+                "html_file": html_filename,
+                "screenshot_files": [],
+                "screenshot_count": 0,
+                "presentation_file": None,
+                "video_file": None,
+            }
+            if _cancel_at_checkpoint(ctx, run_id, "html_saved", "Cancelled after HTML file was saved", html_outputs):
+                return
+
             if output_format == "html":
                 outputs = {
                     "html_filename": html_filename,
@@ -725,6 +1041,18 @@ def start_text_to_video():
             ctx.output("screenshot_files", screenshot_names)
             ctx.progress("screenshots_done", 86, f"Captured {len(screenshot_files)} screenshot(s)")
 
+            screenshot_outputs = {
+                "html_filename": html_filename,
+                "html_file": html_filename,
+                "screenshot_folder": screenshot_folder,
+                "screenshot_files": screenshot_names,
+                "screenshot_count": len(screenshot_files),
+                "presentation_file": None,
+                "video_file": None,
+            }
+            if _cancel_at_checkpoint(ctx, run_id, "screenshots_done", "Cancelled after screenshots were captured", screenshot_outputs):
+                return
+
             if output_format in {"pptx", "video"}:
                 presentation_file, video_file = _run_powerpoint_export(
                     ctx,
@@ -748,6 +1076,21 @@ def start_text_to_video():
                     outro_thumbnail_enabled=outro_thumbnail_enabled,
                     outro_thumbnail_duration=outro_thumbnail_duration,
                 )
+                export_outputs = {
+                    "html_filename": html_filename,
+                    "html_file": html_filename,
+                    "screenshot_folder": screenshot_folder,
+                    "screenshot_files": screenshot_names,
+                    "screenshot_count": len(screenshot_files),
+                    "presentation_file": presentation_file,
+                    "presentation_path": presentation_file,
+                    "video_file": video_file,
+                    "video_path": video_file,
+                }
+                if _cancel_at_checkpoint(ctx, run_id, "pptx_built", "Cancelled after PowerPoint deck was saved", export_outputs):
+                    return
+                if _cancel_at_checkpoint(ctx, run_id, "video_export_done", "Cancelled after MP4 export finished", export_outputs):
+                    return
 
             outputs = {
                 "html_filename": html_filename,
@@ -786,7 +1129,21 @@ def start_text_to_video():
         except (CancelledError, Exception) as exc:
             if ctx.cancel_event.is_set() or isinstance(exc, CancelledError):
                 _close_powerpoint_best_effort()
-                ctx.cancel("Operation cancelled")
+                outputs = {
+                    "html_filename": html_filename,
+                    "html_file": html_filename,
+                    "screenshot_folder": screenshot_folder,
+                    "screenshot_files": screenshot_names,
+                    "screenshot_count": len(screenshot_names),
+                    "presentation_file": presentation_file,
+                    "presentation_path": presentation_file,
+                    "video_file": video_file,
+                    "video_path": video_file,
+                }
+                if _delete_outputs_on_cancel_requested(run_id):
+                    _delete_generated_outputs(outputs)
+                    outputs = {"screenshot_files": [], "screenshot_count": 0}
+                ctx.cancel("Operation cancelled", outputs=outputs)
             elif isinstance(exc, (PowerPointNotFoundError, TemplateError, ExportError)):
                 ctx.fail(str(exc))
             else:
@@ -807,6 +1164,7 @@ def start_text_to_video():
         "run_id": run_id,
         "operation_id": operation_id,
         "queue_position": position,
+        "estimated_total_seconds": estimated_total_seconds,
     })
 
 
@@ -923,6 +1281,13 @@ def start_html_to_video():
             "operation_id": duplicate.get("operation_id"),
         }), 409
 
+    resume_pptx_path = None
+    resume_video_path = None
+    if output_format == "video":
+        expected_pptx, expected_video = _canonical_powerpoint_paths(project_info, output_name, html_content)
+        resume_pptx_path = _find_resume_pptx("html-to-video", input_fingerprint, expected_pptx)
+        resume_video_path = expected_video if resume_pptx_path else None
+
     operation_id = f"html_video_{time.time_ns()}"
     cancel_event = register_operation(operation_id)
     settings = dict(data)
@@ -930,6 +1295,7 @@ def start_html_to_video():
         "output_format": output_format,
         "output_name": output_name,
         "input_fingerprint": input_fingerprint,
+        "estimated_total_seconds": estimated_total_seconds,
     })
     run = create_run(
         tool="html-to-video",
@@ -958,9 +1324,69 @@ def start_html_to_video():
                 if estimated_total_seconds is not None
                 else None
             )
+            if resume_pptx_path and resume_video_path:
+                presentation_file, video_file = _export_video_from_existing_pptx(
+                    ctx,
+                    pptx_path=resume_pptx_path,
+                    video_path=resume_video_path,
+                    close_powerpoint=close_powerpoint,
+                    concurrent_pipeline_runs=concurrent_pipeline_runs,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    quality=quality,
+                )
+                outputs = {
+                    "html_filename": None,
+                    "html_file": None,
+                    "screenshot_folder": None,
+                    "screenshot_files": [],
+                    "screenshot_count": 0,
+                    "presentation_file": presentation_file,
+                    "presentation_path": presentation_file,
+                    "video_file": video_file,
+                    "video_path": video_file,
+                    "resume_source": "pptx",
+                }
+                log_generation({
+                    "tool": "html-to-video",
+                    "input_preview": html_content[:200],
+                    "output_name": output_name,
+                    "html_file": None,
+                    "screenshot_folder": None,
+                    "screenshot_count": 0,
+                    "presentation_file": presentation_file,
+                    "video_file": video_file,
+                    "operation_id": operation_id,
+                    "settings": settings,
+                    "resume_source": "pptx",
+                })
+                if _cancel_at_checkpoint(ctx, run_id, "video_export_done", "Cancelled after MP4 export finished", outputs):
+                    return
+                ctx.complete("Successfully exported MP4 from existing PowerPoint deck", outputs=outputs)
+                eta_tracker.record_process_completion(
+                    model_choice,
+                    max(len(html_content), 1),
+                    time.time() - process_started,
+                    resolution=resolution_label,
+                    concurrent=concurrent_pipeline_runs,
+                )
+                return
+
             html_filename, _ = save_html(html_content, prefix=operation_id, folder="output/html")
             ctx.output("html_file", html_filename)
             ctx.progress("html_saved", 30, "HTML saved; starting screenshots...", data=progress_data)
+
+            html_outputs = {
+                "html_filename": html_filename,
+                "html_file": html_filename,
+                "screenshot_files": [],
+                "screenshot_count": 0,
+                "presentation_file": None,
+                "video_file": None,
+            }
+            if _cancel_at_checkpoint(ctx, run_id, "html_saved", "Cancelled after HTML file was saved", html_outputs):
+                return
 
             batch_id = get_next_batch_id()
             screenshot_folder = f"batch {batch_id}"
@@ -996,6 +1422,18 @@ def start_html_to_video():
             ctx.output("screenshot_files", screenshot_names)
             ctx.progress("screenshots_done", 86, f"Captured {len(screenshot_files)} screenshot(s)")
 
+            screenshot_outputs = {
+                "html_filename": html_filename,
+                "html_file": html_filename,
+                "screenshot_folder": screenshot_folder,
+                "screenshot_files": screenshot_names,
+                "screenshot_count": len(screenshot_files),
+                "presentation_file": None,
+                "video_file": None,
+            }
+            if _cancel_at_checkpoint(ctx, run_id, "screenshots_done", "Cancelled after screenshots were captured", screenshot_outputs):
+                return
+
             if output_format in {"pptx", "video"}:
                 presentation_file, video_file = _run_powerpoint_export(
                     ctx,
@@ -1019,6 +1457,21 @@ def start_html_to_video():
                     outro_thumbnail_enabled=outro_thumbnail_enabled,
                     outro_thumbnail_duration=outro_thumbnail_duration,
                 )
+                export_outputs = {
+                    "html_filename": html_filename,
+                    "html_file": html_filename,
+                    "screenshot_folder": screenshot_folder,
+                    "screenshot_files": screenshot_names,
+                    "screenshot_count": len(screenshot_files),
+                    "presentation_file": presentation_file,
+                    "presentation_path": presentation_file,
+                    "video_file": video_file,
+                    "video_path": video_file,
+                }
+                if _cancel_at_checkpoint(ctx, run_id, "pptx_built", "Cancelled after PowerPoint deck was saved", export_outputs):
+                    return
+                if _cancel_at_checkpoint(ctx, run_id, "video_export_done", "Cancelled after MP4 export finished", export_outputs):
+                    return
 
             outputs = {
                 "html_filename": html_filename,
@@ -1057,7 +1510,21 @@ def start_html_to_video():
         except (CancelledError, Exception) as exc:
             if ctx.cancel_event.is_set() or isinstance(exc, CancelledError):
                 _close_powerpoint_best_effort()
-                ctx.cancel("Operation cancelled")
+                outputs = {
+                    "html_filename": html_filename,
+                    "html_file": html_filename,
+                    "screenshot_folder": screenshot_folder,
+                    "screenshot_files": screenshot_names,
+                    "screenshot_count": len(screenshot_names),
+                    "presentation_file": presentation_file,
+                    "presentation_path": presentation_file,
+                    "video_file": video_file,
+                    "video_path": video_file,
+                }
+                if _delete_outputs_on_cancel_requested(run_id):
+                    _delete_generated_outputs(outputs)
+                    outputs = {"screenshot_files": [], "screenshot_count": 0}
+                ctx.cancel("Operation cancelled", outputs=outputs)
             elif isinstance(exc, (PowerPointNotFoundError, TemplateError, ExportError)):
                 ctx.fail(str(exc))
             else:
@@ -1078,6 +1545,7 @@ def start_html_to_video():
         "run_id": run_id,
         "operation_id": operation_id,
         "queue_position": position,
+        "estimated_total_seconds": estimated_total_seconds,
     })
 
 
@@ -1325,6 +1793,7 @@ def start_screenshots_to_video():
         "close_powerpoint_before_start": close_powerpoint,
         "concurrent_pipeline_runs": concurrent_pipeline_runs,
         "input_fingerprint": input_fingerprint,
+        "estimated_total_seconds": estimated_total_seconds,
     }
     run = create_run(
         tool="screenshots-to-video",
@@ -1388,6 +1857,19 @@ def start_screenshots_to_video():
                 outro_thumbnail_duration=outro_thumbnail_duration,
                 starting_progress=20,
             )
+            export_outputs = {
+                "screenshot_folder": screenshot_folder,
+                "screenshot_files": screenshot_names,
+                "screenshot_count": len(screenshot_abs),
+                "presentation_file": presentation_file,
+                "presentation_path": presentation_file,
+                "video_file": video_file,
+                "video_path": video_file,
+            }
+            if _cancel_at_checkpoint(ctx, run_id, "pptx_built", "Cancelled after PowerPoint deck was saved", export_outputs):
+                return
+            if _cancel_at_checkpoint(ctx, run_id, "video_export_done", "Cancelled after MP4 export finished", export_outputs):
+                return
 
             outputs = {
                 "screenshot_folder": screenshot_folder,
@@ -1425,7 +1907,19 @@ def start_screenshots_to_video():
         except (CancelledError, Exception) as exc:
             if ctx.cancel_event.is_set() or isinstance(exc, CancelledError):
                 _close_powerpoint_best_effort()
-                ctx.cancel("Operation cancelled")
+                outputs = {
+                    "screenshot_folder": screenshot_folder,
+                    "screenshot_files": screenshot_names,
+                    "screenshot_count": len(screenshot_names),
+                    "presentation_file": presentation_file,
+                    "presentation_path": presentation_file,
+                    "video_file": video_file,
+                    "video_path": video_file,
+                }
+                if _delete_outputs_on_cancel_requested(run_id):
+                    _delete_generated_outputs(outputs)
+                    outputs = {"screenshot_files": [], "screenshot_count": 0}
+                ctx.cancel("Operation cancelled", outputs=outputs)
             elif isinstance(exc, (PowerPointNotFoundError, TemplateError, ExportError)):
                 ctx.fail(str(exc))
             else:
@@ -1446,4 +1940,5 @@ def start_screenshots_to_video():
         "run_id": run_id,
         "operation_id": operation_id,
         "queue_position": position,
+        "estimated_total_seconds": estimated_total_seconds,
     })

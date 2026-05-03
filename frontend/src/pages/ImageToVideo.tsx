@@ -165,7 +165,7 @@ export default function ImageToVideo() {
               <Play size={16} /> Generate
             </button>
           ) : (
-            <button type="button" className="btn-danger" onClick={cancel}>
+            <button type="button" className="btn-danger" onClick={() => cancel()}>
               <StopCircle size={16} /> Cancel
             </button>
           )}

@@ -2,8 +2,8 @@
     "min_samples": 10,
     "models": {
         "default": {
-            "seconds_per_char": 0.03834522227808101,
-            "samples": 18,
+            "seconds_per_char": 0.03467597581341191,
+            "samples": 28,
             "runs": [
                 {
                     "input_chars": 11155,
@@ -112,6 +112,66 @@
                     "seconds": 510.638,
                     "resolution": "4k",
                     "concurrent": false
+                },
+                {
+                    "input_chars": 17811,
+                    "seconds": 577.986,
+                    "resolution": "4k",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 16532,
+                    "seconds": 729.385,
+                    "resolution": "4k",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 17810,
+                    "seconds": 751.139,
+                    "resolution": "4k",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 23938,
+                    "seconds": 357.164,
+                    "resolution": "4k",
+                    "concurrent": true
+                },
+                {
+                    "input_chars": 14504,
+                    "seconds": 516.45,
+                    "resolution": "4k",
+                    "concurrent": true
+                },
+                {
+                    "input_chars": 14235,
+                    "seconds": 313.059,
+                    "resolution": "4k",
+                    "concurrent": true
+                },
+                {
+                    "input_chars": 14504,
+                    "seconds": 489.504,
+                    "resolution": "4k",
+                    "concurrent": true
+                },
+                {
+                    "input_chars": 15533,
+                    "seconds": 502.942,
+                    "resolution": "4k",
+                    "concurrent": true
+                },
+                {
+                    "input_chars": 14932,
+                    "seconds": 463.314,
+                    "resolution": "4k",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 19039,
+                    "seconds": 336.23,
+                    "resolution": "4k",
+                    "concurrent": true
                 }
             ]
         },

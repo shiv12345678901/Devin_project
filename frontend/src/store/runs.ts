@@ -43,6 +43,7 @@ export interface Run {
   stage?: string
   message?: string
   progress?: number
+  etaSeconds?: number
   inputPreview: string
   inputText?: string
   settings?: RunSettings
@@ -76,6 +77,7 @@ export interface RunsContextValue {
         | 'stage'
         | 'message'
         | 'progress'
+        | 'etaSeconds'
       >
     >,
   ) => void

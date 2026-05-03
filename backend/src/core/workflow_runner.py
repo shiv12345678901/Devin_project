@@ -150,8 +150,8 @@ class WorkflowContext:
         run_manager.finish_run(self.run_id, status="failed", message=message, progress=progress)
         self.emit({"type": "error", "message": message})
 
-    def cancel(self, message: str = "Operation cancelled") -> None:
-        run_manager.finish_run(self.run_id, status="cancelled", message=message, progress=0)
+    def cancel(self, message: str = "Operation cancelled", outputs: dict[str, Any] | None = None) -> None:
+        run_manager.finish_run(self.run_id, status="cancelled", message=message, progress=0, outputs=outputs)
         self.emit({"type": "cancelled", "message": message})
 
     def check_cancelled(self) -> None:

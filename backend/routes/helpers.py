@@ -277,13 +277,9 @@ def _first_number(*values):
 
 def _chapter_number(*values):
     for value in values:
-        chapter = re.search(r"chapter\s*[_-]?\s*(\d+)", str(value or ""), re.IGNORECASE)
+        chapter = re.search(r"(?:unit|chapter)\s*[_\-:]?\s*(\d+)", str(value or ""), re.IGNORECASE)
         if chapter:
             return chapter.group(1)
-    for value in values[:2]:
-        number = re.search(r"\b(\d{1,2})\b", str(value or ""))
-        if number:
-            return number.group(1)
     return "unknown"
 
 

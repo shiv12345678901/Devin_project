@@ -424,7 +424,9 @@ class PowerPointController:
         output_video_path: str,
         resolution: tuple = (3840, 2160),
         fps: int = 30,
-        quality: int = 5
+        quality: int = 5,
+        progress_callback=None,
+        cancel_event=None,
     ) -> str:
         """
         Export presentation to 4K video using COM automation.
@@ -501,7 +503,9 @@ class PowerPointController:
                 width=width,
                 height=height,
                 fps=fps,
-                quality=quality
+                quality=quality,
+                progress_callback=progress_callback,
+                cancel_event=cancel_event,
             )
 
             return output_video_path

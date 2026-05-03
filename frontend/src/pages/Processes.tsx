@@ -39,6 +39,7 @@ import { useGenerationQueue } from '../hooks/useTrackedGenerate'
 import type { QueueItem } from '../hooks/useTrackedGenerate'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { PROCESS_EDIT_HANDOFF_KEY } from '../lib/processEditHandoff'
+import { useSettings } from '../store/settings'
 import {
   readSelectedProcessId,
   SELECTED_PROCESS_EVENT,
@@ -61,6 +62,11 @@ function trackedOutputsFromBackendRun(
   fallbackOperationId: string,
 ): Partial<Run> {
   const outputs = run.outputs ?? {}
+  const rawEta =
+    run.settings?.estimated_total_seconds ??
+    run.metrics?.estimated_total_seconds ??
+    run.metrics?.eta_seconds
+  const etaSeconds = typeof rawEta === 'number' ? rawEta : Number(rawEta)
   return {
     htmlFilename: outputs.html_filename ?? outputs.html_file,
     screenshotFiles: outputs.screenshot_files ?? [],
@@ -68,6 +74,7 @@ function trackedOutputsFromBackendRun(
     presentationFile: outputs.presentation_file ?? outputs.presentation_path,
     videoFile: outputs.video_file ?? outputs.video_path,
     operationId: run.operation_id ?? fallbackOperationId,
+    etaSeconds: Number.isFinite(etaSeconds) && etaSeconds > 0 ? etaSeconds : undefined,
   }
 }
 
@@ -84,6 +91,31 @@ const TOOL_META: Record<string, { label: string; icon: typeof FileText }> = {
 
 function toolMeta(tool: ToolLike) {
   return TOOL_META[tool ?? ''] ?? { label: tool ?? 'Run', icon: Activity }
+}
+
+const STAGE_STATUS_LABELS: Record<string, string> = {
+  queued: 'Waiting in backend queue',
+  running: 'Running',
+  ai_waiting: 'Waiting for AI slot',
+  ai: 'Generating HTML',
+  html_saved: 'HTML saved',
+  screenshot_waiting: 'Waiting for screenshot slot',
+  screenshot: 'Capturing screenshots',
+  screenshots_done: 'Screenshots ready',
+  export_waiting: 'Waiting for PowerPoint export',
+  powerpoint_cleanup: 'Closing PowerPoint',
+  powerpoint_resume: 'Exporting from saved PPTX',
+  powerpoint: 'Building PowerPoint export',
+  pptx_built: 'PowerPoint deck saved',
+  video_export: 'Exporting MP4',
+  video_export_done: 'MP4 export finished',
+  complete: 'Complete',
+  cancelling: 'Cancelling',
+}
+
+function stageStatusLabel(stage?: string): string {
+  if (!stage) return 'Working'
+  return STAGE_STATUS_LABELS[stage] ?? stage.replace(/_/g, ' ')
 }
 
 function toGenerateSettings(settings: Run['settings'] | GenerateSettings | undefined): GenerateSettings {
@@ -156,6 +188,10 @@ function RunRow({
   const Icon = meta.icon
   const now = useNow(!run.endedAt)
   const runtime = (run.endedAt ?? now) - run.startedAt
+  const etaRemainingMs =
+    run.status === 'running' && typeof run.etaSeconds === 'number' && run.etaSeconds > 0
+      ? Math.max(0, (run.etaSeconds * 1000) - runtime)
+      : null
   const [userOpen, setUserOpen] = useState(false)
   // Derive `open` from (user click || highlight prop) so we don't need to
   // setState from an effect just because the prop flipped.
@@ -268,6 +304,12 @@ function RunRow({
               </span>
             </div>
           )}
+          {run.status === 'running' && (
+            <div className="mt-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+              {stageStatusLabel(run.stage)}
+              {run.message ? ` - ${run.message}` : ''}
+            </div>
+          )}
         </div>
 
         <div className="hidden w-40 shrink-0 text-right sm:block">
@@ -275,7 +317,9 @@ function RunRow({
             <Clock size={14} /> {formatRuntime(runtime)}
           </div>
           <div className="text-xs text-slate-500 dark:text-slate-400">
-            {run.screenshotFiles?.length ?? 0} screenshot{run.screenshotFiles?.length === 1 ? '' : 's'}
+            {etaRemainingMs != null
+              ? `~${formatRuntime(etaRemainingMs)} remaining`
+              : `${run.screenshotFiles?.length ?? 0} screenshot${run.screenshotFiles?.length === 1 ? '' : 's'}`}
           </div>
         </div>
       </button>
@@ -321,8 +365,14 @@ function RunRow({
               {run.status === 'running' && run.message && (
                 <KV label="Current" value={run.message} />
               )}
+              {run.status === 'running' && (
+                <KV label="Stage" value={stageStatusLabel(run.stage)} />
+              )}
               {run.status === 'running' && run.progress != null && (
                 <KV label="Progress" value={`${Math.round(run.progress)}%`} />
+              )}
+              {etaRemainingMs != null && (
+                <KV label="Estimated left" value={`~${formatRuntime(etaRemainingMs)}`} />
               )}
               <KV label="Duration" value={formatRuntime(runtime)} />
               {run.settings?.model_choice && (
@@ -647,7 +697,12 @@ function LiveRunCard({
   const progress = trackedRun?.progress ?? liveState.progress ?? 0
   const stage = trackedRun?.stage ?? liveState.stage
   const message = trackedRun?.message ?? liveState.message
-  const etaSeconds = isLiveSelection ? liveState.etaSeconds : undefined
+  const now = useNow(Boolean(source))
+  const trackedRemainingSeconds =
+    trackedRun && typeof trackedRun.etaSeconds === 'number' && trackedRun.etaSeconds > 0
+      ? Math.max(0, trackedRun.etaSeconds - ((trackedRun.endedAt ?? now) - trackedRun.startedAt) / 1000)
+      : undefined
+  const etaSeconds = trackedRemainingSeconds ?? (isLiveSelection ? liveState.etaSeconds : undefined)
 
   return (
     <div className="card ring-2 ring-brand-400/40 dark:ring-brand-500/40">
@@ -658,8 +713,11 @@ function LiveRunCard({
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-brand-500"></span>
           </span>
           <div className="font-display text-sm font-semibold text-slate-900 dark:text-slate-50">
-            Current process
+            Running
           </div>
+          <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-semibold text-brand-700 dark:bg-brand-500/10 dark:text-brand-200">
+            {stageStatusLabel(stage)}
+          </span>
           {operationId && (
             <code className="text-[10px] text-slate-500 dark:text-slate-400">
               {operationId}
@@ -680,6 +738,104 @@ function LiveRunCard({
         active
       />
     </div>
+  )
+}
+
+type SoftCancelMode = 'after_html' | 'after_screenshots' | 'after_pptx' | 'after_video'
+
+function softCancelOption(stage?: string): { mode: SoftCancelMode; label: string; detail: string } {
+  const s = String(stage || '').toLowerCase()
+  if (s.includes('video_export') || s === 'powerpoint_resume') {
+    return {
+      mode: 'after_video',
+      label: 'Cancel after MP4 export finishes',
+      detail: 'The current PowerPoint video export will be allowed to finish.',
+    }
+  }
+  if (s.includes('screenshot') || s === 'html_saved') {
+    return {
+      mode: 'after_screenshots',
+      label: 'Cancel after screenshots finish',
+      detail: 'The HTML and captured screenshot files will be kept.',
+    }
+  }
+  if (s.includes('powerpoint') || s.includes('export_waiting')) {
+    return {
+      mode: 'after_pptx',
+      label: 'Cancel after PPTX is made',
+      detail: 'The PowerPoint file will be kept and MP4 export will not start.',
+    }
+  }
+  return {
+    mode: 'after_html',
+    label: 'Cancel after HTML finishes',
+    detail: 'The generated HTML file will be kept.',
+  }
+}
+
+function CancelRunDialog({
+  run,
+  onClose,
+  onCancelNow,
+  onCancelAfterStep,
+}: {
+  run: Run
+  onClose: () => void
+  onCancelNow: (deleteOutputs: boolean) => void
+  onCancelAfterStep: (mode: SoftCancelMode) => void
+}) {
+  const [deleteOutputs, setDeleteOutputs] = useState(false)
+  const soft = softCancelOption(run.stage)
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-4 shadow-xl dark:border-white/10 dark:bg-slate-950">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-50">Cancel process?</h2>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              Choose whether to stop immediately or let the current step finish first.
+            </p>
+          </div>
+          <button type="button" className="btn-ghost btn-sm" onClick={onClose} aria-label="Close">
+            <X size={14} />
+          </button>
+        </div>
+        <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300">
+          <div className="font-medium text-slate-800 dark:text-slate-100">{run.inputPreview || run.id}</div>
+          <div className="mt-1">{stageStatusLabel(run.stage)}{run.message ? ` - ${run.message}` : ''}</div>
+        </div>
+        <div className="mt-4 space-y-3">
+          <button
+            type="button"
+            className="btn-secondary w-full justify-start"
+            onClick={() => onCancelAfterStep(soft.mode)}
+          >
+            <FileText size={14} /> {soft.label}
+          </button>
+          <p className="-mt-2 px-1 text-xs text-slate-500 dark:text-slate-400">{soft.detail}</p>
+          <div className="rounded-md border border-rose-200 bg-rose-50 p-3 dark:border-rose-500/30 dark:bg-rose-500/10">
+            <button
+              type="button"
+              className="btn-danger w-full justify-start"
+              onClick={() => onCancelNow(deleteOutputs)}
+            >
+              <StopCircle size={14} /> Cancel now
+            </button>
+            <button
+              type="button"
+              className="mt-2 flex items-center gap-2 text-left text-xs font-medium text-rose-800 dark:text-rose-100"
+              onClick={() => setDeleteOutputs((v) => !v)}
+            >
+              <span className={`flex h-4 w-4 items-center justify-center rounded border ${deleteOutputs ? 'border-rose-600 bg-rose-600 text-white' : 'border-rose-300 bg-white dark:bg-slate-950'}`}>
+                {deleteOutputs && <Check size={12} />}
+              </span>
+              Delete all generated data for this process
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -737,7 +893,7 @@ function QueueCard({
             >
               <GripVertical size={14} className="shrink-0 cursor-grab text-slate-400" />
               <span className="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-white/10 dark:text-slate-300">
-                #{idx + 1}
+                {idx === 0 ? 'Next' : `Position ${idx + 1}`}
               </span>
               <Icon size={14} className="shrink-0 text-slate-500" />
               <span className="shrink-0 text-xs font-medium text-slate-700 dark:text-slate-200">
@@ -920,6 +1076,7 @@ function ProcessEditModal({
 export default function Processes() {
   const nav = useNavigate()
   const { runs, clear, remove, update, finish } = useRuns()
+  const { settings: appSettings } = useSettings()
   const {
     queue,
     cancelQueued,
@@ -927,6 +1084,8 @@ export default function Processes() {
     state: liveState,
     paused: queuePaused,
     pausedReason: queuePausedReason,
+    queueModeNotice,
+    dismissQueueModeNotice,
     pauseQueue,
     resumeQueue,
     reorderQueued,
@@ -942,6 +1101,7 @@ export default function Processes() {
   const [err, setErr] = useState<string | null>(null)
   const [filter, setFilter] = useState<'all' | RunTool>('all')
   const [editingProcess, setEditingProcess] = useState<EditableProcess | null>(null)
+  const [cancelTarget, setCancelTarget] = useState<Run | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(() => readSelectedProcessId())
   const toast = useToast()
   const confirmDialog = useConfirm()
@@ -1053,6 +1213,7 @@ export default function Processes() {
                 stage: backendRun.stage,
                 message: backendRun.message,
                 progress: backendRun.progress,
+                etaSeconds: trackedOutputsFromBackendRun(backendRun, nextOperationId).etaSeconds,
               })
             }
           } catch {
@@ -1258,6 +1419,38 @@ export default function Processes() {
     setSelectedRunId(run.id)
   }
 
+  const requestCancelRun = async (mode: 'now' | SoftCancelMode, deleteOutputs = false) => {
+    const run = cancelTarget ?? currentRun
+    if (!run) return
+    setCancelTarget(null)
+    const targetId = run.operationId ?? run.id
+    update(run.id, {
+      status: 'running',
+      stage: 'cancelling',
+      message:
+        mode !== 'now'
+          ? 'Cancellation requested. Waiting for the current step to finish...'
+          : 'Cancellation requested. Waiting for the running step to stop.',
+    })
+    try {
+      if (liveState.status === 'running' && run.operationId && run.operationId === liveState.operationId) {
+        cancelLive({ mode, delete_outputs: deleteOutputs })
+      } else {
+        await api.cancelRun(targetId, { mode, delete_outputs: deleteOutputs })
+      }
+      toast.push({
+        variant: 'success',
+        message: mode !== 'now' ? 'Process will stop after the current step finishes.' : 'Cancellation requested.',
+      })
+    } catch (e) {
+      toast.push({
+        variant: 'error',
+        title: 'Cancel failed',
+        message: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1303,8 +1496,17 @@ export default function Processes() {
       <LiveRunCard
         liveState={liveState}
         trackedRun={currentRun}
-        onCancel={cancelLive}
+        onCancel={() => currentRun && setCancelTarget(currentRun)}
       />
+
+      {cancelTarget && (
+        <CancelRunDialog
+          run={cancelTarget}
+          onClose={() => setCancelTarget(null)}
+          onCancelAfterStep={(mode) => void requestCancelRun(mode)}
+          onCancelNow={(deleteOutputs) => void requestCancelRun('now', deleteOutputs)}
+        />
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5">
@@ -1341,6 +1543,32 @@ export default function Processes() {
       </div>
 
       {err && <div className="card text-sm text-red-600 dark:text-red-300">{err}</div>}
+
+      {(queueModeNotice || queue.length > 0) && (
+        <div className="flex items-start gap-3 rounded-md border border-sky-300/60 bg-sky-50 px-3 py-2 text-sm text-sky-800 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200">
+          <Activity size={16} className="mt-0.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">
+              {appSettings.concurrentPipelineRuns ? 'Concurrent queue mode' : 'Serial queue mode'}
+            </p>
+            <p className="mt-0.5 text-xs opacity-90">
+              {queueModeNotice ??
+                (appSettings.concurrentPipelineRuns
+                  ? 'Pending Text -> Video jobs can start in parallel; screenshot and PowerPoint stages still wait for their slots.'
+                  : 'Pending jobs will run one at a time in the visible queue order.')}
+            </p>
+          </div>
+          {queueModeNotice && (
+            <button
+              type="button"
+              className="btn-ghost btn-sm shrink-0 self-center"
+              onClick={dismissQueueModeNotice}
+            >
+              <X size={12} /> Dismiss
+            </button>
+          )}
+        </div>
+      )}
 
       {queuePaused && (
         <div

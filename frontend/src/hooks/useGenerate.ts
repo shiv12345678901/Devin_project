@@ -67,6 +67,15 @@ function resultFromRun(run: BackendRunDetail['run'], fallbackOperationId: string
   }
 }
 
+function etaFromRun(run: BackendRunDetail['run']): number | undefined {
+  const raw =
+    run.settings?.estimated_total_seconds ??
+    run.metrics?.estimated_total_seconds ??
+    run.metrics?.eta_seconds
+  const value = typeof raw === 'number' ? raw : Number(raw)
+  return Number.isFinite(value) && value > 0 ? value : undefined
+}
+
 export function useGenerate() {
   const [state, setState] = useState<GenerationState>(initialState)
   const abortRef = useRef<AbortController | null>(null)
@@ -309,6 +318,7 @@ export function useGenerate() {
         stage: firstPosition > 1 ? 'queued' : 'running',
         message: firstPosition > 1 ? `Queued at position ${firstPosition}` : 'Starting backend process...',
         operationId: opId,
+        etaSeconds: started.estimated_total_seconds,
       })
 
       let terminal = false
@@ -328,6 +338,7 @@ export function useGenerate() {
             message: run.message ?? `Generated ${completed.screenshot_files.length} screenshot(s)`,
             result: completed,
             operationId: completed.operation_id,
+            etaSeconds: etaFromRun(run),
           })
           return
         }
@@ -353,6 +364,7 @@ export function useGenerate() {
               : run.message ?? s.message,
           progress: progress ?? s.progress,
           operationId: run.operation_id ?? s.operationId,
+          etaSeconds: etaFromRun(run) ?? s.etaSeconds,
         }))
       }
 
@@ -374,7 +386,7 @@ export function useGenerate() {
             operationId: ev.operation_id ?? opId,
             stage: ev.stage ?? 'running',
             message: ev.message ?? 'Process started',
-            etaSeconds: ev.estimated_total_seconds,
+            etaSeconds: ev.estimated_total_seconds ?? s.etaSeconds,
             progress: ev.progress ?? s.progress,
           }))
         } else if (ev.type === 'progress') {
@@ -522,9 +534,33 @@ export function useGenerate() {
     [runSseForm],
   )
 
-  const cancel = useCallback(async () => {
+  const cancel = useCallback(async (options?: {
+    mode?: 'now' | 'after_html' | 'after_screenshots' | 'after_pptx' | 'after_video'
+    delete_outputs?: boolean
+  }) => {
     const op = abortRef.current
     const opId = opIdRef.current
+    const mode = options?.mode ?? 'now'
+    const deleteOutputs = Boolean(options?.delete_outputs && mode === 'now')
+    if (mode !== 'now') {
+      setState((s) => {
+        if (s.status !== 'running') return s
+        return {
+          ...s,
+          stage: 'cancelling',
+          message: 'Cancellation requested. Waiting for the current step to finish...',
+          operationId: s.operationId ?? opId ?? undefined,
+        }
+      })
+      if (opId) {
+        try {
+          await api.cancelRun(opId, { mode }).catch(() => api.cancel(opId))
+        } catch {
+          /* ignore - backend may already have finished */
+        }
+      }
+      return
+    }
     // Flip the UI to "cancelled" immediately. The previous implementation
     // only aborted the SSE fetch and fired off the backend cancel, which
     // relied on a server-sent `cancelled` event (or a polling snapshot)
@@ -546,7 +582,7 @@ export function useGenerate() {
     cancelRequestedRef.current = true
     if (opId) {
       try {
-        await api.cancelRun(opId).catch(() => api.cancel(opId))
+        await api.cancelRun(opId, { mode: 'now', delete_outputs: deleteOutputs }).catch(() => api.cancel(opId))
       } catch {
         /* ignore — backend may already have finished */
       }

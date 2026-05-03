@@ -169,16 +169,22 @@ def enqueue(
         label=label,
         pipeline_enabled=pipeline_enabled,
     )
-    if pipeline_enabled:
-        with _CONDITION:
-            _CURRENT[job.run_id] = job
-            _publish_queue_positions()
-        thread = threading.Thread(target=_run_job, args=(job,), daemon=True, name=f"workflow-{run_id}")
-        thread.start()
-        return 1
-
     _ensure_worker()
     with _CONDITION:
+        if pipeline_enabled and not _QUEUE and not any(
+            not current.pipeline_enabled for current in _CURRENT.values()
+        ):
+            _CURRENT[job.run_id] = job
+            _publish_queue_positions()
+            thread = threading.Thread(
+                target=_run_job,
+                args=(job,),
+                daemon=True,
+                name=f"workflow-{run_id}",
+            )
+            thread.start()
+            return 1
+
         _QUEUE.append(job)
         position = len(_QUEUE)
         _publish_queue_positions()
@@ -186,12 +192,23 @@ def enqueue(
         return position
 
 
-def cancel_job(run_id: str) -> bool:
+_SOFT_CANCEL_STAGES = {
+    "after_html": ("html_saved", "Cancellation requested. The process will stop after the HTML file is saved."),
+    "after_screenshots": ("screenshots_done", "Cancellation requested. The process will stop after screenshots are captured."),
+    "after_pptx": ("pptx_built", "Cancellation requested. The process will stop after the PowerPoint deck is saved."),
+    "after_video": ("video_export_done", "Cancellation requested. The process will stop after the MP4 export finishes."),
+}
+
+
+def cancel_job(run_id: str, mode: str = "now", delete_outputs: bool = False) -> bool:
+    mode = str(mode or "now").strip().lower()
+    delete_outputs = bool(delete_outputs)
     with _CONDITION:
         for job in list(_QUEUE):
             if job.run_id == run_id or job.operation_id == run_id:
                 job.cancel_event.set()
                 _QUEUE.remove(job)
+                run_manager.update_run(job.run_id, settings={"delete_outputs_on_cancel": delete_outputs})
                 run_manager.finish_run(job.run_id, status="cancelled", message="Operation cancelled before start", progress=0)
                 unregister_operation(job.operation_id)
                 publish_run_event(job.run_id, {
@@ -208,6 +225,30 @@ def cancel_job(run_id: str) -> bool:
             None,
         )
         if current:
+            if mode in _SOFT_CANCEL_STAGES:
+                stage, message = _SOFT_CANCEL_STAGES[mode]
+                current_run = run_manager.get_run(current.run_id) or {}
+                run_manager.update_run(
+                    current.run_id,
+                    status="running",
+                    stage="cancelling",
+                    message=message,
+                    progress=None,
+                    settings={
+                        "cancel_after_stage": stage,
+                        "delete_outputs_on_cancel": False,
+                    },
+                )
+                publish_run_event(current.run_id, {
+                    "type": "progress",
+                    "run_id": current.run_id,
+                    "operation_id": current.operation_id,
+                    "message": message,
+                    "stage": "cancelling",
+                    "progress": current_run.get("progress", 0),
+                })
+                return True
+
             current.cancel_event.set()
             current_run = run_manager.get_run(current.run_id) or {}
             run_manager.update_run(
@@ -216,6 +257,7 @@ def cancel_job(run_id: str) -> bool:
                 stage="cancelling",
                 message="Cancellation requested. Waiting for the running step to stop.",
                 progress=None,
+                settings={"delete_outputs_on_cancel": delete_outputs},
             )
             publish_run_event(current.run_id, {
                 "type": "progress",

@@ -23,7 +23,7 @@ interface Props {
    * by callers that want to render a frozen summary of a finished run.
    */
   active?: boolean
-  /** Seconds to wait with no progress change before flagging a stall. */
+  /** Seconds to wait with no progress change before showing a quiet-step note. */
   stallAfterSec?: number
 }
 
@@ -55,7 +55,7 @@ const ENGAGEMENT_MESSAGES: Record<string, string[]> = {
   ai_waiting: ['Waiting for another AI phase...', 'Holding this job ready...', 'Watching for an AI slot...'],
   ai: ['Sending request to AI...', 'Analyzing your text...', 'Writing the HTML...', 'Checking content structure...'],
   html_saved: ['Saving generated HTML...', 'Preparing browser render...', 'Moving to screenshots...'],
-  screenshot_waiting: ['Waiting for video export to finish...', 'Holding screenshots until the lane is free...', 'Keeping generated HTML ready...'],
+  screenshot_waiting: ['Waiting for browser lane...', 'Holding generated HTML ready...', 'Preparing screenshot capture...'],
   screenshot: ['Launching browser...', 'Rendering pages...', 'Capturing screenshots...', 'Checking screenshot output...'],
   screenshots_done: ['Screenshots found...', 'Preparing export...', 'Collecting generated files...'],
   export_waiting: ['Waiting for screenshot capture to finish...', 'Holding export until PowerPoint is free...', 'Preparing the deck handoff...'],
@@ -196,12 +196,12 @@ const ACTIVITY_STEPS: Record<string, string[]> = {
   ],
   screenshot_waiting: [
     'Waiting for screenshot slot',
-    'Checking video export status',
+    'Checking browser lane',
     'Keeping HTML ready',
     'Waiting for browser lane',
     'Watching screenshot resources',
     'Preparing capture settings',
-    'Holding until export finishes',
+    'Holding until capture is available',
     'Ready to capture next',
   ],
   export: [
@@ -350,7 +350,6 @@ function isExportStage(stage: string | undefined): boolean {
   return (
     stage === 'export' ||
     stage === 'export_waiting' ||
-    stage === 'screenshot_waiting' ||
     stage === 'powerpoint_cleanup' ||
     stage === 'powerpoint' ||
     stage === 'powerpoint_complete' ||
@@ -389,7 +388,7 @@ export default function ProgressBar({
   message,
   etaSeconds,
   active = true,
-  stallAfterSec = 20,
+  stallAfterSec = 90,
 }: Props) {
   const clamped = Math.max(0, Math.min(100, progress))
   const [mountedAt] = useState<number>(() => Date.now())
@@ -595,12 +594,12 @@ export default function ProgressBar({
           <LoaderCircle size={14} className="mt-0.5 shrink-0 animate-spin" />
           <div>
             <div className="font-semibold">
-              Still working for {formatDuration(elapsedSinceUpdate)} without a new update.
+              Backend still active for {formatDuration(elapsedSinceUpdate)} without a new update.
             </div>
             <div className="mt-0.5 opacity-90">
               Long AI responses, browser rendering, and PowerPoint export can
-              pause between updates. The run is still active unless an error
-              message appears.
+              pause between updates. This is normal while the backend is still
+              running.
             </div>
           </div>
         </div>

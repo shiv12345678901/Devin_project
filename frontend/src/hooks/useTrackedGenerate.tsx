@@ -28,7 +28,7 @@ import type { GenerationState } from './useGenerate'
 import { useRuns } from '../store/runs'
 import type { Run, RunTool } from '../store/runs'
 import { useToast } from '../store/toast'
-import type { GenerateSettings } from '../api/types'
+import type { BackendRunDetail, GenerateSettings, PendingClientQueueItem } from '../api/types'
 import { api } from '../api/client'
 import type { ReplacementTargets } from '../lib/processEditHandoff'
 import { useSettings } from '../store/settings'
@@ -78,7 +78,12 @@ interface TrackedGenerationContextValue {
   paused: boolean
   /** Reason the queue is currently paused, when applicable. */
   pausedReason: 'in_flight' | 'duplicate' | 'unknown' | null
-  cancel: () => void
+  queueModeNotice: string | null
+  dismissQueueModeNotice: () => void
+  cancel: (options?: {
+    mode?: 'now' | 'after_html' | 'after_screenshots' | 'after_pptx' | 'after_video'
+    delete_outputs?: boolean
+  }) => void
   cancelQueued: (queueId: string) => void
   pauseQueue: () => void
   /** Manually resume auto-dispatch after a 409-induced pause. */
@@ -154,6 +159,49 @@ function sortedEntries(obj: Record<string, unknown>): Array<[string, unknown]> {
     .map((k) => [k, obj[k]] as [string, unknown])
 }
 
+function toPersistedQueueItem(item: QueueItem): PendingClientQueueItem | null {
+  if (item.kind !== 'text' && item.kind !== 'html') return null
+  if (item.tool !== 'text-to-video' && item.tool !== 'html-to-video') return null
+  const payload = item.kind === 'text' ? item.text : item.html
+  if (!payload?.trim()) return null
+  return {
+    id: item.id,
+    tool: item.tool,
+    kind: item.kind,
+    inputPreview: item.inputPreview,
+    inputText: item.inputText,
+    queuedAt: item.queuedAt,
+    settings: item.settings,
+    text: item.kind === 'text' ? payload : undefined,
+    html: item.kind === 'html' ? payload : undefined,
+  }
+}
+
+function fromPersistedQueueItem(item: PendingClientQueueItem): QueueItem | null {
+  const payload = item.kind === 'text' ? item.text : item.html
+  if (!payload?.trim()) return null
+  return {
+    id: item.id || nextQueueId(),
+    tool: item.tool,
+    kind: item.kind,
+    inputPreview: item.inputPreview || payload.slice(0, 200),
+    inputText: item.inputText ?? payload,
+    queuedAt: item.queuedAt || Date.now(),
+    settings: item.settings,
+    text: item.kind === 'text' ? payload : undefined,
+    html: item.kind === 'html' ? payload : undefined,
+  }
+}
+
+function etaFromBackendRun(run: BackendRunDetail['run']): number | undefined {
+  const raw =
+    run.settings?.estimated_total_seconds ??
+    run.metrics?.estimated_total_seconds ??
+    run.metrics?.eta_seconds
+  const value = typeof raw === 'number' ? raw : Number(raw)
+  return Number.isFinite(value) && value > 0 ? value : undefined
+}
+
 async function cleanupReplacementTargets(targets: ReplacementTargets): Promise<void> {
   const seen = new Set<string>()
   const deletions: Array<Promise<unknown>> = []
@@ -188,6 +236,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   // run finished. Keeping the active item out of the queue entirely
   // eliminates that class of races.
   const [queue, setQueue] = useState<QueueItem[]>([])
+  const persistedQueueLoadedRef = useRef(false)
   const activeQueueIdRef = useRef<string | null>(null)
   // Fingerprint of the currently-executing item, set by `dispatch` and
   // cleared on terminal-state. Used by pushOrStart to client-side-dedupe
@@ -209,7 +258,53 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   const [pausedReason, setPausedReason] = useState<
     'in_flight' | 'duplicate' | 'unknown' | null
   >(null)
+  const [queueModeNotice, setQueueModeNotice] = useState<string | null>(null)
+  const previousConcurrentRef = useRef(appSettings.concurrentPipelineRuns)
   const trackedRunInProgress = runs.runs.some((run) => run.status === 'running')
+
+  useEffect(() => {
+    const previous = previousConcurrentRef.current
+    if (previous !== appSettings.concurrentPipelineRuns) {
+      setQueueModeNotice(
+        appSettings.concurrentPipelineRuns
+          ? 'Concurrency turned on. Pending Text -> Video jobs can start in parallel while screenshot and PowerPoint stages stay gated.'
+          : 'Concurrency turned off. Pending jobs will stay in serial order and start one at a time.',
+      )
+      previousConcurrentRef.current = appSettings.concurrentPipelineRuns
+    }
+  }, [appSettings.concurrentPipelineRuns])
+
+  useEffect(() => {
+    let cancelled = false
+    void api.getPendingClientQueue()
+      .then((response) => {
+        if (cancelled) return
+        const restored = response.items
+          .map(fromPersistedQueueItem)
+          .filter((item): item is QueueItem => !!item)
+        if (restored.length > 0) {
+          setQueue((prev) => {
+            const existing = new Set(prev.map((item) => item.id))
+            return [...prev, ...restored.filter((item) => !existing.has(item.id))]
+          })
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) persistedQueueLoadedRef.current = true
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!persistedQueueLoadedRef.current) return
+    const persisted = queue
+      .map(toPersistedQueueItem)
+      .filter((item): item is PendingClientQueueItem => !!item)
+    void api.savePendingClientQueue(persisted).catch(() => undefined)
+  }, [queue])
 
   // Connect generation events → runs store. Lifts the "run row" into
   // existence as soon as the SSE stream reports `running`, finishes it on
@@ -240,6 +335,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         stage: s.stage,
         message: s.message,
         progress: s.progress,
+        etaSeconds: s.etaSeconds,
         operationId: s.operationId,
       })
     }
@@ -254,6 +350,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         presentationFile: s.result?.presentation_file,
         videoFile: s.result?.video_file,
         operationId: s.result?.operation_id ?? s.operationId,
+        etaSeconds: s.etaSeconds,
       })
       if (replacement) {
         void cleanupReplacementTargets(replacement).then(() => {
@@ -361,6 +458,10 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       void (async () => {
         try {
           const started = await api.startTextToVideoRun(item.text!, item.settings!)
+          runs.update(localRunId, {
+            operationId: started.operation_id,
+            etaSeconds: started.estimated_total_seconds,
+          })
           let done = false
           while (!done) {
             await new Promise((resolve) => window.setTimeout(resolve, 1500))
@@ -368,10 +469,11 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
             const run = detail.run
             const status = String(run.status ?? '')
             if (status === 'queued' || status === 'running') {
-              runs.update(localRunId, {
+          runs.update(localRunId, {
                 stage: run.stage,
                 message: run.message,
                 progress: run.progress,
+                etaSeconds: etaFromBackendRun(run),
                 operationId: run.operation_id ?? started.operation_id,
               })
             }
@@ -417,6 +519,14 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       return { queueId: item.id, startedImmediately: true }
     },
     [runs],
+  )
+
+  const canRunInBackground = useCallback(
+    (item: QueueItem): boolean =>
+      appSettings.concurrentPipelineRuns &&
+      item.kind === 'text' &&
+      item.tool === 'text-to-video',
+    [appSettings.concurrentPipelineRuns],
   )
 
   // Auto-dequeue: when the current run terminates, pop the next queue
@@ -501,6 +611,34 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     trackedRunInProgress,
   ])
 
+  // When concurrency is enabled while a serial run is already active, promote
+  // the existing pending text-to-video queue in FIFO order. New submissions
+  // append behind these items and wait for this effect, so the last clicked
+  // item cannot jump ahead of older queued work.
+  useEffect(() => {
+    if (!appSettings.concurrentPipelineRuns || paused || queue.length === 0) return
+    setQueue((prev) => {
+      const runnable: QueueItem[] = []
+      let index = 0
+      while (index < prev.length && canRunInBackground(prev[index])) {
+        runnable.push(prev[index])
+        index += 1
+      }
+      if (runnable.length === 0) return prev
+      const rest = prev.slice(index)
+      runnable.forEach((item, offset) => {
+        window.setTimeout(() => dispatchBackgroundText(item), offset * 25)
+      })
+      return rest
+    })
+  }, [
+    appSettings.concurrentPipelineRuns,
+    canRunInBackground,
+    dispatchBackgroundText,
+    paused,
+    queue.length,
+  ])
+
   const pushOrStart = useCallback(
     (item: QueueItem): EnqueueResult => {
       // Any new manual submission resumes a paused queue — we assume the
@@ -548,13 +686,12 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         gen.state.status === 'error' ||
         gen.state.status === 'cancelled'
       const backendSlotBusy = !appSettings.concurrentPipelineRuns && trackedRunInProgress
-      if (
-        appSettings.concurrentPipelineRuns &&
-        item.kind === 'text' &&
-        item.tool === 'text-to-video' &&
-        !idleNow
-      ) {
-        return dispatchBackgroundText(item)
+      if (canRunInBackground(item) && !idleNow) {
+        if (queue.length === 0) {
+          return dispatchBackgroundText(item)
+        }
+        setQueue((prev) => [...prev, item])
+        return { queueId: item.id, startedImmediately: false }
       }
       if (idleNow && !activeQueueIdRef.current && !backendSlotBusy) {
         // Claim the active slot *synchronously* so a rapid second submission
@@ -572,6 +709,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     },
     [
       appSettings.concurrentPipelineRuns,
+      canRunInBackground,
       dispatch,
       dispatchBackgroundText,
       gen.state.status,
@@ -676,6 +814,10 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     })
   }, [appSettings.concurrentPipelineRuns, dispatch, gen.state.status, trackedRunInProgress])
 
+  const dismissQueueModeNotice = useCallback(() => {
+    setQueueModeNotice(null)
+  }, [])
+
   const reorderQueued = useCallback((queueId: string, targetQueueId: string) => {
     if (queueId === targetQueueId) return
     setQueue((prev) => {
@@ -717,6 +859,8 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       queue,
       paused,
       pausedReason,
+      queueModeNotice,
+      dismissQueueModeNotice,
       cancel: gen.cancel,
       cancelQueued,
       pauseQueue,
@@ -735,6 +879,8 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       queue,
       paused,
       pausedReason,
+      queueModeNotice,
+      dismissQueueModeNotice,
       cancelQueued,
       pauseQueue,
       resumeQueue,
@@ -800,8 +946,10 @@ export function useGenerationQueue() {
     pauseQueue: ctx.pauseQueue,
     state: ctx.state,
     paused: ctx.paused,
-    pausedReason: ctx.pausedReason,
-    resumeQueue: ctx.resumeQueue,
+      pausedReason: ctx.pausedReason,
+      queueModeNotice: ctx.queueModeNotice,
+      dismissQueueModeNotice: ctx.dismissQueueModeNotice,
+      resumeQueue: ctx.resumeQueue,
     reorderQueued: ctx.reorderQueued,
     updateQueued: ctx.updateQueued,
     enqueueText: ctx.enqueueText,

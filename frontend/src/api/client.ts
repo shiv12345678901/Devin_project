@@ -8,6 +8,7 @@ import type {
   SseEvent,
   BackendRunStartResponse,
   BackendRunDetail,
+  PendingClientQueueItem,
   SavedThumbnailTemplate,
   YoutubeVideosResponse,
 } from './types'
@@ -149,14 +150,34 @@ export const api = {
   getRun: (runId: string) =>
     getJson<BackendRunDetail>(`/runs/${encodeURIComponent(runId)}`),
 
+  getPendingClientQueue: () =>
+    getJson<{ success: boolean; items: PendingClientQueueItem[] }>('/runs/pending-client-queue'),
+
+  savePendingClientQueue: async (items: PendingClientQueueItem[]) => {
+    const res = await fetch(buildUrl('/runs/pending-client-queue'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    })
+    const data = await parseJson<{ success?: boolean; items?: PendingClientQueueItem[]; error?: string }>(res)
+    if (!res.ok || data.error) throw new Error(data.error || res.statusText)
+    return data
+  },
+
   generateHtml: (html: string, settings: GenerateSettings = {}) =>
     postJson<GenerateResponse>('/generate-html', { html, ...settings }),
 
   cancel: (operationId: string) =>
     postJson<{ success: boolean; message: string }>(`/cancel/${encodeURIComponent(operationId)}`, {}),
 
-  cancelRun: (runId: string) =>
-    postJson<{ success: boolean; message: string }>(`/runs/${encodeURIComponent(runId)}/cancel`, {}),
+  cancelRun: (
+    runId: string,
+    options?: {
+      mode?: 'now' | 'after_html' | 'after_screenshots' | 'after_pptx' | 'after_video'
+      delete_outputs?: boolean
+    },
+  ) =>
+    postJson<{ success: boolean; message: string }>(`/runs/${encodeURIComponent(runId)}/cancel`, options ?? {}),
 
   beautify: (html: string) => postJson<{ html: string; validation: unknown }>('/beautify', { html }),
   minify: (html: string) =>

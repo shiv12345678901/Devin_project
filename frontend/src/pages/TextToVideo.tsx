@@ -169,6 +169,10 @@ function captureThumbnailTemplateSettings(settings: GenerateSettings): Partial<G
     auto_thumbnail_image_offset_x: settings.auto_thumbnail_image_offset_x,
     auto_thumbnail_image_offset_y: settings.auto_thumbnail_image_offset_y,
     auto_thumbnail_image_zoom: settings.auto_thumbnail_image_zoom,
+    auto_thumbnail_outro_title: settings.auto_thumbnail_outro_title,
+    auto_thumbnail_outro_side_image_url: settings.auto_thumbnail_outro_side_image_url?.startsWith('blob:')
+      ? undefined
+      : settings.auto_thumbnail_outro_side_image_url,
     auto_thumbnail_canvas_background: settings.auto_thumbnail_canvas_background,
     auto_thumbnail_overrides: settings.auto_thumbnail_overrides,
     auto_thumbnail_added_elements: settings.auto_thumbnail_added_elements,
@@ -271,7 +275,7 @@ function validateStep(
         }
       }
       if (settings.outro_thumbnail_enabled) {
-        if (!(settings.outro_thumbnail_filename ?? '').trim()) {
+        if (!autoThumbnailBuilder && !(settings.outro_thumbnail_filename ?? '').trim()) {
           errs.outro_thumbnail_filename = 'Upload an image first'
         }
         const d = num(settings.outro_thumbnail_duration_sec)
@@ -420,8 +424,10 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     return () => {
       const url = settings.auto_thumbnail_side_image_url
       if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+      const outroUrl = settings.auto_thumbnail_outro_side_image_url
+      if (outroUrl?.startsWith('blob:')) URL.revokeObjectURL(outroUrl)
     }
-  }, [settings.auto_thumbnail_side_image_url])
+  }, [settings.auto_thumbnail_side_image_url, settings.auto_thumbnail_outro_side_image_url])
 
   // Compute the chapter / unit number that *would* be used by the
   // auto-thumbnail renderer right now. Manual override beats auto-detection
@@ -458,6 +464,9 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
       if (slot === 'outro' || slot === 'both') {
         const outroSettings: GenerateSettings = {
           ...settings,
+          title: settings.auto_thumbnail_outro_title?.trim() || settings.title,
+          auto_thumbnail_side_image_url:
+            settings.auto_thumbnail_outro_side_image_url || settings.auto_thumbnail_side_image_url,
           auto_thumbnail_chapter_num: incrementChapterNum(currentChapterNum()),
         }
         outroFile = await buildAutoThumbnailFile(outroSettings, text, pixelRatio)
@@ -498,6 +507,17 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
       return {
         ...prev,
         auto_thumbnail_side_image_url: file ? URL.createObjectURL(file) : undefined,
+      }
+    })
+  }
+
+  const setAutoThumbnailOutroSideImage = (file: File | null) => {
+    setSettings((prev) => {
+      const previousUrl = prev.auto_thumbnail_outro_side_image_url
+      if (previousUrl?.startsWith('blob:')) URL.revokeObjectURL(previousUrl)
+      return {
+        ...prev,
+        auto_thumbnail_outro_side_image_url: file ? URL.createObjectURL(file) : undefined,
       }
     })
   }
@@ -632,6 +652,39 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
         payload.intro_thumbnail_enabled = true
       }
     }
+    if (shouldAutoBuildThumbnail) {
+      try {
+        const pixelRatio = payload.auto_thumbnail_export_2x ? 2 : 1.5
+        const existingOutroThumbnail = (payload.outro_thumbnail_filename ?? '').trim()
+        if (!existingOutroThumbnail) {
+          const outroPayload: GenerateSettings = {
+            ...payload,
+            title: payload.auto_thumbnail_outro_title?.trim() || payload.title,
+            auto_thumbnail_side_image_url:
+              payload.auto_thumbnail_outro_side_image_url || payload.auto_thumbnail_side_image_url,
+            auto_thumbnail_chapter_num: incrementChapterNum(currentChapterNum()),
+          }
+          const file = await buildAutoThumbnailFile(outroPayload, text, pixelRatio)
+          const { filename } = await api.uploadThumbnail(file)
+          payload.outro_thumbnail_enabled = true
+          payload.outro_thumbnail_filename = filename
+          payload.auto_thumbnail_outro_generated = true
+          setSettings((prev) => ({
+            ...prev,
+            outro_thumbnail_enabled: true,
+            outro_thumbnail_filename: filename,
+            auto_thumbnail_outro_generated: true,
+          }))
+        } else {
+          payload.outro_thumbnail_enabled = true
+        }
+      } catch (err) {
+        preflightProceedingRef.current = false
+        setAutoThumbnailError(err instanceof Error ? err.message : String(err))
+        setStepId('thumbnail')
+        return
+      }
+    }
     // Snapshot the full wizard state (text + settings) so the next
     // session can restore everything via "Reuse previous run".
     setLastRunSnapshot(saveLastRunSnapshot(text, payload, sourceMode))
@@ -760,6 +813,7 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
             onUseAutoThumbnail={useAutoThumbnailNow}
             onToggleAutoThumbnailEdit={() => setAutoThumbnailEditOpen((v) => !v)}
             onAutoThumbnailSideImage={setAutoThumbnailSideImage}
+            onAutoThumbnailOutroSideImage={setAutoThumbnailOutroSideImage}
             onSwapIntroOutroThumbnails={swapIntroOutroThumbnails}
           />
         )}
@@ -1431,6 +1485,7 @@ function ThumbnailStep({
   onUseAutoThumbnail,
   onToggleAutoThumbnailEdit,
   onAutoThumbnailSideImage,
+  onAutoThumbnailOutroSideImage,
   onSwapIntroOutroThumbnails,
 }: {
   settings: GenerateSettings
@@ -1445,6 +1500,7 @@ function ThumbnailStep({
   onUseAutoThumbnail: (slot?: 'intro' | 'outro' | 'both') => void
   onToggleAutoThumbnailEdit: () => void
   onAutoThumbnailSideImage: (file: File | null) => void
+  onAutoThumbnailOutroSideImage: (file: File | null) => void
   onSwapIntroOutroThumbnails: () => void
 }) {
   return (
@@ -1472,8 +1528,8 @@ function ThumbnailStep({
         <ThumbnailSlot
           kind="outro"
           title="Outro thumbnail"
-          position="Inserted on the 2nd-to-last slide"
-          enabled={settings.outro_thumbnail_enabled ?? false}
+          position={autoThumbnailBuilder ? 'Auto-built from the same detected project info' : 'Inserted on the 2nd-to-last slide'}
+          enabled={autoThumbnailBuilder || (settings.outro_thumbnail_enabled ?? false)}
           filename={settings.outro_thumbnail_filename ?? ''}
           // Outro is an explicit-save slot — until the user clicks
           // "Use as outro thumbnail", we keep this tile empty rather than
@@ -1500,6 +1556,7 @@ function ThumbnailStep({
           onUseAutoThumbnail={onUseAutoThumbnail}
           onToggleAutoThumbnailEdit={onToggleAutoThumbnailEdit}
           onAutoThumbnailSideImage={onAutoThumbnailSideImage}
+          onAutoThumbnailOutroSideImage={onAutoThumbnailOutroSideImage}
           onSwapIntroOutroThumbnails={onSwapIntroOutroThumbnails}
         />
       )}
@@ -1517,6 +1574,7 @@ function AutoThumbnailPanel({
   onUseAutoThumbnail,
   onToggleAutoThumbnailEdit,
   onAutoThumbnailSideImage,
+  onAutoThumbnailOutroSideImage,
   onSwapIntroOutroThumbnails,
 }: {
   settings: GenerateSettings
@@ -1528,6 +1586,7 @@ function AutoThumbnailPanel({
   onUseAutoThumbnail: (slot?: 'intro' | 'outro' | 'both') => void
   onToggleAutoThumbnailEdit: () => void
   onAutoThumbnailSideImage: (file: File | null) => void
+  onAutoThumbnailOutroSideImage: (file: File | null) => void
   onSwapIntroOutroThumbnails: () => void
 }) {
   const hasSavedIntro = Boolean((settings.intro_thumbnail_filename ?? '').trim())
@@ -1736,6 +1795,33 @@ function AutoThumbnailPanel({
                 {templateSaveStatus}
               </div>
             )}
+          </div>
+          <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 text-xs dark:border-white/10 dark:bg-white/[0.03] sm:grid-cols-[1fr,auto] sm:items-end">
+            <label className="block">
+              <span className="label">Outro title / topic</span>
+              <input
+                className="input h-9"
+                value={settings.auto_thumbnail_outro_title ?? ''}
+                onChange={(e) => onChange('auto_thumbnail_outro_title', e.target.value)}
+                placeholder="Ask/title for outro, e.g. Next Unit Preview"
+              />
+            </label>
+            <label className="btn-secondary btn-sm cursor-pointer">
+              <Upload size={13} /> Outro image
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) onAutoThumbnailOutroSideImage(file)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+            <div className="text-slate-500 dark:text-slate-400 sm:col-span-2">
+              Outro uses {incrementChapterNum((settings.auto_thumbnail_chapter_num ?? '').trim() || detectChapterMeta(text, settings)?.num || '1')} for the unit/chapter number. If no outro title or image is set, it falls back to the intro title and image.
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             <button

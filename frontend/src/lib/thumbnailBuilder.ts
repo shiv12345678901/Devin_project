@@ -79,6 +79,15 @@ export interface ThumbnailTemplateState {
   elements: Record<string, ThumbnailElement>
 }
 
+export interface AutoThumbnailMetadata {
+  className: string
+  subject: string
+  topic: string
+  prefix: string
+  num: string
+  year: string
+}
+
 const TEMPLATE_BASE_WIDTH = 1280
 const TEMPLATE_BASE_HEIGHT = 720
 
@@ -142,15 +151,14 @@ export function buildAutoThumbnailTemplate(
 }
 
 function educationClassic(settings: GenerateSettings, text: string): ThumbnailTemplateState {
-  const className = cleanLine(settings.class_name, 'Class')
-  const subject = cleanLine(settings.subject, 'Subject')
-  const title = cleanLine(settings.title, 'Chapter')
-  const [line1, line2, line3] = splitTitle(title)
+  const meta = detectAutoThumbnailMetadata(text, settings)
+  const { className, subject, topic, prefix: chapterPrefix, num: chapterNum, year } = meta
+  const [line1, line2, line3] = splitTitle(topic)
   // Auto-detect "Unit 3" / "Chapter 1" / "पाठ ४" etc. from the title and
   // body text so the thumbnail renders the right prefix + number even when
   // the user hasn't manually populated `auto_thumbnail_chapter_num` /
   // `auto_thumbnail_chapter_prefix`. Manual overrides always win.
-  const detected = detectChapterMeta(text, settings)
+  /* Legacy detection is superseded by detectAutoThumbnailMetadata().
   const chapterNum = cleanLine(
     settings.auto_thumbnail_chapter_num,
     detected?.num ?? title.match(/\d+/)?.[0] ?? '1',
@@ -160,6 +168,7 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
     settings.auto_thumbnail_chapter_prefix,
     detected?.prefix ?? 'पाठ',
   )
+  */
   const sideImageUrl = cleanLine(settings.auto_thumbnail_side_image_url, '')
 
   return {
@@ -199,14 +208,14 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
         zIndex: 2,
       }),
       /* Chapter title — split across two lines for readability. */
-      chapterLine1: textBox('chapterLine1', line1 || autoThumbnailSummary(text), {
-        type: 'chapter-text', posX: 270, posY: 161, width: 390, height: 110,
-        fontSize: 87, fontWeight: '900', color: PALETTE.chapterText,
-        fontFamily: fontFor(line1 || autoThumbnailSummary(text)),
-        textAlign: 'left', backgroundColor: 'transparent',
+      chapterLine1: textBox('chapterLine1', [line1, line2, line3].filter(Boolean).join('\n') || autoThumbnailSummary(text), {
+        type: 'chapter-text', posX: 44, posY: 260, width: 614, height: 205,
+        fontSize: 88, fontWeight: '900', color: PALETTE.chapterText,
+        fontFamily: fontFor(topic || autoThumbnailSummary(text)),
+        textAlign: 'center', backgroundColor: 'transparent',
         zIndex: 5,
       }),
-      chapterLine2: textBox('chapterLine2', line2, {
+      chapterLine2: textBox('chapterLine2', '', {
         type: 'chapter-text', posX: 44, posY: 279, width: 614, height: 82,
         fontSize: 75, fontWeight: '900', color: PALETTE.chapterText,
         fontFamily: fontFor(line2),
@@ -215,20 +224,20 @@ function educationClassic(settings: GenerateSettings, text: string): ThumbnailTe
       }),
       /* Single chapter pill at the bottom — replaces the previous stack of
        * red boxes that fought each other for attention. */
-      chapterLine3: textBox('chapterLine3', line3, {
+      chapterLine3: textBox('chapterLine3', '', {
         type: 'chapter-text', posX: 46, posY: 379, width: 614, height: 82,
         fontSize: 75, fontWeight: '900', color: PALETTE.chapterText,
         fontFamily: fontFor(line3),
         textAlign: 'center', backgroundColor: 'transparent',
         zIndex: 4,
       }),
-      labelNew: textBox('labelNew', `New ${year}`, {
+      labelNew: textBox('labelNew', `New\n${year}`, {
         type: 'label', posX: 15, posY: 517, width: 287, height: 133,
         fontSize: 62, fontWeight: '800', color: PALETTE.pillText,
         backgroundColor: PALETTE.pillBg, borderRadius: 12,
         paddingX: 0, paddingY: 16, zIndex: 4, textAlign: 'center',
       }),
-      labelChapter: textBox('labelChapter', `Chapter\n${chapterNum}`, {
+      labelChapter: textBox('labelChapter', `${chapterPrefix}\n${chapterNum}`, {
         type: 'label', posX: 324, posY: 520, width: 357, height: 115,
         fontSize: 61, fontWeight: '800', color: PALETTE.pillText,
         backgroundColor: PALETTE.pillBg, borderRadius: 12,
@@ -912,6 +921,62 @@ export function detectChapterMeta(
   return null
 }
 
+export function detectAutoThumbnailMetadata(
+  text: string,
+  settings: GenerateSettings,
+): AutoThumbnailMetadata {
+  const combined = [
+    settings.title ?? '',
+    text.slice(0, 1600),
+  ].join('\n')
+  const detected = detectChapterMeta(text, settings)
+  const className = cleanLine(settings.class_name, detectClassName(combined) ?? 'Class')
+  const subject = cleanLine(settings.subject, detectSubject(combined) ?? 'Subject')
+  const prefix = cleanLine(settings.auto_thumbnail_chapter_prefix, detected?.prefix ?? 'Unit')
+  const num = cleanLine(settings.auto_thumbnail_chapter_num, detected?.num ?? '1')
+  const year = cleanLine(settings.auto_thumbnail_year, detectYear(combined) ?? '2083')
+  const topic = cleanLine(detectTopic(combined, prefix, num), settings.title || autoThumbnailSummary(text))
+  return { className, subject, topic, prefix, num, year }
+}
+
+function detectClassName(text: string): string | null {
+  const match = text.match(/\bclass\s*([0-9]{1,2})\b/i)
+  return match ? `Class ${match[1]}` : null
+}
+
+function detectSubject(text: string): string | null {
+  const match = text.match(/\b(?:class\s*[0-9]{1,2}\s*(?:see\s*)?)(english|nepali|science|math|social)\b/i)
+  if (!match) return null
+  return match[1][0].toUpperCase() + match[1].slice(1).toLowerCase()
+}
+
+function detectYear(text: string): string | null {
+  return text.match(/\b(20[0-9]{2}|208[0-9])\b/)?.[1] ?? null
+}
+
+function detectTopic(text: string, prefix: string, num: string): string {
+  const escapedPrefix = escapeRegExp(prefix)
+  const escapedNum = escapeRegExp(num)
+  const byUnit = text.match(
+    new RegExp(`\\b${escapedPrefix}\\s*${escapedNum}\\s*[:\\-]?\\s*([^\\n|]{3,100})`, 'i'),
+  )
+  const raw = byUnit?.[1] || text.match(/\b(?:unit|chapter)\s*[0-9]{1,3}\s*[:\-]?\s*([^\n|]{3,100})/i)?.[1] || ''
+  return cleanupTopic(raw)
+}
+
+function cleanupTopic(value: string): string {
+  return value
+    .replace(/\bexercise\s*(?:20[0-9]{2}|208[0-9])?\b.*$/i, '')
+    .replace(/\bchapter\s*\/\s*reading material\b.*$/i, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[,:\-\s]+$/g, '')
+    .trim()
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 /** Parse an ASCII-or-Devanagari numeric string to an integer, or null. */
 export function parseChapterNum(num: string): number | null {
   const ascii = num.replace(/[\u0966-\u096F]/g, (d) => String(d.charCodeAt(0) - 0x0966))
@@ -944,16 +1009,46 @@ function splitTitle(title: string): [string, string, string] {
     .trim()
   const words = stripped.split(/\s+/).filter(Boolean)
   if (words.length <= 2) return [words.join(' '), '', '']
-  if (words.length <= 5) {
-    const mid = Math.ceil(words.length / 2)
-    return [words.slice(0, mid).join(' '), words.slice(mid).join(' '), '']
+  if (words.length <= 6) {
+    const lines = balanceWords(words, 2)
+    return [lines[0] ?? '', lines[1] ?? '', '']
   }
-  const chunk = Math.ceil(words.length / 3)
-  return [
-    words.slice(0, chunk).join(' '),
-    words.slice(chunk, chunk * 2).join(' '),
-    words.slice(chunk * 2).join(' '),
-  ]
+  const lines = balanceWords(words, 3)
+  return [lines[0] ?? '', lines[1] ?? '', lines[2] ?? '']
+}
+
+function balanceWords(words: string[], lineCount: 2 | 3): string[] {
+  if (words.length <= lineCount) return words
+  const totalChars = words.join(' ').length
+  const target = Math.ceil(totalChars / lineCount)
+  const lines: string[] = []
+  let current: string[] = []
+  let currentChars = 0
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i]
+    const remainingWords = words.length - i
+    const remainingLines = lineCount - lines.length
+    if (
+      current.length > 0 &&
+      currentChars + word.length + 1 > target &&
+      remainingWords > remainingLines
+    ) {
+      lines.push(current.join(' '))
+      current = [word]
+      currentChars = word.length
+    } else {
+      current.push(word)
+      currentChars += word.length + (current.length > 1 ? 1 : 0)
+    }
+  }
+  if (current.length) lines.push(current.join(' '))
+  while (lines.length > 1 && lines[lines.length - 1].split(/\s+/).length === 1) {
+    const last = lines.pop()!
+    const prev = lines.pop()!.split(/\s+/)
+    lines.push(prev.slice(0, -1).join(' '))
+    lines.push(`${prev.at(-1)} ${last}`)
+  }
+  return lines.slice(0, lineCount)
 }
 
 function autoThumbnailSummary(text: string): string {

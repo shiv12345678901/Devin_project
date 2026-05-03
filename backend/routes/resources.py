@@ -291,6 +291,9 @@ def list_files():
     html_files = []
     presentation_files = []
     video_files = []
+    html_sizes = {}
+    presentation_sizes = {}
+    video_sizes = {}
 
     if os.path.exists(OUTPUT_FOLDER):
         for f in os.listdir(OUTPUT_FOLDER):
@@ -306,6 +309,11 @@ def list_files():
     if os.path.exists(HTML_FOLDER):
         html_files = [f for f in os.listdir(HTML_FOLDER) if f.endswith('.html')]
         html_files.sort(reverse=True)
+        html_sizes = {
+            f: os.path.getsize(os.path.join(HTML_FOLDER, f))
+            for f in html_files
+            if os.path.isfile(os.path.join(HTML_FOLDER, f))
+        }
 
     if os.path.exists(PRESENTATIONS_FOLDER):
         presentation_files = [
@@ -313,6 +321,11 @@ def list_files():
             if f.lower().endswith(('.pptx', '.pptm'))
         ]
         presentation_files.sort(reverse=True)
+        presentation_sizes = {
+            f: os.path.getsize(os.path.join(PRESENTATIONS_FOLDER, f))
+            for f in presentation_files
+            if os.path.isfile(os.path.join(PRESENTATIONS_FOLDER, f))
+        }
 
     if os.path.exists(VIDEOS_FOLDER):
         video_files = [
@@ -320,12 +333,20 @@ def list_files():
             if f.lower().endswith(('.mp4', '.mov', '.webm'))
         ]
         video_files.sort(reverse=True)
+        video_sizes = {
+            f: os.path.getsize(os.path.join(VIDEOS_FOLDER, f))
+            for f in video_files
+            if os.path.isfile(os.path.join(VIDEOS_FOLDER, f))
+        }
 
     return jsonify({
         'screenshots': screenshots,
         'html_files': html_files,
         'presentation_files': presentation_files,
         'video_files': video_files,
+        'html_sizes': html_sizes,
+        'presentation_sizes': presentation_sizes,
+        'video_sizes': video_sizes,
     })
 
 
