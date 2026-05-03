@@ -708,6 +708,21 @@ def cancel_run(run_id: str):
     delete_outputs = _bool_value(data.get("delete_outputs"), False)
     if cancel_job(run_id, mode=mode, delete_outputs=delete_outputs):
         return jsonify({"success": True, "message": "Cancellation requested"})
+
+    # The run may already be in a terminal state (completed / failed /
+    # cancelled). The frontend hits /cancel as a fire-and-forget when the
+    # user clicks Cancel, which races against the run finishing on its own.
+    # Treat that as a no-op success rather than a 404 so we don't toast a
+    # misleading "Run is not queued or running" error.
+    existing = get_run(run_id)
+    if existing and existing.get("status") in {"completed", "failed", "cancelled"}:
+        return jsonify({
+            "success": True,
+            "message": "Run is already finished — nothing to cancel.",
+            "already_terminal": True,
+            "status": existing.get("status"),
+        })
+
     return jsonify({"success": False, "error": "Run is not queued or running"}), 404
 
 

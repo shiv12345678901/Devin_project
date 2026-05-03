@@ -6,6 +6,7 @@ import uuid
 import zipfile
 import time
 import json
+from datetime import datetime
 
 from flask import Blueprint, request, jsonify, send_file, Response
 from core.thumbnail_builder import ThumbnailParams, render_thumbnail_png
@@ -283,6 +284,115 @@ def download_file(filepath):
 
 
 # ─── File Listing ──────────────────────────────────────────────────────────
+
+# ─── Per-category listings (paginated, mtime-sorted) ──────────────────────
+#
+# I3: the legacy /list returns all four asset categories on every call,
+# which is expensive on libraries with thousands of screenshots and forces
+# the UI to re-fetch unchanged tabs. These endpoints let the Library tab
+# component fetch only what it needs and stream pages.
+
+_CATEGORY_FOLDERS: dict[str, tuple[str, tuple[str, ...]]] = {
+    'screenshots': (OUTPUT_FOLDER, ('.png',)),
+    'html': (HTML_FOLDER, ('.html',)),
+    'presentations': (PRESENTATIONS_FOLDER, ('.pptx', '.pptm')),
+    'videos': (VIDEOS_FOLDER, ('.mp4', '.mov', '.webm')),
+}
+
+
+def _walk_category(folder: str, suffixes: tuple[str, ...], include_batch_subdirs: bool) -> list[dict]:
+    """Collect (relative_name, size, mtime) for every file under `folder`.
+
+    ``include_batch_subdirs`` is the screenshots-only behaviour where files
+    inside ``output/batch …/`` directories are surfaced as ``"batch …/foo.png"``.
+    """
+    items: list[dict] = []
+    if not os.path.exists(folder):
+        return items
+    for entry in os.listdir(folder):
+        full = os.path.join(folder, entry)
+        if entry.lower().endswith(suffixes) and os.path.isfile(full):
+            try:
+                stat = os.stat(full)
+            except OSError:
+                continue
+            items.append({'name': entry, 'size': stat.st_size, 'mtime': stat.st_mtime})
+        elif (
+            include_batch_subdirs
+            and entry.startswith('batch ')
+            and os.path.isdir(full)
+        ):
+            for b_entry in os.listdir(full):
+                b_full = os.path.join(full, b_entry)
+                if not b_entry.lower().endswith(suffixes):
+                    continue
+                if not os.path.isfile(b_full):
+                    continue
+                try:
+                    stat = os.stat(b_full)
+                except OSError:
+                    continue
+                items.append({
+                    'name': f"{entry}/{b_entry}",
+                    'size': stat.st_size,
+                    'mtime': stat.st_mtime,
+                })
+    return items
+
+
+def _parse_int(raw: str | None, default: int, lo: int, hi: int) -> int:
+    try:
+        n = int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        n = default
+    return max(lo, min(hi, n))
+
+
+@resources_bp.route('/list/<category>')
+def list_files_by_category(category: str):
+    """Return one asset category sorted newest-first, paginated.
+
+    Query params: ``page`` (1-indexed, default 1), ``size`` (1..500,
+    default 100), ``since`` (unix-seconds, drop entries older than this).
+    """
+    if category not in _CATEGORY_FOLDERS:
+        return jsonify({
+            'success': False,
+            'error': f"Unknown category '{category}'. Expected one of: {sorted(_CATEGORY_FOLDERS)}",
+        }), 400
+
+    folder, suffixes = _CATEGORY_FOLDERS[category]
+    items = _walk_category(folder, suffixes, include_batch_subdirs=(category == 'screenshots'))
+
+    since_raw = request.args.get('since')
+    if since_raw is not None:
+        try:
+            since = float(since_raw)
+            items = [it for it in items if it['mtime'] >= since]
+        except ValueError:
+            pass
+
+    items.sort(key=lambda it: it['mtime'], reverse=True)
+    total = len(items)
+
+    page = _parse_int(request.args.get('page'), 1, 1, 100_000)
+    size = _parse_int(request.args.get('size'), 100, 1, 500)
+    start = (page - 1) * size
+    page_items = items[start:start + size]
+    for it in page_items:
+        # ISO-formatted mtime in UTC, easier for the UI than a raw float.
+        it['mtime_iso'] = datetime.utcfromtimestamp(it['mtime']).isoformat() + 'Z'
+
+    return jsonify({
+        'success': True,
+        'category': category,
+        'items': page_items,
+        'page': page,
+        'size': size,
+        'total': total,
+        'has_more': start + len(page_items) < total,
+    })
+
 
 @resources_bp.route('/list')
 def list_files():

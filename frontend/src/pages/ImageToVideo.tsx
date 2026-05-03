@@ -2,7 +2,6 @@ import { Play, StopCircle, Upload } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type React from 'react'
-import SettingsPanel from '../components/SettingsPanel'
 import BackendRejectedBanner from '../components/BackendRejectedBanner'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import type { GenerateSettings } from '../api/types'
@@ -157,7 +156,72 @@ export default function ImageToVideo() {
           </div>
         </div>
 
-        <SettingsPanel value={settings} onChange={setSettings} showAdvanced={false} />
+        <div className="card space-y-4">
+          <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
+            Capture settings
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Field label="Zoom" htmlFor="img-zoom">
+              <input
+                id="img-zoom"
+                type="number"
+                step="0.1"
+                className="input"
+                value={settings.zoom ?? 2.1}
+                onChange={(e) => setSettings({ ...settings, zoom: Number(e.target.value) })}
+                disabled={running}
+              />
+            </Field>
+            <Field label="Overlap (px)" htmlFor="img-overlap">
+              <input
+                id="img-overlap"
+                type="number"
+                className="input"
+                value={settings.overlap ?? 20}
+                onChange={(e) => setSettings({ ...settings, overlap: Number(e.target.value) })}
+                disabled={running}
+              />
+            </Field>
+            <Field label="Max screenshots" htmlFor="img-max">
+              <input
+                id="img-max"
+                type="number"
+                className="input"
+                value={settings.max_screenshots ?? 50}
+                onChange={(e) =>
+                  setSettings({ ...settings, max_screenshots: Number(e.target.value) })
+                }
+                disabled={running}
+              />
+            </Field>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Viewport width" htmlFor="img-vw">
+              <input
+                id="img-vw"
+                type="number"
+                className="input"
+                value={settings.viewport_width ?? 1920}
+                onChange={(e) =>
+                  setSettings({ ...settings, viewport_width: Number(e.target.value) })
+                }
+                disabled={running}
+              />
+            </Field>
+            <Field label="Viewport height" htmlFor="img-vh">
+              <input
+                id="img-vh"
+                type="number"
+                className="input"
+                value={settings.viewport_height ?? 1080}
+                onChange={(e) =>
+                  setSettings({ ...settings, viewport_height: Number(e.target.value) })
+                }
+                disabled={running}
+              />
+            </Field>
+          </div>
+        </div>
 
         <div className="flex flex-wrap items-center gap-3">
           {!running ? (
@@ -181,6 +245,25 @@ export default function ImageToVideo() {
         )}
       </form>
 
+    </div>
+  )
+}
+
+function Field({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: string
+  htmlFor?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div>
+      <label className="label" htmlFor={htmlFor}>
+        {label}
+      </label>
+      {children}
     </div>
   )
 }

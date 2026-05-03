@@ -262,6 +262,27 @@ export interface ListResponse {
   video_sizes?: Record<string, number>
 }
 
+export type ListCategory = 'screenshots' | 'html' | 'presentations' | 'videos'
+
+export interface ListCategoryItem {
+  name: string
+  size: number
+  /** Unix-seconds (float) modification timestamp. */
+  mtime: number
+  /** ISO-8601 mtime; convenience for the UI. */
+  mtime_iso?: string
+}
+
+export interface ListCategoryResponse {
+  success: boolean
+  category: ListCategory
+  items: ListCategoryItem[]
+  page: number
+  size: number
+  total: number
+  has_more: boolean
+}
+
 export interface CacheStats {
   size?: number
   hits?: number

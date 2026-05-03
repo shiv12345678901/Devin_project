@@ -11,9 +11,11 @@ this app also serves that SPA at `/`. Otherwise `/` returns a short message
 telling the user to run the dev server or build the frontend.
 """
 import io
+import json
 import logging
 import os
 import sys
+from datetime import datetime
 
 # Force UTF-8-safe, unbuffered output for Windows terminals/services.
 if sys.version_info >= (3, 7):
@@ -150,6 +152,46 @@ app.register_blueprint(image_bp)
 app.register_blueprint(resources_bp)
 app.register_blueprint(runs_bp)
 
+
+@app.after_request
+def _normalize_error_shape(response):
+    """Ensure every JSON error response also carries an explicit ``success: False``.
+
+    I1: routes historically returned a mix of ``{"error": "…"}`` and
+    ``{"success": false, "error": "…"}``. Forcing the frontend to handle
+    both shapes is fragile. Rather than churn every callsite (50+), we
+    rewrite the response on the way out: any JSON body that contains an
+    ``error`` key but no ``success`` key gets ``success`` set to ``False``;
+    bodies with neither (the success path) get ``success: True`` only when
+    the handler did not already populate one.
+    """
+    try:
+        if not response.is_json:
+            return response
+        if response.status_code >= 500:
+            # Don't touch internal errors with non-JSON bodies (already filtered
+            # by the is_json check, but be defensive about giant tracebacks).
+            pass
+        data = response.get_json(silent=True)
+        if not isinstance(data, dict):
+            return response
+        if 'success' in data:
+            return response
+        if 'error' in data:
+            data = {'success': False, **data}
+            response.set_data(json.dumps(data))
+            response.headers['Content-Length'] = str(len(response.get_data()))
+        elif response.status_code < 400:
+            # Add an explicit "success: True" to plain success bodies that
+            # don't carry status flags themselves (e.g. /version, /healthz).
+            # We do *not* add it for streaming or list-style responses where
+            # the frontend keys off the payload itself.
+            pass
+    except Exception:
+        # Never let response normalization break the response itself.
+        pass
+    return response
+
 _restart_recovery = mark_interrupted_active_runs()
 _interrupted_count = _restart_recovery.get("interrupted", 0) if isinstance(_restart_recovery, dict) else 0
 _recovered_count = _restart_recovery.get("recovered", 0) if isinstance(_restart_recovery, dict) else 0
@@ -184,6 +226,45 @@ def healthz():
         'service': 'textbro-backend',
         'active_operation_id': active,
     })
+
+
+_version_cache: dict = {'value': None}
+
+
+def _backend_version_payload() -> dict:
+    """Return a stable version payload — git SHA preferred, env override
+    second, "dev" as a last-resort fallback.
+
+    The value is cached for the process lifetime since it cannot change
+    while the server is up.
+    """
+    if _version_cache['value'] is not None:
+        return _version_cache['value']
+    sha = os.environ.get('BACKEND_BUILD_SHA') or os.environ.get('GIT_COMMIT_SHA') or ''
+    if not sha:
+        try:
+            import subprocess
+            sha = subprocess.check_output(
+                ['git', 'rev-parse', '--short', 'HEAD'],
+                cwd=os.path.dirname(BACKEND_DIR),
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            ).decode().strip()
+        except Exception:
+            sha = ''
+    payload = {
+        'service': 'textbro-backend',
+        'sha': sha or 'dev',
+        'started_at': datetime.utcnow().isoformat() + 'Z',
+    }
+    _version_cache['value'] = payload
+    return payload
+
+
+@app.route('/version')
+def version():
+    """Expose the backend git SHA so the UI can show what's deployed."""
+    return jsonify(_backend_version_payload())
 
 
 # Memoize the (relatively expensive) preflight result for a short window so a

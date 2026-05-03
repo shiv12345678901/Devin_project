@@ -260,6 +260,7 @@ function SidebarNav() {
 
 function SidebarFooterWithProgress() {
   const status = useBackendStatus()
+  const version = useVersionInfo()
   const { runs } = useRuns()
   const { state } = useGenerationQueue()
   const [selectedRunId, setSelectedRunId] = useState<string | null>(() => readSelectedProcessId())
@@ -342,7 +343,12 @@ function SidebarFooterWithProgress() {
         <span className={clsx(status === 'offline' ? 'text-rose-600 dark:text-rose-300' : 'text-muted')}>
           {label}
         </span>
-        <span className="ml-auto font-mono text-[10px] text-faint">v1.0</span>
+        <span
+          className="ml-auto font-mono text-[10px] text-faint"
+          title={`Backend ${version.backend} · UI ${version.frontend}`}
+        >
+          {version.label}
+        </span>
       </NavLink>
     </div>
   )
@@ -355,6 +361,7 @@ function formatSidebarStage(stage: string | undefined): string {
 
 export function SidebarFooter() {
   const status = useBackendStatus()
+  const version = useVersionInfo()
   const label =
     status === 'online'
       ? 'Backend online'
@@ -390,7 +397,12 @@ export function SidebarFooter() {
       <span className={clsx(status === 'offline' ? 'text-rose-600 dark:text-rose-300' : 'text-muted')}>
         {label}
       </span>
-      <span className="ml-auto font-mono text-[10px] text-faint">v1.0</span>
+      <span
+        className="ml-auto font-mono text-[10px] text-faint"
+        title={`Backend ${version.backend} · UI ${version.frontend}`}
+      >
+        {version.label}
+      </span>
     </NavLink>
   )
 }
@@ -476,6 +488,63 @@ function buildCrumbs(path: string): { to: string; label: string }[] {
 }
 
 type Status = 'pending' | 'online' | 'offline'
+
+interface VersionInfo {
+  /** 7-char git SHA of the running backend, or 'dev'. */
+  backend: string
+  /** 7-char git SHA injected at frontend build time, or 'dev'. */
+  frontend: string
+  /** Best-effort label, e.g. "be 2c0d461 · ui 9af1c3b". */
+  label: string
+}
+
+let _versionMemo: VersionInfo | null = null
+
+function useVersionInfo(): VersionInfo {
+  // Prefer the build-time SHA (set by Vite's `define`); fall back to 'dev'.
+  const frontend =
+    typeof __BUILD_SHA__ === 'string' && __BUILD_SHA__ ? __BUILD_SHA__.slice(0, 7) : 'dev'
+  const [info, setInfo] = useState<VersionInfo>(() =>
+    _versionMemo ?? { backend: 'dev', frontend, label: `ui ${frontend}` },
+  )
+  useEffect(() => {
+    let cancelled = false
+    if (_versionMemo) {
+      // Defer past the effect body so this doesn't fire synchronously
+      // during the first render (matches the deferred-setState pattern
+      // used elsewhere — react-hooks/set-state-in-effect).
+      const t = window.setTimeout(() => {
+        if (cancelled) return
+        if (_versionMemo) setInfo(_versionMemo)
+      }, 0)
+      return () => {
+        cancelled = true
+        window.clearTimeout(t)
+      }
+    }
+    api
+      .version()
+      .then((v) => {
+        if (cancelled) return
+        const sha = (v.sha || 'dev').slice(0, 7)
+        const next: VersionInfo = {
+          backend: sha,
+          frontend,
+          label: sha === frontend ? sha : `be ${sha} · ui ${frontend}`,
+        }
+        _versionMemo = next
+        setInfo(next)
+      })
+      .catch(() => {
+        // Backend unreachable — keep the frontend SHA so the user can at
+        // least cite what UI build they're running.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [frontend])
+  return info
+}
 
 function useBackendStatus(): Status {
   const [status, setStatus] = useState<Status>('pending')

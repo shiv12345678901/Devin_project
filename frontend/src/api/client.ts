@@ -4,6 +4,8 @@ import type {
   GenerateSettings,
   HistoryEntry,
   ListResponse,
+  ListCategory,
+  ListCategoryResponse,
   PreflightResponse,
   SseEvent,
   BackendRunStartResponse,
@@ -190,6 +192,22 @@ export const api = {
     postJson<GenerateResponse>('/regenerate', { html_filename: htmlFilename, ...settings }),
 
   list: () => getJson<ListResponse>('/list'),
+
+  /**
+   * Per-category, paginated, mtime-sorted listing. Use this when the
+   * Library tab only needs one category — avoids the full /list scan.
+   */
+  listCategory: (
+    category: ListCategory,
+    opts: { page?: number; size?: number; since?: number } = {},
+  ) => {
+    const params = new URLSearchParams()
+    if (opts.page) params.set('page', String(opts.page))
+    if (opts.size) params.set('size', String(opts.size))
+    if (opts.since) params.set('since', String(opts.since))
+    const qs = params.toString()
+    return getJson<ListCategoryResponse>(`/list/${category}${qs ? `?${qs}` : ''}`)
+  },
   history: () => getJson<HistoryEntry[]>('/history'),
   youtubeVideos: () => getJson<YoutubeVideosResponse>('/youtube/videos'),
   clearHistory: () => postJson<{ success: boolean; message: string }>('/history/clear', {}),
@@ -251,6 +269,14 @@ export const api = {
 
   cacheStats: () => getJson<CacheStats>('/cache/stats'),
   clearCache: () => postJson<{ success: boolean; message: string }>('/cache/clear', {}),
+
+  /**
+   * Backend version metadata — git SHA + boot timestamp. Cached for the
+   * page's lifetime (the value can't change without a backend restart, at
+   * which point the SSE/polling layer reconnects anyway).
+   */
+  version: () =>
+    getJson<{ service: string; sha: string; started_at: string }>('/version'),
 
   screenshotUrl: (filename: string) =>
     buildUrl(`/screenshots/${filename.split('/').map(encodeURIComponent).join('/')}`),
