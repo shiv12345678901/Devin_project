@@ -912,13 +912,13 @@ def start_text_to_video():
                 if _cancel_at_checkpoint(ctx, run_id, "video_export_done", "Cancelled after MP4 export finished", outputs):
                     return
                 ctx.complete("Successfully exported MP4 from existing PowerPoint deck", outputs=outputs)
-                eta_tracker.record_process_completion(
-                    model_choice,
-                    len(ai_input_text),
-                    time.time() - process_started,
-                    resolution=resolution_label,
-                    concurrent=concurrent_pipeline_runs,
-                )
+                # Resume runs only execute the MP4-export step (the AI/HTML/
+                # screenshot/PPTX stages are skipped because the deck
+                # already exists). Their durations are a tiny fraction of
+                # a full pipeline and would skew ``predict_process_time``
+                # toward unrealistically low values, so deliberately do
+                # NOT call ``record_process_completion`` here. Only real
+                # full-pipeline passes feed the ETA model.
                 return
 
             ai_started = time.time()
@@ -1364,13 +1364,9 @@ def start_html_to_video():
                 if _cancel_at_checkpoint(ctx, run_id, "video_export_done", "Cancelled after MP4 export finished", outputs):
                     return
                 ctx.complete("Successfully exported MP4 from existing PowerPoint deck", outputs=outputs)
-                eta_tracker.record_process_completion(
-                    model_choice,
-                    max(len(html_content), 1),
-                    time.time() - process_started,
-                    resolution=resolution_label,
-                    concurrent=concurrent_pipeline_runs,
-                )
+                # See the matching note in the text-to-video resume branch:
+                # the ETA model is only fed full-pipeline passes, never
+                # resume runs that skip the AI / screenshot / PPTX stages.
                 return
 
             html_filename, _ = save_html(html_content, prefix=operation_id, folder="output/html")
