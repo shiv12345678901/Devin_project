@@ -167,6 +167,86 @@ function useNow(enabled: boolean, tickMs = 1000): number {
   return now
 }
 
+/**
+ * D6: 5-segment stage strip — AI → Render → Screenshot → PPTX → MP4. Each
+ * segment lights up as the run reaches that pipeline phase. Compact
+ * enough to sit on the row above the progress bar.
+ */
+type StageSegment = {
+  key: 'ai' | 'render' | 'screenshot' | 'pptx' | 'mp4'
+  label: string
+}
+const PIPELINE_SEGMENTS: StageSegment[] = [
+  { key: 'ai', label: 'AI' },
+  { key: 'render', label: 'Render' },
+  { key: 'screenshot', label: 'Screenshot' },
+  { key: 'pptx', label: 'PPTX' },
+  { key: 'mp4', label: 'MP4' },
+]
+function stageToSegmentIndex(stage: string | undefined): number {
+  if (!stage) return -1
+  const s = stage.toLowerCase()
+  if (s.startsWith('ai')) return 0
+  if (s === 'init' || s === 'queued' || s === 'running') return 0
+  if (s === 'html_saved') return 1
+  if (s.startsWith('screenshot')) return 2
+  if (s.startsWith('powerpoint') || s === 'pptx' || s.startsWith('export')) return 3
+  if (s.startsWith('video') || s === 'mp4') return 4
+  if (s === 'complete' || s === 'screenshots_done') return 4
+  return -1
+}
+function StageStrip({
+  stage,
+  status,
+  outputFormat,
+}: {
+  stage: string | undefined
+  status: Run['status']
+  outputFormat: string | undefined
+}) {
+  const reached = stageToSegmentIndex(stage)
+  // Trim segments that the run won't ever reach so the strip doesn't
+  // pretend to have progress past the user's chosen output. ('html' caps
+  // at Render; 'images' caps at Screenshot; 'pptx' caps at PPTX.)
+  const cap = (() => {
+    switch ((outputFormat ?? '').toLowerCase()) {
+      case 'html': return 1
+      case 'images': return 2
+      case 'pptx': return 3
+      default: return 4
+    }
+  })()
+  const segments = PIPELINE_SEGMENTS.slice(0, cap + 1)
+  return (
+    <div className="mt-1.5 flex items-center gap-1" aria-label="Pipeline stages">
+      {segments.map((seg, i) => {
+        const done =
+          status === 'success' || status === 'cancelled'
+            ? i <= reached || status === 'success'
+            : i < reached
+        const active = status === 'running' && i === reached
+        const failed = status === 'error' && i === reached
+        return (
+          <div
+            key={seg.key}
+            title={seg.label}
+            className={
+              'flex h-1.5 min-w-0 flex-1 items-center justify-center rounded-full transition-colors ' +
+              (failed
+                ? 'bg-rose-500/80'
+                : active
+                ? 'bg-brand-500 animate-pulse'
+                : done
+                ? 'bg-brand-500/70'
+                : 'bg-slate-200 dark:bg-white/[0.08]')
+            }
+          />
+        )
+      })}
+    </div>
+  )
+}
+
 function RunRow({
   run,
   onRemove,
@@ -310,6 +390,11 @@ function RunRow({
               {run.message ? ` - ${run.message}` : ''}
             </div>
           )}
+          <StageStrip
+            stage={run.stage}
+            status={run.status}
+            outputFormat={run.settings?.output_format}
+          />
         </div>
 
         <div className="hidden w-40 shrink-0 text-right sm:block">
@@ -1142,10 +1227,153 @@ export default function Processes() {
     return () => clearTimeout(t)
   }, [refresh])
 
+  // D1: Server-Sent Events drive backend state in real-time. We subscribe
+  // to /runs/<id>/events for every active operationId we know about and
+  // mirror events into the local runs store. A low-frequency fallback poll
+  // keeps stale terminal rows in sync (e.g. after an app restart, when
+  // events were missed entirely).
+  const sseHandlesRef = useRef(new Map<string, AbortController>())
   useEffect(() => {
     let stopped = false
 
-    const syncBackendRuns = async () => {
+    const applyBackendDetail = (
+      localRun: Run,
+      backendRun: BackendRunDetail['run'],
+      nextOperationId: string,
+    ) => {
+      const backendStatus = String(backendRun.status ?? '')
+      if (backendStatus === 'completed') {
+        recoveredTerminalRefs.current.add(localRun.id)
+        finish(localRun.id, {
+          status: 'success',
+          ...trackedOutputsFromBackendRun(backendRun, nextOperationId),
+          stage: 'complete',
+          message: backendRun.message,
+          progress: 100,
+        })
+      } else if (backendStatus === 'failed') {
+        recoveredTerminalRefs.current.add(localRun.id)
+        finish(localRun.id, {
+          status: 'error',
+          error: backendRun.message ?? 'Process failed',
+          operationId: nextOperationId,
+          stage: backendRun.stage,
+          message: backendRun.message,
+          progress: backendRun.progress ?? 100,
+        })
+      } else if (backendStatus === 'cancelled') {
+        recoveredTerminalRefs.current.add(localRun.id)
+        finish(localRun.id, {
+          status: 'cancelled',
+          operationId: nextOperationId,
+          stage: backendRun.stage ?? 'cancelled',
+          message: backendRun.message ?? 'Cancelled',
+          progress: backendRun.progress ?? 100,
+        })
+      } else if (backendStatus === 'queued' || backendStatus === 'running') {
+        update(localRun.id, {
+          status: 'running',
+          operationId: nextOperationId,
+          stage: backendRun.stage,
+          message: backendRun.message,
+          progress: backendRun.progress,
+          etaSeconds: trackedOutputsFromBackendRun(backendRun, nextOperationId).etaSeconds,
+        })
+      }
+    }
+
+    const subscribeToRun = (localRunId: string, operationId: string) => {
+      // Already subscribed?
+      if (sseHandlesRef.current.has(operationId)) return
+      const ctrl = new AbortController()
+      sseHandlesRef.current.set(operationId, ctrl)
+      void api
+        .streamRunEvents(operationId, {
+          signal: ctrl.signal,
+          onEvent: (ev) => {
+            if (stopped) return
+            switch (ev.type) {
+              case 'queued':
+                update(localRunId, {
+                  status: 'running',
+                  stage: 'queued',
+                  message: ev.message,
+                  progress: ev.progress ?? 0,
+                })
+                break
+              case 'started':
+              case 'progress':
+                update(localRunId, {
+                  status: 'running',
+                  stage: ev.type === 'progress' ? ev.stage : ev.stage ?? 'running',
+                  message: ev.message,
+                  progress:
+                    ev.type === 'progress' ? ev.progress : ev.progress ?? 0,
+                  etaSeconds:
+                    ev.type === 'progress' ? ev.eta_seconds : ev.estimated_total_seconds,
+                })
+                break
+              case 'complete':
+              case 'error':
+              case 'cancelled':
+                // SSE only carries summary fields. Fall back to one detail
+                // fetch so we capture all output filenames.
+                void (async () => {
+                  try {
+                    const detail = await api.getRun(operationId)
+                    if (stopped) return
+                    const localRun = runsRef.current.find((r) => r.id === localRunId)
+                    if (localRun) {
+                      applyBackendDetail(localRun, detail.run, detail.run.operation_id ?? operationId)
+                    }
+                  } catch {
+                    // ignore — fallback poll will cover it
+                  }
+                })()
+                break
+              default:
+                break
+            }
+          },
+        })
+        .catch(() => {
+          // Network drop / abort — let the fallback poll re-establish on next tick.
+        })
+        .finally(() => {
+          sseHandlesRef.current.delete(operationId)
+        })
+    }
+
+    const reconcileSubscriptions = () => {
+      const wanted = new Set<string>()
+      const now = Date.now()
+      for (const r of runsRef.current) {
+        if (!r.operationId) continue
+        if (r.status === 'running') {
+          wanted.add(r.operationId)
+          subscribeToRun(r.id, r.operationId)
+        } else if (
+          (r.status === 'cancelled' || r.status === 'error') &&
+          !recoveredTerminalRefs.current.has(r.id) &&
+          now - r.startedAt < 2 * 60 * 60_000
+        ) {
+          wanted.add(r.operationId)
+          subscribeToRun(r.id, r.operationId)
+        }
+      }
+      // Cancel any subscriptions for ops we no longer care about.
+      for (const [opId, ctrl] of sseHandlesRef.current) {
+        if (!wanted.has(opId)) {
+          ctrl.abort()
+          sseHandlesRef.current.delete(opId)
+        }
+      }
+    }
+
+    // Slow fallback poll (15s) so stale terminal-but-recoverable rows still
+    // get caught even if the SSE stream drops or the run finished before we
+    // managed to subscribe.
+    const fallbackSync = async () => {
       const now = Date.now()
       const candidates = runsRef.current.filter((r) => {
         if (!r.operationId) return false
@@ -1156,8 +1384,6 @@ export default function Processes() {
           now - r.startedAt < 2 * 60 * 60_000
         )
       })
-      if (candidates.length === 0) return
-
       await Promise.all(
         candidates.map(async (localRun) => {
           const operationId = localRun.operationId
@@ -1165,70 +1391,30 @@ export default function Processes() {
           try {
             const detail = await api.getRun(operationId)
             if (stopped) return
-            const backendRun = detail.run
-            const backendStatus = String(backendRun.status ?? '')
-            const nextOperationId = backendRun.operation_id ?? operationId
-
-            if (backendStatus === 'completed') {
-              recoveredTerminalRefs.current.add(localRun.id)
-              finish(localRun.id, {
-                status: 'success',
-                ...trackedOutputsFromBackendRun(backendRun, nextOperationId),
-                stage: 'complete',
-                message: backendRun.message,
-                progress: 100,
-              })
-              return
-            }
-
-            if (backendStatus === 'failed') {
-              recoveredTerminalRefs.current.add(localRun.id)
-              finish(localRun.id, {
-                status: 'error',
-                error: backendRun.message ?? 'Process failed',
-                operationId: nextOperationId,
-                stage: backendRun.stage,
-                message: backendRun.message,
-                progress: backendRun.progress ?? 100,
-              })
-              return
-            }
-
-            if (backendStatus === 'cancelled') {
-              recoveredTerminalRefs.current.add(localRun.id)
-              finish(localRun.id, {
-                status: 'cancelled',
-                operationId: nextOperationId,
-                stage: backendRun.stage ?? 'cancelled',
-                message: backendRun.message ?? 'Cancelled',
-                progress: backendRun.progress ?? 100,
-              })
-              return
-            }
-
-            if (backendStatus === 'queued' || backendStatus === 'running') {
-              update(localRun.id, {
-                status: 'running',
-                operationId: nextOperationId,
-                stage: backendRun.stage,
-                message: backendRun.message,
-                progress: backendRun.progress,
-                etaSeconds: trackedOutputsFromBackendRun(backendRun, nextOperationId).etaSeconds,
-              })
-            }
+            applyBackendDetail(
+              localRun,
+              detail.run,
+              detail.run.operation_id ?? operationId,
+            )
           } catch {
-            // The backend may briefly rotate state while a run starts/finishes.
-            // Leave the row running and try again on the next tick.
+            // Try again on the next tick.
           }
         }),
       )
     }
 
-    void syncBackendRuns()
-    const id = window.setInterval(syncBackendRuns, 1500)
+    reconcileSubscriptions()
+    void fallbackSync()
+    const reconcileId = window.setInterval(reconcileSubscriptions, 2_000)
+    const fallbackId = window.setInterval(fallbackSync, 15_000)
+
+    const handles = sseHandlesRef.current
     return () => {
       stopped = true
-      window.clearInterval(id)
+      window.clearInterval(reconcileId)
+      window.clearInterval(fallbackId)
+      for (const [, ctrl] of handles) ctrl.abort()
+      handles.clear()
     }
   }, [finish, update])
 
@@ -1398,6 +1584,18 @@ export default function Processes() {
     setEditingProcess(null)
   }
 
+  // D9: per-tool count badges so the user can see distribution at a glance.
+  const filterCounts = useMemo(() => {
+    const counts: Record<'all' | RunTool, number> = {
+      all: runs.length,
+      'text-to-video': 0,
+      'html-to-video': 0,
+      'image-to-video': 0,
+      'screenshots-to-video': 0,
+    }
+    for (const r of runs) counts[r.tool] += 1
+    return counts
+  }, [runs])
   const filters: Array<{ key: 'all' | RunTool; label: string }> = [
     { key: 'all', label: 'All' },
     { key: 'text-to-video', label: 'Text' },
@@ -1510,20 +1708,36 @@ export default function Processes() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5">
-          {filters.map((f) => (
-            <button
-              key={f.key}
-              type="button"
-              onClick={() => setFilter(f.key)}
-              className={
-                filter === f.key
-                  ? 'rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-200'
-                  : 'rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300'
-              }
-            >
-              {f.label}
-            </button>
-          ))}
+          {filters.map((f) => {
+            const count = filterCounts[f.key]
+            const active = filter === f.key
+            return (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => setFilter(f.key)}
+                className={
+                  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ' +
+                  (active
+                    ? 'border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-200'
+                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300')
+                }
+                aria-label={`${f.label} (${count})`}
+              >
+                <span>{f.label}</span>
+                <span
+                  className={
+                    'inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] font-semibold tabular-nums ' +
+                    (active
+                      ? 'bg-brand-500/15 text-brand-700 dark:bg-brand-400/20 dark:text-brand-100'
+                      : 'bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300')
+                  }
+                >
+                  {count}
+                </span>
+              </button>
+            )
+          })}
         </div>
         {runs.length > 0 && (
           <button

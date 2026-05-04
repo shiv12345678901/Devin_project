@@ -152,6 +152,15 @@ export const api = {
   getRun: (runId: string) =>
     getJson<BackendRunDetail>(`/runs/${encodeURIComponent(runId)}`),
 
+  /**
+   * Subscribe to a server-sent event stream for a run. Used by the
+   * Processes page to react to status changes immediately instead of
+   * polling /runs/<id>. The promise resolves when the run reaches a
+   * terminal state (or the consumer aborts via signal).
+   */
+  streamRunEvents: (runId: string, opts: Pick<SseStreamOptions, 'signal' | 'onEvent'>) =>
+    streamSseGet(`/runs/${encodeURIComponent(runId)}/events`, opts),
+
   getPendingClientQueue: () =>
     getJson<{ success: boolean; items: PendingClientQueueItem[] }>('/runs/pending-client-queue'),
 

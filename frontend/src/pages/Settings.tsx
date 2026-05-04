@@ -19,7 +19,13 @@ import {
 import { api } from '../api/client'
 import type { HistoryEntry } from '../api/types'
 import { useRuns } from '../store/runs'
-import { BRAND_SWATCHES, useSettings, type ThemeMode } from '../store/settings'
+import {
+  BRAND_SWATCHES,
+  DEFAULT_CLASS_OPTIONS,
+  DEFAULT_SUBJECT_OPTIONS,
+  useSettings,
+  type ThemeMode,
+} from '../store/settings'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
 import Toggle from '../components/Toggle'
@@ -213,6 +219,69 @@ export default function Settings() {
             <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
               Pre-selected on the Text → Video wizard. PowerPoint / MP4 require Windows.
             </p>
+          </div>
+        </div>
+        {/* C4: per-user curriculum overrides for class / subject pickers. */}
+        <div className="border-t border-slate-100 pt-5 dark:border-white/5">
+          <div className="mb-3">
+            <div className="text-sm font-medium text-slate-800 dark:text-slate-100">
+              Class &amp; subject options
+            </div>
+            <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              Override the defaults shown in the Text → Video wizard. One value per line. Leave empty to use the curated default list.
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label htmlFor="custom-classes" className="label">
+                Class options
+              </label>
+              <textarea
+                id="custom-classes"
+                className="textarea h-32 resize-y font-mono text-xs"
+                placeholder={DEFAULT_CLASS_OPTIONS.slice(0, 5).join('\n') + '\n…'}
+                value={settings.customClassOptions.join('\n')}
+                onChange={(e) =>
+                  update({
+                    customClassOptions: e.target.value
+                      .split('\n')
+                      .map((s) => s.trim())
+                      .filter((s) => s.length > 0),
+                  })
+                }
+                spellCheck={false}
+              />
+              {settings.customClassOptions.length === 0 && (
+                <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                  Using {DEFAULT_CLASS_OPTIONS.length} default values.
+                </p>
+              )}
+            </div>
+            <div>
+              <label htmlFor="custom-subjects" className="label">
+                Subject options
+              </label>
+              <textarea
+                id="custom-subjects"
+                className="textarea h-32 resize-y font-mono text-xs"
+                placeholder={DEFAULT_SUBJECT_OPTIONS.slice(0, 5).join('\n') + '\n…'}
+                value={settings.customSubjectOptions.join('\n')}
+                onChange={(e) =>
+                  update({
+                    customSubjectOptions: e.target.value
+                      .split('\n')
+                      .map((s) => s.trim())
+                      .filter((s) => s.length > 0),
+                  })
+                }
+                spellCheck={false}
+              />
+              {settings.customSubjectOptions.length === 0 && (
+                <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                  Using {DEFAULT_SUBJECT_OPTIONS.length} default values.
+                </p>
+              )}
+            </div>
           </div>
         </div>
         <div className="border-t border-slate-100 pt-5 dark:border-white/5">

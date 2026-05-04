@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Activity,
+  AlertTriangle,
   ArrowRight,
   ArrowUpRight,
   CheckCircle2,
@@ -15,7 +16,7 @@ import {
 import { RefreshCw } from 'lucide-react'
 import { api, invalidatePreflightCache } from '../api/client'
 import ErrorCard from '../components/ErrorCard'
-import { useRuns, formatRelative } from '../store/runs'
+import { useRuns, formatRelative, formatRuntime } from '../store/runs'
 import type { PreflightResponse } from '../api/types'
 
 const TOOL_META: Record<
@@ -95,6 +96,78 @@ export default function Home() {
     return { running, success, failed, total: runs.length }
   }, [runs])
 
+  // B2: rolling 24h window. We only feed *real* runs into avg runtime —
+  // running rows have no endedAt, cancelled / error rows are excluded so
+  // the average reflects how long a successful pass actually takes.
+  // `now` is refreshed every minute so the window slides as time passes
+  // without re-rendering on every event.
+  const [now, setNow] = useState<number>(() => Date.now())
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 60_000)
+    return () => window.clearInterval(id)
+  }, [])
+  const last24 = useMemo(() => {
+    const cutoff = now - 24 * 60 * 60 * 1000
+    const recent = runs.filter((r) => r.startedAt >= cutoff)
+    const finished = recent.filter(
+      (r) => r.status === 'success' || r.status === 'error' || r.status === 'cancelled',
+    )
+    const successCount = recent.filter((r) => r.status === 'success').length
+    const successRate = finished.length > 0 ? successCount / finished.length : null
+    const successWithRuntime = recent.filter(
+      (r) => r.status === 'success' && typeof r.endedAt === 'number' && r.endedAt > r.startedAt,
+    )
+    let avgRuntimeMs: number | null = null
+    if (successWithRuntime.length > 0) {
+      const total = successWithRuntime.reduce(
+        (acc, r) => acc + ((r.endedAt as number) - r.startedAt),
+        0,
+      )
+      avgRuntimeMs = total / successWithRuntime.length
+    }
+    return {
+      successRate,
+      avgRuntimeMs,
+      sampleSize: finished.length,
+      avgSampleSize: successWithRuntime.length,
+    }
+  }, [runs, now])
+
+  // B5: collapse the preflight checks into a single "All systems go" /
+  // "X check failed" summary so the user sees backend health near the
+  // top of the page.
+  const preflightSummary = useMemo(() => {
+    if (preflightErr) {
+      return {
+        ok: false,
+        label: 'Backend unreachable',
+        detail: 'Probe failed — open Settings to retry or change the URL.',
+      }
+    }
+    if (!preflight) return null
+    const checks = preflight.checks ?? {}
+    const failed = (Object.entries(checks) as [string, { ok: boolean; detail?: string }][])
+      .filter(([, c]) => c && c.ok === false)
+    if (failed.length === 0) {
+      return { ok: true, label: 'All systems go', detail: 'Every preflight check passed.' }
+    }
+    const labelMap: Record<string, string> = {
+      platform: 'Platform',
+      backend: 'Backend',
+      ai_config: 'AI config',
+      powerpoint: 'PowerPoint',
+      video_engine: 'Video engine',
+    }
+    const names = failed.map(([k]) => labelMap[k] ?? k)
+    const head = names[0]
+    const rest = names.length > 1 ? ` +${names.length - 1} more` : ''
+    return {
+      ok: false,
+      label: `${head} not detected${rest}`,
+      detail: failed[0]?.[1]?.detail || 'Open Settings to inspect details.',
+    }
+  }, [preflight, preflightErr])
+
   const recent = useMemo(() => runs.slice(0, 5), [runs])
 
   // Carousel: most-recent screenshots from successful runs. We surface up
@@ -149,6 +222,30 @@ export default function Home() {
               <ArrowUpRight size={14} />
             </Link>
           </div>
+          {preflightSummary && (
+            <Link
+              to="/settings"
+              title={preflightSummary.detail}
+              className={
+                'mt-5 inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-[12.5px] transition-colors ' +
+                (preflightSummary.ok
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200 dark:hover:bg-emerald-500/15'
+                  : 'border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200 dark:hover:bg-rose-500/15')
+              }
+            >
+              {preflightSummary.ok ? (
+                <CheckCircle2 size={13} />
+              ) : (
+                <AlertTriangle size={13} />
+              )}
+              <span className="truncate font-medium">{preflightSummary.label}</span>
+              <span className="hidden text-faint sm:inline">·</span>
+              <span className="hidden truncate opacity-80 sm:inline">
+                {preflightSummary.detail}
+              </span>
+              <ArrowUpRight size={11} className="opacity-70" />
+            </Link>
+          )}
         </div>
       </section>
 
@@ -199,11 +296,41 @@ export default function Home() {
           title="At a glance"
           hint="Live counts from the local Processes log."
         />
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
           <StatCard label="Running"   value={stats.running} tone="sky" />
           <StatCard label="Succeeded" value={stats.success} tone="emerald" />
           <StatCard label="Failed"    value={stats.failed}  tone="rose" />
           <StatCard label="Total runs" value={stats.total}   tone="slate" />
+          <StatCard
+            label="24h success"
+            value={
+              last24.successRate === null
+                ? '—'
+                : `${Math.round(last24.successRate * 100)}%`
+            }
+            tone="emerald"
+            hint={
+              last24.sampleSize === 0
+                ? 'No finished runs yet'
+                : last24.sampleSize === 1
+                ? '1 run in last 24h'
+                : `${last24.sampleSize} runs in last 24h`
+            }
+          />
+          <StatCard
+            label="Avg runtime"
+            value={
+              last24.avgRuntimeMs === null ? '—' : formatRuntime(last24.avgRuntimeMs)
+            }
+            tone="sky"
+            hint={
+              last24.avgSampleSize === 0
+                ? 'Successful runs only'
+                : last24.avgSampleSize === 1
+                ? 'From 1 success'
+                : `From ${last24.avgSampleSize} successes`
+            }
+          />
         </div>
       </section>
 
@@ -397,10 +524,12 @@ function StatCard({
   label,
   value,
   tone,
+  hint,
 }: {
   label: string
-  value: number
+  value: number | string
   tone: 'emerald' | 'sky' | 'rose' | 'slate'
+  hint?: string
 }) {
   // The number is the hero — large, tabular, deeply weighted. The tone dot
   // gives quick visual scanability without blasting color across the tile.
@@ -417,11 +546,16 @@ function StatCard({
         {label}
       </div>
       <div
-        className="mt-2 font-display text-[32px] font-semibold leading-none tracking-tight tabular text-[rgb(var(--text-strong))]"
+        className="mt-2 font-display text-[28px] font-semibold leading-none tracking-tight tabular text-[rgb(var(--text-strong))] md:text-[32px]"
         data-slot="number"
       >
         {value}
       </div>
+      {hint ? (
+        <div className="mt-1.5 truncate text-[11px] text-faint" title={hint}>
+          {hint}
+        </div>
+      ) : null}
     </div>
   )
 }
