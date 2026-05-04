@@ -383,10 +383,22 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
   const running = false
   const [text, setText] = useState('')
   const { settings: appSettings } = useSettings()
-  const [settings, setSettings] = useState<GenerateSettings>({
+  const [settings, setSettings] = useState<GenerateSettings>(() => ({
     ...DEFAULT_SETTINGS,
     output_format: sourceMode === 'html' ? 'video' : appSettings.defaultOutputFormat,
-  })
+    // When the global Auto-thumbnail-builder preference is on, default
+    // both per-run slots to enabled so the wizard mounts with the same
+    // intent the user expressed in Settings. They can still toggle each
+    // slot off independently before submitting.
+    intro_thumbnail_enabled:
+      appSettings.autoThumbnailBuilder
+        ? true
+        : DEFAULT_SETTINGS.intro_thumbnail_enabled,
+    outro_thumbnail_enabled:
+      appSettings.autoThumbnailBuilder
+        ? true
+        : DEFAULT_SETTINGS.outro_thumbnail_enabled,
+  }))
   const [lastRunSnapshot, setLastRunSnapshot] = useState<LastRunSnapshot | null>(() =>
     readLastRunSnapshot(sourceMode),
   )
@@ -730,25 +742,22 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     payload.title = (payload.title ?? '').trim() || undefined
     payload.concurrent_pipeline_runs = appSettings.concurrentPipelineRuns
     setAutoThumbnailError(null)
-    if (shouldAutoBuildThumbnail) {
-      // Auto-render the intro file *only* when the user is in auto-thumbnail
-      // mode and hasn't yet saved one. Once a saved file exists we trust the
-      // user's explicit "Update intro thumbnail" / "Update outro thumbnail"
-      // button clicks — auto-regenerating here would overwrite the slot they
-      // didn't touch. (This was the source of the cross-contamination
-      // between intro and outro.)
+    // Only auto-build the intro / outro slots when the user has the
+    // per-run toggle on. The global Auto-thumbnail-builder preference
+    // means "if the user wants a thumbnail, generate it for them" — it
+    // does NOT force-enable the slot. Letting the user toggle each slot
+    // off skips the corresponding auto-build step.
+    if (shouldAutoBuildThumbnail && payload.intro_thumbnail_enabled) {
       const existingIntroThumbnail = (payload.intro_thumbnail_filename ?? '').trim()
       if (!existingIntroThumbnail) {
         try {
           const pixelRatio = payload.auto_thumbnail_export_2x ? 2 : 1.5
           const file = await buildAutoThumbnailFile(payload, text, pixelRatio)
           const { filename } = await api.uploadThumbnail(file)
-          payload.intro_thumbnail_enabled = true
           payload.intro_thumbnail_filename = filename
           payload.auto_thumbnail_generated = true
           setSettings((prev) => ({
             ...prev,
-            intro_thumbnail_enabled: true,
             intro_thumbnail_filename: filename,
             auto_thumbnail_generated: true,
           }))
@@ -758,11 +767,9 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
           setStepId('thumbnail')
           return
         }
-      } else {
-        payload.intro_thumbnail_enabled = true
       }
     }
-    if (shouldAutoBuildThumbnail) {
+    if (shouldAutoBuildThumbnail && payload.outro_thumbnail_enabled) {
       try {
         const pixelRatio = payload.auto_thumbnail_export_2x ? 2 : 1.5
         const existingOutroThumbnail = (payload.outro_thumbnail_filename ?? '').trim()
@@ -776,17 +783,13 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
           }
           const file = await buildAutoThumbnailFile(outroPayload, text, pixelRatio)
           const { filename } = await api.uploadThumbnail(file)
-          payload.outro_thumbnail_enabled = true
           payload.outro_thumbnail_filename = filename
           payload.auto_thumbnail_outro_generated = true
           setSettings((prev) => ({
             ...prev,
-            outro_thumbnail_enabled: true,
             outro_thumbnail_filename: filename,
             auto_thumbnail_outro_generated: true,
           }))
-        } else {
-          payload.outro_thumbnail_enabled = true
         }
       } catch (err) {
         preflightProceedingRef.current = false
@@ -1986,7 +1989,7 @@ function ThumbnailStep({
           kind="intro"
           title="Intro thumbnail"
           position={autoThumbnailBuilder ? 'Auto-built from project info unless replaced' : 'Inserted on slide 2'}
-          enabled={autoThumbnailBuilder || (settings.intro_thumbnail_enabled ?? false)}
+          enabled={settings.intro_thumbnail_enabled ?? false}
           filename={settings.intro_thumbnail_filename ?? ''}
           generatedPreviewUrl={autoThumbnailPreviewUrl}
           durationSec={settings.intro_thumbnail_duration_sec}
@@ -2000,7 +2003,7 @@ function ThumbnailStep({
           kind="outro"
           title="Outro thumbnail"
           position={autoThumbnailBuilder ? 'Auto-built from the same detected project info' : 'Inserted on the 2nd-to-last slide'}
-          enabled={autoThumbnailBuilder || (settings.outro_thumbnail_enabled ?? false)}
+          enabled={settings.outro_thumbnail_enabled ?? false}
           filename={settings.outro_thumbnail_filename ?? ''}
           // Outro is an explicit-save slot — until the user clicks
           // "Use as outro thumbnail", we keep this tile empty rather than
