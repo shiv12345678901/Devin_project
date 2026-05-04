@@ -31,6 +31,7 @@ import {
 
 import PreflightModal from '../components/PreflightModal'
 import BackendRejectedBanner from '../components/BackendRejectedBanner'
+import Banner from '../components/Banner'
 import Toggle from '../components/Toggle'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import { useBackendCapabilities } from '../hooks/useBackendPlatform'
@@ -846,45 +847,46 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6">
+    <div className="container-form space-y-6">
       <div>
-        <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">
+        <div className="eyebrow">
+          <span className="h-1 w-1 rounded-full bg-brand-500" />
+          {sourceMode === 'html' ? 'Tool · HTML → Video' : 'Tool · Text → Video'}
+        </div>
+        <h1 className="h-page mt-2">
           {sourceMode === 'html' ? 'HTML to Video' : 'Text to Video'}
         </h1>
-        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+        <p className="mt-2 text-sm text-muted">
           Step through the wizard to configure the run. Nothing starts until you hit{' '}
           <span className="font-medium">Start Process</span> on the last step.
         </p>
       </div>
 
       {draftSnapshot && (
-        <div
-          role="status"
-          className="flex flex-wrap items-start gap-3 rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+        <Banner
+          tone="warning"
+          icon={<Sparkles size={16} />}
+          title="Unsaved draft from your last visit"
+          actions={
+            <>
+              <button type="button" className="btn-secondary btn-sm" onClick={restoreDraft}>
+                Resume draft
+              </button>
+              <button
+                type="button"
+                className="btn-ghost btn-sm !text-amber-900 hover:!bg-amber-100 dark:!text-amber-200"
+                onClick={dismissDraft}
+              >
+                Discard
+              </button>
+            </>
+          }
         >
-          <Sparkles size={16} className="mt-0.5 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <div className="font-medium">Unsaved draft from your last visit</div>
-            <div className="mt-0.5 text-[12.5px] opacity-90">
-              {draftSnapshot.text.trim().length > 0
-                ? `${draftSnapshot.text.length.toLocaleString()} characters of text plus settings.`
-                : 'Project info and settings preserved.'}
-              {' '}Resume where you left off, or discard.
-            </div>
-          </div>
-          <div className="flex shrink-0 gap-1.5">
-            <button type="button" className="btn-secondary btn-sm" onClick={restoreDraft}>
-              Resume draft
-            </button>
-            <button
-              type="button"
-              className="btn-ghost btn-sm !text-amber-800 hover:!bg-amber-100 dark:!text-amber-200"
-              onClick={dismissDraft}
-            >
-              Discard
-            </button>
-          </div>
-        </div>
+          {draftSnapshot.text.trim().length > 0
+            ? `${draftSnapshot.text.length.toLocaleString()} characters of text plus settings.`
+            : 'Project info and settings preserved.'}
+          {' '}Resume where you left off, or discard.
+        </Banner>
       )}
 
       <Tabs
@@ -996,8 +998,9 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
         )}
       </div>
 
-      {/* Back / Next + C14 Start-on-every-step */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* Back / Next + C14 Start-on-every-step — sticky bottom action bar
+          so the primary CTA is always reachable on long steps. */}
+      <div className="sticky-action-bar justify-between">
         <button
           type="button"
           className="btn-secondary"
@@ -1006,6 +1009,9 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
         >
           <ArrowLeft size={14} /> Back
         </button>
+        <div className="text-xs text-muted tabular" data-slot="number">
+          Step {Math.max(stepIndex + 1, 1)} of {visibleSteps.length}
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* C14: as soon as every visible step validates, expose Start
               Process here too — no need to tab all the way to Advanced. */}

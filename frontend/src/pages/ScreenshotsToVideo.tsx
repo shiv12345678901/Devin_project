@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import type React from 'react'
 
 import { api } from '../api/client'
+import Checkbox from '../components/Checkbox'
 import { useToast } from '../store/toast'
 import { useRuns } from '../store/runs'
 import type { GenerateSettings, OutputFormat } from '../api/types'
@@ -192,19 +193,20 @@ export default function ScreenshotsToVideo() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6">
+    <div className="container-form space-y-6">
       <div>
-        <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">
-          Screenshots → Video
-        </h1>
-        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-          Skip the AI step and the screenshot capture entirely. Upload PNG / JPG screenshots you
-          already have, fill in the project info, and run the same MP4 / PPTX export pipeline used
-          by Text → Video. Outputs use the canonical
-          <code className="mx-1 rounded bg-slate-100 px-1 dark:bg-white/10">
+        <div className="eyebrow">
+          <span className="h-1 w-1 rounded-full bg-brand-500" />
+          Tool · Screenshots → Video
+        </div>
+        <h1 className="h-page mt-2">Screenshots → Video</h1>
+        <p className="mt-2 text-sm text-muted">
+          Upload PNG / JPG screenshots you already have, fill in the project info, and run the
+          same MP4 / PPTX export pipeline used by Text → Video. Outputs use the canonical{' '}
+          <code className="mx-1 rounded bg-[rgb(var(--bg-muted))] px-1 text-[12px]">
             class_X_subject_chapter_Y_exercise_&lt;year&gt;
-          </code>
-          filename so the Process tab, Publish tab, and Library all line up.
+          </code>{' '}
+          filename so Process, Publish, and Library all line up.
         </p>
       </div>
 
@@ -489,35 +491,26 @@ export default function ScreenshotsToVideo() {
               disabled={Boolean(settings.auto_timing_screenshot_slides)}
             />
           </div>
-          <div className="flex flex-col justify-end gap-2 text-sm">
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={Boolean(settings.auto_timing_screenshot_slides)}
-                onChange={(e) => set('auto_timing_screenshot_slides', e.target.checked)}
-              />
-              Auto-pace slides for ≥500s total
-            </label>
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={Boolean(settings.close_powerpoint_before_start)}
-                onChange={(e) => set('close_powerpoint_before_start', e.target.checked)}
-              />
-              Close existing PowerPoint instances first
-            </label>
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={Boolean(settings.concurrent_pipeline_runs)}
-                onChange={(e) => set('concurrent_pipeline_runs', e.target.checked)}
-              />
-              Allow this run to overlap with other exports
-            </label>
+          <div className="flex flex-col justify-end gap-2.5 text-sm">
+            <Checkbox
+              checked={Boolean(settings.auto_timing_screenshot_slides)}
+              onChange={(v) => set('auto_timing_screenshot_slides', v)}
+              label="Auto-pace slides for ≥500s total"
+            />
+            <Checkbox
+              checked={Boolean(settings.close_powerpoint_before_start)}
+              onChange={(v) => set('close_powerpoint_before_start', v)}
+              label="Close existing PowerPoint instances first"
+            />
+            <Checkbox
+              checked={Boolean(settings.concurrent_pipeline_runs)}
+              onChange={(v) => set('concurrent_pipeline_runs', v)}
+              label="Allow this run to overlap with other exports"
+            />
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="sticky-action-bar">
           <button
             type="submit"
             className="btn-primary"
@@ -620,14 +613,11 @@ function ThumbnailSlot({
           <div className="text-sm font-medium text-slate-900 dark:text-slate-50">{title}</div>
           <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{position}</div>
         </div>
-        <label className="inline-flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => onEnabledChange(e.target.checked)}
-          />
-          Enabled
-        </label>
+        <Checkbox
+          checked={enabled}
+          onChange={onEnabledChange}
+          label="Enabled"
+        />
       </div>
 
       {enabled && (

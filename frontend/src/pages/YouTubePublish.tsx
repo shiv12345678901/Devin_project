@@ -451,9 +451,13 @@ function PublishIndex({
 
   return (
     <div className="container-page space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-slate-200 pb-5 dark:border-white/10">
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[rgb(var(--line))] pb-5">
         <div>
-          <h1 className="h-page">YouTube Publish</h1>
+          <div className="eyebrow">
+            <span className="h-1 w-1 rounded-full bg-brand-500" />
+            Publish
+          </div>
+          <h1 className="h-page mt-2">YouTube Publish</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted">
             Valid finished videos with thumbnails, grouped for fast YouTube upload prep.
           </p>
