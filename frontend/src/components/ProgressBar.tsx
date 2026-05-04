@@ -466,6 +466,17 @@ export default function ProgressBar({
   }, [active, clamped, stage])
   const shownProgress = Math.max(clamped, Math.min(displayProgress, clamped >= 100 ? 100 : progressCeiling(clamped, stage)))
 
+  // J5: surface the rounded progress to screen readers, but only step the
+  // announced bucket every 10% so JAWS/NVDA don't speak every tick. The
+  // visible percent stays smooth — this is a parallel low-resolution string
+  // for the live region only.
+  const announcedBucket = Math.min(100, Math.max(0, Math.round(shownProgress / 10) * 10))
+  const liveAnnouncement = active
+    ? clamped >= 100
+      ? 'Run complete.'
+      : `${announcedBucket} percent complete. ${prettyStage(stage)}.`
+    : ''
+
   const elapsedSinceUpdate = Math.max(0, (now - lastUpdate.at) / 1000)
   const quiet = active && !exportStage && clamped < 99 && elapsedSinceUpdate > stallAfterSec
   const elapsedTotalSec = Math.max(0, (now - mountedAt) / 1000)
@@ -486,11 +497,23 @@ export default function ProgressBar({
 
   return (
     <div className="card">
+      <div
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(shownProgress)}
+        aria-valuetext={liveAnnouncement || `${Math.round(shownProgress)} percent`}
+        className="sr-only"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {liveAnnouncement}
+      </div>
       <div className="mb-2 flex items-baseline justify-between gap-3">
         <div className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900 dark:text-slate-100">
           {prettyStage(stage)}
         </div>
-        <div className="shrink-0 text-sm tabular-nums text-slate-500">
+        <div className="shrink-0 text-sm tabular-nums text-slate-500" aria-hidden="true">
           {Math.round(shownProgress)}%
         </div>
       </div>

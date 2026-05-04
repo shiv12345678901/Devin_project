@@ -5,6 +5,11 @@ import { ToastContext, type Toast, type ToastContextValue } from './toast'
 
 const DEFAULT_DURATION = 4000
 
+// H6: collapse identical toasts that fire in rapid succession (e.g. a bulk
+// delete that errors on every file). If the same (variant + title + message)
+// appears within this window we drop the new push and return the live id.
+const DEDUPE_WINDOW_MS = 2_000
+
 const ICONS: Record<Toast['variant'], typeof Info> = {
   success: CheckCircle2,
   info: Info,
@@ -22,6 +27,7 @@ const COLORS: Record<Toast['variant'], string> = {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const recent = useRef(new Map<string, { id: string; at: number }>())
 
   const dismiss = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
@@ -30,11 +36,22 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       clearTimeout(timer)
       timers.current.delete(id)
     }
+    for (const [key, entry] of recent.current) {
+      if (entry.id === id) recent.current.delete(key)
+    }
   }, [])
 
   const push = useCallback<ToastContextValue['push']>(
     (toast) => {
-      const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      const now = Date.now()
+      const sig = `${toast.variant}|${toast.title ?? ''}|${toast.message}`
+      const prior = recent.current.get(sig)
+      if (prior && now - prior.at < DEDUPE_WINDOW_MS) {
+        // Refresh timestamp so a steady stream of dupes keeps suppressing.
+        recent.current.set(sig, { id: prior.id, at: now })
+        return prior.id
+      }
+      const id = `${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`
       const next: Toast = { id, ...toast }
       setToasts((prev) => [...prev, next])
       const duration = toast.durationMs ?? DEFAULT_DURATION
@@ -42,6 +59,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         const timer = setTimeout(() => dismiss(id), duration)
         timers.current.set(id, timer)
       }
+      recent.current.set(sig, { id, at: now })
       return id
     },
     [dismiss],
@@ -50,6 +68,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const clear = useCallback(() => {
     timers.current.forEach((t) => clearTimeout(t))
     timers.current.clear()
+    recent.current.clear()
     setToasts([])
   }, [])
 

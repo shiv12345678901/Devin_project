@@ -854,11 +854,20 @@ def generate_sse():
 
 @generate_bp.route('/cancel/<operation_id>', methods=['POST'])
 def cancel(operation_id):
-    """Cancel an in-progress generation."""
+    """Cancel an in-progress generation.
+
+    If the operation already finished (the typical race when the user
+    clicks Cancel right as the run completes), return success rather than
+    a 404 so the frontend doesn't surface a misleading error toast.
+    """
     success = cancel_operation(operation_id)
     if success:
         return jsonify({'success': True, 'message': 'Cancellation requested'})
-    return jsonify({'error': 'Operation not found or already completed'}), 404
+    return jsonify({
+        'success': True,
+        'message': 'Operation already finished — nothing to cancel.',
+        'already_terminal': True,
+    })
 
 
 @generate_bp.route('/preview', methods=['POST'])

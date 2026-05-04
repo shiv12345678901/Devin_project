@@ -85,7 +85,24 @@ export default function Settings() {
             to this browser.
           </p>
         </div>
-        <button type="button" className="btn-ghost" onClick={reset}>
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={async () => {
+            // G3: one-click reset wiped every preference (theme, brand color,
+            // backend URL, custom curriculum, …). Wrap with a confirm.
+            const ok = await confirm({
+              title: 'Reset all settings?',
+              message:
+                'This clears every preference saved in this browser — theme, brand color, backend URL, custom class/subject lists, and wizard defaults. It cannot be undone.',
+              confirmLabel: 'Reset',
+              variant: 'danger',
+            })
+            if (!ok) return
+            reset()
+            toast.push({ variant: 'success', message: 'Settings reset to defaults.' })
+          }}
+        >
           <RotateCcw size={14} /> Reset to defaults
         </button>
       </div>
