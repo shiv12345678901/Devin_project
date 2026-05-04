@@ -373,22 +373,14 @@ function RunRow({
             {run.inputPreview || '(no input)'}
           </p>
           {run.status === 'running' && (
-            <div className="mt-2 flex items-center gap-2">
-              <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-white/[0.08]">
-                <div
-                  className="h-full rounded-full bg-brand-500 transition-[width] duration-500"
-                  style={{ width: `${Math.max(progress, 3)}%` }}
-                />
-              </div>
-              <span className="shrink-0 text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
+            <div className="mt-2 flex items-center gap-2 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+              <span className="min-w-0 flex-1 truncate">
+                {stageStatusLabel(run.stage)}
+                {run.message ? ` - ${run.message}` : ''}
+              </span>
+              <span className="shrink-0 tabular-nums">
                 {Math.round(progress)}%
               </span>
-            </div>
-          )}
-          {run.status === 'running' && (
-            <div className="mt-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              {stageStatusLabel(run.stage)}
-              {run.message ? ` - ${run.message}` : ''}
             </div>
           )}
           <StageStrip
@@ -777,8 +769,13 @@ function LiveRunCard({
   const hasLiveState = liveState.status === 'running'
   const source = trackedRun ?? (hasLiveState ? liveState : undefined)
   if (!source) return null
-  const isLiveSelection =
-    hasLiveState && (!trackedRun || trackedRun.operationId === liveState.operationId)
+  // The cancel button used to be gated on the SSE `liveState` matching the
+  // tracked run's operationId. That hid the button whenever the user opened
+  // the page after a run had already started (because liveState only fires
+  // when the SSE channel attaches). The cancel handler itself already falls
+  // back to the REST `cancelRun` endpoint when liveState doesn't match, so
+  // we can show the button whenever there is an active run to cancel.
+  const isRunning = (trackedRun?.status ?? liveState.status) === 'running'
   const operationId = trackedRun?.operationId ?? liveState.operationId
   const progress = trackedRun?.progress ?? liveState.progress ?? 0
   const stage = trackedRun?.stage ?? liveState.stage
@@ -788,7 +785,11 @@ function LiveRunCard({
     trackedRun && typeof trackedRun.etaSeconds === 'number' && trackedRun.etaSeconds > 0
       ? Math.max(0, trackedRun.etaSeconds - ((trackedRun.endedAt ?? now) - trackedRun.startedAt) / 1000)
       : undefined
-  const etaSeconds = trackedRemainingSeconds ?? (isLiveSelection ? liveState.etaSeconds : undefined)
+  // Only use the SSE `liveState.etaSeconds` if it actually corresponds to
+  // the run we're displaying. Otherwise its ETA is for a different run.
+  const liveMatchesTracked =
+    hasLiveState && (!trackedRun || trackedRun.operationId === liveState.operationId)
+  const etaSeconds = trackedRemainingSeconds ?? (liveMatchesTracked ? liveState.etaSeconds : undefined)
 
   return (
     <div className="card ring-2 ring-brand-400/40 dark:ring-brand-500/40">
@@ -810,7 +811,7 @@ function LiveRunCard({
             </code>
           )}
         </div>
-        {isLiveSelection && (
+        {isRunning && (
           <button type="button" className="btn-danger" onClick={onCancel}>
             <StopCircle size={14} /> Cancel run
           </button>

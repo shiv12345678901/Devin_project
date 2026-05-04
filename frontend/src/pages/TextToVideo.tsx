@@ -5,11 +5,8 @@ import {
   ArrowRight,
   Check,
   FileText,
-  Image as ImageIcon,
   Play,
-  Presentation,
   StopCircle,
-  Video,
   AlertCircle,
   AlertTriangle,
   Upload,
@@ -259,11 +256,11 @@ const STEP_DEFS: StepDef[] = [
   { id: 'advanced', label: 'Advanced & start', shortLabel: 'Advanced' },
 ]
 
-const OUTPUT_OPTIONS: { value: OutputFormat; label: string; desc: string; icon: typeof FileText }[] = [
-  { value: 'html', label: 'HTML file', desc: 'Raw AI-generated HTML only', icon: FileText },
-  { value: 'images', label: 'Screenshots', desc: 'HTML rendered to PNG images (default)', icon: ImageIcon },
-  { value: 'pptx', label: 'PowerPoint', desc: 'Images packed into a .pptx (Windows only)', icon: Presentation },
-  { value: 'video', label: 'MP4 video', desc: 'Rendered to MP4 via PowerPoint (Windows) or MoviePy (Linux/macOS).', icon: Video },
+const OUTPUT_OPTIONS: { value: OutputFormat; label: string; desc: string }[] = [
+  { value: 'html', label: 'HTML file', desc: 'Raw AI-generated HTML only' },
+  { value: 'images', label: 'Screenshots', desc: 'HTML rendered to PNG images (default)' },
+  { value: 'pptx', label: 'PowerPoint', desc: 'Images packed into a .pptx (Windows only)' },
+  { value: 'video', label: 'MP4 video', desc: 'Rendered to MP4 via PowerPoint (Windows) or MoviePy (Linux/macOS).' },
 ]
 
 // ─── Validation ────────────────────────────────────────────────────────────
@@ -286,10 +283,11 @@ function validateStep(
   }
   switch (id) {
     case 'project': {
-      if (!(settings.class_name ?? '').trim()) errs.class_name = 'Required'
-      if (!(settings.subject ?? '').trim()) errs.subject = 'Required'
-      if (!(settings.title ?? '').trim()) errs.title = 'Required'
-      if (!settings.output_format) errs.output_format = 'Pick an output format'
+      if (!(settings.class_name ?? '').trim()) errs.class_name = 'Pick a class.'
+      if (!(settings.subject ?? '').trim()) errs.subject = 'Pick a subject.'
+      if (!(settings.title ?? '').trim())
+        errs.title = 'Enter a chapter title — this is used in the video and thumbnail.'
+      if (!settings.output_format) errs.output_format = 'Pick an output format.'
       return errs
     }
     case 'content': {
@@ -1332,7 +1330,6 @@ function OutputFormatPicker({
       <div className="label">Output format</div>
       <div className="grid gap-2 sm:grid-cols-2">
         {OUTPUT_OPTIONS.filter((o) => sourceMode === 'text' || o.value !== 'html').map((o) => {
-          const Icon = o.icon
           const active = value === o.value
           // Gate engine-dependent outputs on the new preflight
           // ``video_engine`` capability so the MoviePy branch unlocks
@@ -1375,10 +1372,6 @@ function OutputFormatPicker({
               >
                 <OutputFormatThumb format={o.value} active={active} />
               </div>
-              <Icon
-                size={18}
-                className={active ? 'mt-0.5 text-brand-600' : 'mt-0.5 text-slate-400'}
-              />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
