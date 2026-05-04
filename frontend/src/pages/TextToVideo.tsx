@@ -31,6 +31,7 @@ import {
 
 import PreflightModal from '../components/PreflightModal'
 import BackendRejectedBanner from '../components/BackendRejectedBanner'
+import Banner from '../components/Banner'
 import Toggle from '../components/Toggle'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import { useBackendCapabilities } from '../hooks/useBackendPlatform'
@@ -382,10 +383,22 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
   const running = false
   const [text, setText] = useState('')
   const { settings: appSettings } = useSettings()
-  const [settings, setSettings] = useState<GenerateSettings>({
+  const [settings, setSettings] = useState<GenerateSettings>(() => ({
     ...DEFAULT_SETTINGS,
     output_format: sourceMode === 'html' ? 'video' : appSettings.defaultOutputFormat,
-  })
+    // When the global Auto-thumbnail-builder preference is on, default
+    // both per-run slots to enabled so the wizard mounts with the same
+    // intent the user expressed in Settings. They can still toggle each
+    // slot off independently before submitting.
+    intro_thumbnail_enabled:
+      appSettings.autoThumbnailBuilder
+        ? true
+        : DEFAULT_SETTINGS.intro_thumbnail_enabled,
+    outro_thumbnail_enabled:
+      appSettings.autoThumbnailBuilder
+        ? true
+        : DEFAULT_SETTINGS.outro_thumbnail_enabled,
+  }))
   const [lastRunSnapshot, setLastRunSnapshot] = useState<LastRunSnapshot | null>(() =>
     readLastRunSnapshot(sourceMode),
   )
@@ -729,25 +742,22 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     payload.title = (payload.title ?? '').trim() || undefined
     payload.concurrent_pipeline_runs = appSettings.concurrentPipelineRuns
     setAutoThumbnailError(null)
-    if (shouldAutoBuildThumbnail) {
-      // Auto-render the intro file *only* when the user is in auto-thumbnail
-      // mode and hasn't yet saved one. Once a saved file exists we trust the
-      // user's explicit "Update intro thumbnail" / "Update outro thumbnail"
-      // button clicks — auto-regenerating here would overwrite the slot they
-      // didn't touch. (This was the source of the cross-contamination
-      // between intro and outro.)
+    // Only auto-build the intro / outro slots when the user has the
+    // per-run toggle on. The global Auto-thumbnail-builder preference
+    // means "if the user wants a thumbnail, generate it for them" — it
+    // does NOT force-enable the slot. Letting the user toggle each slot
+    // off skips the corresponding auto-build step.
+    if (shouldAutoBuildThumbnail && payload.intro_thumbnail_enabled) {
       const existingIntroThumbnail = (payload.intro_thumbnail_filename ?? '').trim()
       if (!existingIntroThumbnail) {
         try {
           const pixelRatio = payload.auto_thumbnail_export_2x ? 2 : 1.5
           const file = await buildAutoThumbnailFile(payload, text, pixelRatio)
           const { filename } = await api.uploadThumbnail(file)
-          payload.intro_thumbnail_enabled = true
           payload.intro_thumbnail_filename = filename
           payload.auto_thumbnail_generated = true
           setSettings((prev) => ({
             ...prev,
-            intro_thumbnail_enabled: true,
             intro_thumbnail_filename: filename,
             auto_thumbnail_generated: true,
           }))
@@ -757,11 +767,9 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
           setStepId('thumbnail')
           return
         }
-      } else {
-        payload.intro_thumbnail_enabled = true
       }
     }
-    if (shouldAutoBuildThumbnail) {
+    if (shouldAutoBuildThumbnail && payload.outro_thumbnail_enabled) {
       try {
         const pixelRatio = payload.auto_thumbnail_export_2x ? 2 : 1.5
         const existingOutroThumbnail = (payload.outro_thumbnail_filename ?? '').trim()
@@ -775,17 +783,13 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
           }
           const file = await buildAutoThumbnailFile(outroPayload, text, pixelRatio)
           const { filename } = await api.uploadThumbnail(file)
-          payload.outro_thumbnail_enabled = true
           payload.outro_thumbnail_filename = filename
           payload.auto_thumbnail_outro_generated = true
           setSettings((prev) => ({
             ...prev,
-            outro_thumbnail_enabled: true,
             outro_thumbnail_filename: filename,
             auto_thumbnail_outro_generated: true,
           }))
-        } else {
-          payload.outro_thumbnail_enabled = true
         }
       } catch (err) {
         preflightProceedingRef.current = false
@@ -846,45 +850,46 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6">
+    <div className="container-form space-y-6">
       <div>
-        <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">
+        <div className="eyebrow">
+          <span className="h-1 w-1 rounded-full bg-brand-500" />
+          {sourceMode === 'html' ? 'Tool · HTML → Video' : 'Tool · Text → Video'}
+        </div>
+        <h1 className="h-page mt-2">
           {sourceMode === 'html' ? 'HTML to Video' : 'Text to Video'}
         </h1>
-        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+        <p className="mt-2 text-sm text-muted">
           Step through the wizard to configure the run. Nothing starts until you hit{' '}
           <span className="font-medium">Start Process</span> on the last step.
         </p>
       </div>
 
       {draftSnapshot && (
-        <div
-          role="status"
-          className="flex flex-wrap items-start gap-3 rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+        <Banner
+          tone="warning"
+          icon={<Sparkles size={16} />}
+          title="Unsaved draft from your last visit"
+          actions={
+            <>
+              <button type="button" className="btn-secondary btn-sm" onClick={restoreDraft}>
+                Resume draft
+              </button>
+              <button
+                type="button"
+                className="btn-ghost btn-sm !text-amber-900 hover:!bg-amber-100 dark:!text-amber-200"
+                onClick={dismissDraft}
+              >
+                Discard
+              </button>
+            </>
+          }
         >
-          <Sparkles size={16} className="mt-0.5 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <div className="font-medium">Unsaved draft from your last visit</div>
-            <div className="mt-0.5 text-[12.5px] opacity-90">
-              {draftSnapshot.text.trim().length > 0
-                ? `${draftSnapshot.text.length.toLocaleString()} characters of text plus settings.`
-                : 'Project info and settings preserved.'}
-              {' '}Resume where you left off, or discard.
-            </div>
-          </div>
-          <div className="flex shrink-0 gap-1.5">
-            <button type="button" className="btn-secondary btn-sm" onClick={restoreDraft}>
-              Resume draft
-            </button>
-            <button
-              type="button"
-              className="btn-ghost btn-sm !text-amber-800 hover:!bg-amber-100 dark:!text-amber-200"
-              onClick={dismissDraft}
-            >
-              Discard
-            </button>
-          </div>
-        </div>
+          {draftSnapshot.text.trim().length > 0
+            ? `${draftSnapshot.text.length.toLocaleString()} characters of text plus settings.`
+            : 'Project info and settings preserved.'}
+          {' '}Resume where you left off, or discard.
+        </Banner>
       )}
 
       <Tabs
@@ -996,8 +1001,9 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
         )}
       </div>
 
-      {/* Back / Next + C14 Start-on-every-step */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* Back / Next + C14 Start-on-every-step — sticky bottom action bar
+          so the primary CTA is always reachable on long steps. */}
+      <div className="sticky-action-bar justify-between">
         <button
           type="button"
           className="btn-secondary"
@@ -1006,6 +1012,9 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
         >
           <ArrowLeft size={14} /> Back
         </button>
+        <div className="text-xs text-muted tabular" data-slot="number">
+          Step {Math.max(stepIndex + 1, 1)} of {visibleSteps.length}
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* C14: as soon as every visible step validates, expose Start
               Process here too — no need to tab all the way to Advanced. */}
@@ -1980,7 +1989,7 @@ function ThumbnailStep({
           kind="intro"
           title="Intro thumbnail"
           position={autoThumbnailBuilder ? 'Auto-built from project info unless replaced' : 'Inserted on slide 2'}
-          enabled={autoThumbnailBuilder || (settings.intro_thumbnail_enabled ?? false)}
+          enabled={settings.intro_thumbnail_enabled ?? false}
           filename={settings.intro_thumbnail_filename ?? ''}
           generatedPreviewUrl={autoThumbnailPreviewUrl}
           durationSec={settings.intro_thumbnail_duration_sec}
@@ -1994,7 +2003,7 @@ function ThumbnailStep({
           kind="outro"
           title="Outro thumbnail"
           position={autoThumbnailBuilder ? 'Auto-built from the same detected project info' : 'Inserted on the 2nd-to-last slide'}
-          enabled={autoThumbnailBuilder || (settings.outro_thumbnail_enabled ?? false)}
+          enabled={settings.outro_thumbnail_enabled ?? false}
           filename={settings.outro_thumbnail_filename ?? ''}
           // Outro is an explicit-save slot — until the user clicks
           // "Use as outro thumbnail", we keep this tile empty rather than

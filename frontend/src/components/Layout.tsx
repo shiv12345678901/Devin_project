@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Activity,
-  AlertTriangle,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
@@ -23,6 +22,7 @@ import { useRuns } from '../store/runs'
 import { useGenerationQueue } from '../hooks/useTrackedGenerate'
 import { readSelectedProcessId, SELECTED_PROCESS_EVENT } from '../lib/selectedProcess'
 import { useSettings } from '../store/settings'
+import Banner from './Banner'
 
 type NavItem = {
   to: string
@@ -214,33 +214,32 @@ function BackendOfflineBanner() {
   }
 
   return (
-    <div
-      role="alert"
-      className="sticky top-14 z-20 flex flex-wrap items-center gap-2 border-b border-rose-200/70 bg-rose-50 px-4 py-2 text-xs text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200 md:px-10"
-    >
-      <AlertTriangle size={14} className="shrink-0" />
-      <span className="min-w-0 flex-1">
-        <span className="font-medium">Backend unreachable.</span>{' '}
-        <span className="opacity-90">
-          Generations and live progress are paused — check that the Flask
-          server is running.
-        </span>
-      </span>
-      <button
-        type="button"
-        className="btn-ghost btn-sm shrink-0 !text-rose-800 hover:!bg-rose-100 dark:!text-rose-100 dark:hover:!bg-rose-500/10"
-        onClick={retry}
-        disabled={retrying}
+    <div className="px-4 pt-3 md:px-10">
+      <Banner
+        tone="danger"
+        title="Backend unreachable"
+        actions={
+          <>
+            <button
+              type="button"
+              className="btn-ghost btn-sm shrink-0 !text-rose-900 hover:!bg-rose-100 dark:!text-rose-100 dark:hover:!bg-rose-500/10"
+              onClick={retry}
+              disabled={retrying}
+            >
+              <RefreshCw size={12} className={retrying ? 'animate-spin' : ''} />
+              {retrying ? 'Retrying…' : 'Retry'}
+            </button>
+            <NavLink
+              to="/settings"
+              className="btn-ghost btn-sm shrink-0 !text-rose-900 hover:!bg-rose-100 dark:!text-rose-100 dark:hover:!bg-rose-500/10"
+            >
+              Open settings
+            </NavLink>
+          </>
+        }
       >
-        <RefreshCw size={12} className={retrying ? 'animate-spin' : ''} />
-        {retrying ? 'Retrying…' : 'Retry'}
-      </button>
-      <NavLink
-        to="/settings"
-        className="btn-ghost btn-sm shrink-0 !text-rose-800 hover:!bg-rose-100 dark:!text-rose-100 dark:hover:!bg-rose-500/10"
-      >
-        Open settings
-      </NavLink>
+        Generations and live progress are paused — check that the Flask server is running.
+      </Banner>
     </div>
   )
 }
@@ -583,28 +582,33 @@ function Topbar({ onOpenMenu }: { onOpenMenu: () => void }) {
       </button>
 
       <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 truncate text-[13px]">
-        {crumbs.map((c, i) => {
-          const last = i === crumbs.length - 1
-          return (
-            <span key={c.to} className="flex items-center gap-1.5 truncate">
-              {i > 0 && (
-                <ChevronRight size={13} className="shrink-0 text-faint" />
-              )}
-              {last ? (
-                <span className="truncate font-medium text-[rgb(var(--text-strong))]">
-                  {c.label}
-                </span>
-              ) : (
-                <NavLink
-                  to={c.to}
-                  className="truncate text-muted transition-colors hover:text-[rgb(var(--text-strong))]"
-                >
-                  {c.label}
-                </NavLink>
-              )}
-            </span>
-          )
-        })}
+        {/* Hide breadcrumb on the home route — the active sidebar item already
+            indicates "Home"; double-labelling is visual noise. The empty
+            container preserves the topbar height so layouts don't jump
+            between pages. */}
+        {path !== '/' &&
+          crumbs.map((c, i) => {
+            const last = i === crumbs.length - 1
+            return (
+              <span key={c.to} className="flex items-center gap-1.5 truncate">
+                {i > 0 && (
+                  <ChevronRight size={13} className="shrink-0 text-faint" />
+                )}
+                {last ? (
+                  <span className="truncate font-medium text-[rgb(var(--text-strong))]">
+                    {c.label}
+                  </span>
+                ) : (
+                  <NavLink
+                    to={c.to}
+                    className="truncate text-muted transition-colors hover:text-[rgb(var(--text-strong))]"
+                  >
+                    {c.label}
+                  </NavLink>
+                )}
+              </span>
+            )
+          })}
       </nav>
 
       <div className="ml-auto flex items-center gap-2">

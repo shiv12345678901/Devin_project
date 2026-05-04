@@ -17,6 +17,7 @@ import {
 
 import { api } from '../api/client'
 import AssetPreviewModal from '../components/AssetPreviewModal'
+import Checkbox from '../components/Checkbox'
 import ErrorCard from '../components/ErrorCard'
 import EmptyState from '../components/EmptyState'
 import { useToast } from '../store/toast'
@@ -288,13 +289,15 @@ export default function Library() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6">
+    <div className="container-page space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
-            Library
-          </h1>
-          <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+          <div className="eyebrow">
+            <span className="h-1 w-1 rounded-full bg-brand-500" />
+            Outputs
+          </div>
+          <h1 className="h-page mt-2">Library</h1>
+          <p className="mt-2 text-sm text-muted">
             Every screenshot, HTML file, PowerPoint deck, and video produced
             by the backend. Preview, download, or clean up.
           </p>
@@ -347,15 +350,11 @@ export default function Library() {
         </select>
 
         <div className="ml-auto flex items-center gap-2">
-          <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-            <input
-              type="checkbox"
-              checked={allSelected}
-              onChange={toggleAll}
-              className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-300"
-            />
-            Select all ({filtered.length})
-          </label>
+          <Checkbox
+            checked={allSelected}
+            onChange={() => toggleAll()}
+            label={<span className="text-xs text-muted">Select all ({filtered.length})</span>}
+          />
           {kind === 'screenshot' && (
             <button
               type="button"
@@ -557,15 +556,14 @@ function ScreenshotCard({
           : 'border-slate-200 dark:border-white/10')
       }
     >
-      <label className="absolute left-2 top-2 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded-md bg-white/90 shadow-sm backdrop-blur-sm dark:bg-slate-900/80">
-        <input
-          type="checkbox"
+      <span className="absolute left-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-md bg-white/90 shadow-sm backdrop-blur-sm dark:bg-slate-900/80">
+        <Checkbox
           checked={selected}
-          onChange={onToggle}
-          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-300"
-          aria-label={`Select ${name}`}
+          onChange={() => onToggle()}
+          hideLabel
+          ariaLabel={`Select ${name}`}
         />
-      </label>
+      </span>
       <button
         type="button"
         onClick={onPreview}
@@ -620,12 +618,11 @@ function HtmlRow({
 }) {
   return (
     <div className="flex items-center gap-3 py-3">
-      <input
-        type="checkbox"
+      <Checkbox
         checked={selected}
-        onChange={onToggle}
-        className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-300"
-        aria-label={`Select ${name}`}
+        onChange={() => onToggle()}
+        hideLabel
+        ariaLabel={`Select ${name}`}
       />
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-white/[0.05] dark:text-slate-300">
         <FileText size={16} />
@@ -749,12 +746,11 @@ function GeneratedFileRow({
   const Icon = kind === 'presentation' ? Presentation : Film
   return (
     <div className="flex items-center gap-3 py-3">
-      <input
-        type="checkbox"
+      <Checkbox
         checked={selected}
-        onChange={onToggle}
-        className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-300"
-        aria-label={`Select ${name}`}
+        onChange={() => onToggle()}
+        hideLabel
+        ariaLabel={`Select ${name}`}
       />
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-white/[0.05] dark:text-slate-300">
         <Icon size={16} />

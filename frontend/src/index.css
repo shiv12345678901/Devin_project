@@ -275,9 +275,25 @@
 }
 
 @layer utilities {
-  /* Centered max-width container used by every page. */
+  /* Centered max-width container used by list / dashboard pages. */
   .container-page {
     @apply mx-auto w-full max-w-6xl;
+  }
+
+  /* Narrower container for single-task / form-driven pages
+     (wizards, settings, single-form tools). */
+  .container-form {
+    @apply mx-auto w-full max-w-5xl;
+  }
+
+  /* Sticky action bar used at the bottom of long forms / wizards.
+     Sits flush with the viewport bottom, gets a hairline top border
+     and a soft surface tint so it reads above the form content. */
+  .sticky-action-bar {
+    @apply sticky bottom-0 z-10 -mx-4 mt-4 flex flex-wrap items-center gap-3
+           border-t px-4 py-3 backdrop-blur md:-mx-10 md:px-10;
+    border-color: rgb(var(--line));
+    background-color: rgb(var(--bg-app) / 0.85);
   }
 
   /* Subtle entrance animation for the main column. */

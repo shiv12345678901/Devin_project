@@ -28,6 +28,7 @@ import {
 } from '../store/settings'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
+import SegmentedControl from '../components/SegmentedControl'
 import Toggle from '../components/Toggle'
 import {
   DEFAULT_YOUTUBE_TEMPLATE,
@@ -80,13 +81,15 @@ export default function Settings() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-8">
+    <div className="container-form space-y-8">
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
-            Settings
-          </h1>
-          <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+          <div className="eyebrow">
+            <span className="h-1 w-1 rounded-full bg-brand-500" />
+            Preferences
+          </div>
+          <h1 className="h-page mt-2">Settings</h1>
+          <p className="mt-2 text-sm text-muted">
             Appearance, defaults, and backend connection. All changes persist
             to this browser.
           </p>
@@ -118,34 +121,17 @@ export default function Settings() {
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           <div>
             <div className="label">Theme</div>
-            <div className="flex gap-2">
-              {(
-                [
-                  { id: 'light', label: 'Light', icon: Sun },
-                  { id: 'dark', label: 'Dark', icon: Moon },
-                  { id: 'system', label: 'System', icon: Monitor },
-                ] as const
-              ).map((t) => {
-                const active = settings.theme === t.id
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => update({ theme: t.id as ThemeMode })}
-                    className={
-                      'flex flex-1 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ' +
-                      (active
-                        ? 'border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-500/10 dark:text-brand-200'
-                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300 dark:hover:bg-white/[0.06]')
-                    }
-                  >
-                    <t.icon size={14} />
-                    {t.label}
-                  </button>
-                )
-              })}
-            </div>
-            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            <SegmentedControl<ThemeMode>
+              ariaLabel="Theme"
+              value={settings.theme}
+              onChange={(theme) => update({ theme })}
+              options={[
+                { value: 'light', label: 'Light', icon: <Sun size={14} /> },
+                { value: 'dark', label: 'Dark', icon: <Moon size={14} /> },
+                { value: 'system', label: 'System', icon: <Monitor size={14} /> },
+              ]}
+            />
+            <p className="mt-2 text-xs text-muted">
               "System" follows your OS. Changes apply instantly across every page.
             </p>
           </div>

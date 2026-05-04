@@ -33,6 +33,7 @@ import type { Run, RunStatus, RunTool } from '../store/runs'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
 import AssetPreviewModal from '../components/AssetPreviewModal'
+import Banner from '../components/Banner'
 import EmptyState from '../components/EmptyState'
 import ProgressBar from '../components/ProgressBar'
 import { useGenerationQueue } from '../hooks/useTrackedGenerate'
@@ -1650,11 +1651,15 @@ export default function Processes() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6">
+    <div className="container-page space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">Processes</h1>
-          <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+          <div className="eyebrow">
+            <span className="h-1 w-1 rounded-full bg-brand-500" />
+            Activity
+          </div>
+          <h1 className="h-page mt-2">Processes</h1>
+          <p className="mt-2 text-sm text-muted">
             Every generation run, its input, how long it took, and the files it produced — all
             in one place.
           </p>
@@ -1759,58 +1764,53 @@ export default function Processes() {
       {err && <div className="card text-sm text-red-600 dark:text-red-300">{err}</div>}
 
       {(queueModeNotice || queue.length > 0) && (
-        <div className="flex items-start gap-3 rounded-md border border-sky-300/60 bg-sky-50 px-3 py-2 text-sm text-sky-800 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200">
-          <Activity size={16} className="mt-0.5 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <p className="font-medium">
-              {appSettings.concurrentPipelineRuns ? 'Concurrent queue mode' : 'Serial queue mode'}
-            </p>
-            <p className="mt-0.5 text-xs opacity-90">
-              {queueModeNotice ??
-                (appSettings.concurrentPipelineRuns
-                  ? 'Pending Text -> Video jobs can start in parallel; screenshot and PowerPoint stages still wait for their slots.'
-                  : 'Pending jobs will run one at a time in the visible queue order.')}
-            </p>
-          </div>
-          {queueModeNotice && (
-            <button
-              type="button"
-              className="btn-ghost btn-sm shrink-0 self-center"
-              onClick={dismissQueueModeNotice}
-            >
-              <X size={12} /> Dismiss
-            </button>
-          )}
-        </div>
+        <Banner
+          tone="info"
+          icon={<Activity size={16} />}
+          title={appSettings.concurrentPipelineRuns ? 'Concurrent queue mode' : 'Serial queue mode'}
+          actions={
+            queueModeNotice && (
+              <button
+                type="button"
+                className="btn-ghost btn-sm shrink-0 self-center"
+                onClick={dismissQueueModeNotice}
+              >
+                <X size={12} /> Dismiss
+              </button>
+            )
+          }
+        >
+          {queueModeNotice ??
+            (appSettings.concurrentPipelineRuns
+              ? 'Pending Text -> Video jobs can start in parallel; screenshot and PowerPoint stages still wait for their slots.'
+              : 'Pending jobs will run one at a time in the visible queue order.')}
+        </Banner>
       )}
 
       {queuePaused && (
-        <div
-          role="alert"
-          className="flex items-start gap-3 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+        <Banner
+          tone="warning"
+          icon={<Pause size={16} />}
+          title="Queue paused"
+          actions={
+            <button
+              type="button"
+              className="btn-secondary btn-sm shrink-0 self-center"
+              onClick={resumeQueue}
+              disabled={queue.length === 0}
+            >
+              Resume queue
+            </button>
+          }
         >
-          <Pause size={16} className="mt-0.5 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <p className="font-medium">Queue paused</p>
-            <p className="mt-0.5 text-xs opacity-90">
-              {queuePausedReason === 'in_flight'
-                ? 'The previous run was rejected because another run is already in progress on the backend. Resuming would just hit the same 409 — wait for the active run to finish, then resume.'
-                : queuePausedReason === 'duplicate'
-                ? 'The previous run was rejected as a duplicate of a recent submission. Tweak the input or wait a few seconds before resuming.'
-                : queuePausedReason === 'unknown'
-                ? 'The previous run was rejected by the backend. Investigate before resuming.'
-                : 'Pending jobs will wait here until you resume the queue.'}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn-secondary btn-sm shrink-0 self-center"
-            onClick={resumeQueue}
-            disabled={queue.length === 0}
-          >
-            Resume queue
-          </button>
-        </div>
+          {queuePausedReason === 'in_flight'
+            ? 'The previous run was rejected because another run is already in progress on the backend. Resuming would just hit the same 409 — wait for the active run to finish, then resume.'
+            : queuePausedReason === 'duplicate'
+            ? 'The previous run was rejected as a duplicate of a recent submission. Tweak the input or wait a few seconds before resuming.'
+            : queuePausedReason === 'unknown'
+            ? 'The previous run was rejected by the backend. Investigate before resuming.'
+            : 'Pending jobs will wait here until you resume the queue.'}
+        </Banner>
       )}
       {/* `queue` now contains pending-only items (the currently-executing
           run is tracked separately and appears as a tracked run row above),

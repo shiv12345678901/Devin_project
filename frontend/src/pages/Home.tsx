@@ -196,7 +196,7 @@ export default function Home() {
             <span className="h-1 w-1 rounded-full bg-brand-500" />
             Text → Video Studio
           </div>
-          <h1 className="mt-3 max-w-3xl font-display text-3xl font-semibold leading-[1.1] tracking-tight md:text-[44px]">
+          <h1 className="h-page mt-3 max-w-3xl leading-[1.15]">
             From source text to a polished, frame-perfect deck —{' '}
             <span className="text-muted">in one run.</span>
           </h1>
@@ -296,7 +296,7 @@ export default function Home() {
           title="At a glance"
           hint="Live counts from the local Processes log."
         />
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
+        <div className="grid grid-cols-3 gap-3 lg:grid-cols-6">
           <StatCard label="Running"   value={stats.running} tone="sky" />
           <StatCard label="Succeeded" value={stats.success} tone="emerald" />
           <StatCard label="Failed"    value={stats.failed}  tone="rose" />
@@ -532,7 +532,8 @@ function StatCard({
   hint?: string
 }) {
   // The number is the hero — large, tabular, deeply weighted. The tone dot
-  // gives quick visual scanability without blasting color across the tile.
+  // sits in the top-right corner as a subtle accent rather than competing
+  // with the label for the eye.
   const dot: Record<typeof tone, string> = {
     emerald: 'bg-emerald-500',
     sky: 'bg-sky-500',
@@ -540,13 +541,16 @@ function StatCard({
     slate: 'bg-slate-400 dark:bg-slate-500',
   }
   return (
-    <div className="surface px-5 py-4">
-      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
-        <span className={'h-1.5 w-1.5 rounded-full ' + dot[tone]} />
+    <div className="surface relative px-5 py-4">
+      <span
+        aria-hidden="true"
+        className={'absolute right-3 top-3 h-1.5 w-1.5 rounded-full ' + dot[tone]}
+      />
+      <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
         {label}
       </div>
       <div
-        className="mt-2 font-display text-[28px] font-semibold leading-none tracking-tight tabular text-[rgb(var(--text-strong))] md:text-[32px]"
+        className="mt-2 font-display text-2xl font-semibold leading-none tracking-tight tabular text-[rgb(var(--text-strong))] md:text-[32px]"
         data-slot="number"
       >
         {value}

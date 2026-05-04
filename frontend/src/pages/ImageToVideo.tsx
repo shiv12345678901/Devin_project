@@ -71,12 +71,14 @@ export default function ImageToVideo() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6">
+    <div className="container-form space-y-6">
       <div>
-        <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-50">
-          Image / PDF to Video
-        </h1>
-        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+        <div className="eyebrow">
+          <span className="h-1 w-1 rounded-full bg-brand-500" />
+          Tool · Image → Video
+        </div>
+        <h1 className="h-page mt-2">Image / PDF to Video</h1>
+        <p className="mt-2 text-sm text-muted">
           Upload a screenshot, photo, or PDF. Vision AI extracts text, formats it as HTML, and
           captures screenshots.
         </p>
