@@ -185,7 +185,11 @@ function buildExactTitle(video: YoutubeVideoItem, metadataInput: string): string
   const nepali = nepaliChapterName(metadataInput, video.input_text ?? '', video.input_preview ?? '', video.chapter_name)
   const englishTitle = englishChapterName(metadataInput, video.chapter_name, video.title, video.input_text ?? '', video.input_preview ?? '')
   const refPart = ref ? ` ${ref.label} ${ref.number}` : ''
-  if (subject.toLowerCase() === 'english' || !nepali) {
+  if (subject.toLowerCase() === 'english') {
+    const topicPart = englishTitle ? ` : ${englishTitle}` : ''
+    return `${className} SEE ${subject}${refPart}${topicPart} exercise 2083`
+  }
+  if (!nepali) {
     const topic = englishTitle || `${className} ${subject}${refPart}`.trim()
     return `${topic} Exercise | ${className} ${subject}${refPart} exercise | SEE guide 2083`
   }
@@ -195,14 +199,24 @@ function buildExactTitle(video: YoutubeVideoItem, metadataInput: string): string
 function compactKey(video: YoutubeVideoItem): string {
   const className = normalizeClassName(video.class_name).replace(/\s+/g, '')
   const subject = subjectName(video.subject).replace(/\s+/g, '')
-  const ref = unitOrChapterRef(video.chapter_name, video.title)
+  const ref = searchRef(video)
   return `${className}${subject}${ref ? `${ref.label}${ref.number}` : ''}`
+}
+
+function isEnglishSubject(video: YoutubeVideoItem): boolean {
+  return subjectName(video.subject).toLowerCase() === 'english'
+}
+
+function searchRef(video: YoutubeVideoItem): { label: 'Unit' | 'Chapter'; number: string } | null {
+  const ref = unitOrChapterRef(video.chapter_name, video.title)
+  if (!ref || !isEnglishSubject(video)) return ref
+  return { label: 'Chapter', number: ref.number }
 }
 
 function defaultHashtags(video: YoutubeVideoItem, exactTitle: string): string[] {
   const key = compactKey(video)
   const nepali = nepaliChapterName(exactTitle)
-  return [
+  const hashtags = [
     `#${key}`,
     `#${key}Exercise`,
     nepali ? `#${key}${nepali.replace(/\s+/g, '')}` : `#${key}Guide`,
@@ -213,14 +227,16 @@ function defaultHashtags(video: YoutubeVideoItem, exactTitle: string): string[] 
     `#neb${normalizeClassName(video.class_name).replace(/\s+/g, '').toLowerCase()}${subjectName(video.subject).toLowerCase()}`,
     '#nepalieducationalguide',
   ]
+  return [...new Set(hashtags)]
 }
 
 function defaultQueries(video: YoutubeVideoItem): string[] {
   const className = normalizeClassName(video.class_name).toLowerCase()
   const subject = subjectName(video.subject).toLowerCase()
-  const ref = unitOrChapterRef(video.chapter_name, video.title)
+  const ref = searchRef(video)
+  const unitRef = unitOrChapterRef(video.chapter_name, video.title)
   const prefix = `${className} ${subject}${ref ? ` ${ref.label.toLowerCase()} ${ref.number}` : ''}`
-  return [
+  const queries = [
     `${prefix} exercise`,
     `${prefix} question answer`,
     `${prefix} full exercise`,
@@ -230,12 +246,16 @@ function defaultQueries(video: YoutubeVideoItem): string[] {
     `${prefix} notes`,
     `${prefix} guide`,
   ]
+  if (isEnglishSubject(video) && unitRef) {
+    queries.push(`${className} unit ${unitRef.number} exercise`)
+  }
+  return queries
 }
 
 function defaultAdditionalQueries(video: YoutubeVideoItem): string[] {
   const className = normalizeClassName(video.class_name)
   const subject = subjectName(video.subject)
-  const ref = unitOrChapterRef(video.chapter_name, video.title)
+  const ref = searchRef(video)
   const base = `${className} ${subject}${ref ? ` ${ref.label} ${ref.number}` : ''}`
   return [
     `${base} Solution`,
@@ -251,7 +271,7 @@ function defaultAdditionalQueries(video: YoutubeVideoItem): string[] {
 function defaultTags(video: YoutubeVideoItem): string[] {
   const className = normalizeClassName(video.class_name)
   const subject = subjectName(video.subject)
-  const ref = unitOrChapterRef(video.chapter_name, video.title)
+  const ref = searchRef(video)
   const base = `${className} ${subject}${ref ? ` ${ref.label} ${ref.number}` : ''}`
   const englishChapter = englishChapterName(
     video.input_text ?? '',
