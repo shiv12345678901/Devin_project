@@ -41,7 +41,7 @@ export default defineConfig(({ mode }) => {
           target: backendUrl,
           changeOrigin: true,
         },
-        '^/(generate|generate-sse|generate-html|cancel|beautify|minify|extract-from-image|image-to-screenshots-sse|regenerate|screenshots|html|download|download-zip|list|delete|history|cache|metrics|preflight|upload-thumbnail|thumbnails|thumbnail-templates|youtube)(/.*)?$':
+        '^/(generate|generate-sse|generate-html|cancel|beautify|minify|extract-from-image|image-to-screenshots-sse|regenerate|screenshots|html|download|download-zip|list|delete|history|cache|metrics|preflight|upload-thumbnail|thumbnails|thumbnail-templates|youtube|youtube-screenshots|restart)(/.*)?$':
           {
             target: backendUrl,
             changeOrigin: true,

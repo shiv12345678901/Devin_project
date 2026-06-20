@@ -35,7 +35,7 @@ import { useSettings } from '../store/settings'
 
 type PendingMeta = Omit<Run, 'id' | 'status' | 'startedAt'>
 
-export type QueueItemKind = 'text' | 'html' | 'image'
+export type QueueItemKind = 'text' | 'html' | 'image' | 'youtube'
 
 export interface QueueItem {
   id: string
@@ -48,6 +48,7 @@ export interface QueueItem {
   // payload variants — only one of these is populated per item
   text?: string
   html?: string
+  youtubeUrl?: string
   formData?: FormData
   files?: File[]
   replaceTargets?: ReplacementTargets
@@ -108,6 +109,11 @@ interface TrackedGenerationContextValue {
     formData: FormData,
     meta: { files: File[]; settings?: GenerateSettings },
   ) => EnqueueResult
+  enqueueYoutube: (
+    tool: RunTool,
+    settings: GenerateSettings,
+    options?: { replaceTargets?: ReplacementTargets },
+  ) => EnqueueResult
 }
 
 const Ctx = createContext<TrackedGenerationContextValue | null>(null)
@@ -140,6 +146,8 @@ function fingerprintItem(item: QueueItem): string {
     payload = `text|${item.tool}|${(item.text ?? '').trim()}|${settings}`
   } else if (item.kind === 'html') {
     payload = `html|${item.tool}|${(item.html ?? '').trim()}|${settings}`
+  } else if (item.kind === 'youtube') {
+    payload = `youtube|${item.tool}|${(item.youtubeUrl ?? item.settings?.youtube_url ?? '').trim()}|${settings}`
   } else {
     const fileSig = (item.files ?? [])
       .map((f) => `${f.name}:${f.size}:${f.lastModified}`)
@@ -433,6 +441,14 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
           settings: item.settings,
         }
         void gen.generateFromImage(item.formData)
+      } else if (item.kind === 'youtube' && item.settings) {
+        pendingRef.current = {
+          tool: item.tool,
+          inputPreview: item.inputPreview,
+          inputText: item.inputText ?? item.inputPreview,
+          settings: item.settings,
+        }
+        void gen.generateFromYoutube(item.settings)
       }
     },
     [gen],
@@ -782,6 +798,30 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
     [pushOrStart],
   )
 
+  const enqueueYoutube = useCallback(
+    (
+      tool: RunTool,
+      settings: GenerateSettings,
+      options?: { replaceTargets?: ReplacementTargets },
+    ): EnqueueResult => {
+      const url = (settings.youtube_url ?? '').trim()
+      const ts = settings.youtube_timestamps ?? []
+      const preview = url || 'YouTube video'
+      return pushOrStart({
+        id: nextQueueId(),
+        tool,
+        kind: 'youtube',
+        inputPreview: `${preview}${ts.length ? ` (${ts.length} timestamp${ts.length === 1 ? '' : 's'})` : ''}`,
+        inputText: `${url}\nTimestamps: ${ts.join(', ')}`,
+        queuedAt: Date.now(),
+        youtubeUrl: url,
+        settings,
+        replaceTargets: options?.replaceTargets,
+      })
+    },
+    [pushOrStart],
+  )
+
   const cancelQueued = useCallback((queueId: string) => {
     // `queue` only contains pending items now, so a plain filter is safe —
     // no risk of accidentally yanking the in-flight item out of under the
@@ -871,6 +911,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       enqueueText,
       enqueueHtml,
       enqueueImage,
+      enqueueYoutube,
     }),
     [
       gen.state,
@@ -889,6 +930,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
       enqueueText,
       enqueueHtml,
       enqueueImage,
+      enqueueYoutube,
     ],
   )
 
@@ -928,6 +970,10 @@ export function useTrackedGenerate(tool: RunTool) {
         fd: FormData,
         meta?: { files?: File[]; settings?: GenerateSettings },
       ) => ctx.enqueueImage(tool, fd, { files: meta?.files ?? [], settings: meta?.settings }),
+      generateFromYoutube: (
+        settings: GenerateSettings,
+        options?: { replaceTargets?: ReplacementTargets },
+      ) => ctx.enqueueYoutube(tool, settings, options),
     }),
     [ctx, tool],
   )

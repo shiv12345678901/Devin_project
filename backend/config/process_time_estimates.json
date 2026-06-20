@@ -264,6 +264,30 @@
                     "concurrent": false
                 }
             ]
+        },
+        "youtube-to-video": {
+            "seconds_per_char": 0.062332717948717954,
+            "samples": 3,
+            "runs": [
+                {
+                    "input_chars": 3250,
+                    "seconds": 126.081,
+                    "resolution": "1080p",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 3250,
+                    "seconds": 245.427,
+                    "resolution": "1440p",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 3250,
+                    "seconds": 236.236,
+                    "resolution": "1440p",
+                    "concurrent": false
+                }
+            ]
         }
     }
 }

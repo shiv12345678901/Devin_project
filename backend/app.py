@@ -152,6 +152,37 @@ app.register_blueprint(image_bp)
 app.register_blueprint(resources_bp)
 app.register_blueprint(runs_bp)
 
+# YouTube Screenshots — isolated optional tool. Safe to remove entirely.
+try:
+    from routes.youtube_screenshots import youtube_screenshots_bp  # noqa: E402
+    app.register_blueprint(youtube_screenshots_bp)
+    print("🎬 YouTube Screenshots tool loaded", flush=True)
+except ImportError:
+    print("ℹ️  YouTube Screenshots tool skipped (missing yt-dlp/opencv/numpy)", flush=True)
+
+
+# ─── Restart endpoint ─────────────────────────────────────────────────────
+@app.route('/restart', methods=['POST'])
+def restart_server():
+    """Restart the backend process. The frontend can trigger this."""
+    import subprocess
+    import threading
+
+    def _do_restart():
+        import time
+        time.sleep(0.3)  # Let the response flush
+        print("\n🔄 Restarting server...\n", flush=True)
+        # Spawn new process with same args, then kill ourselves
+        subprocess.Popen(
+            [sys.executable] + sys.argv,
+            cwd=BACKEND_DIR,
+        )
+        time.sleep(1)
+        os._exit(0)
+
+    threading.Thread(target=_do_restart, daemon=True).start()
+    return jsonify({"success": True, "message": "Restarting..."})
+
 
 @app.after_request
 def _normalize_error_shape(response):

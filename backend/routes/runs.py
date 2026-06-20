@@ -1183,6 +1183,283 @@ def start_text_to_video():
     })
 
 
+@runs_bp.route("/runs/youtube-to-video", methods=["POST"])
+def start_youtube_to_video():
+    data = request.get_json(silent=True) or {}
+    youtube_url = str(data.get("youtube_url") or data.get("url") or "").strip()
+    if not youtube_url:
+        return jsonify({"success": False, "error": "No YouTube URL provided"}), 400
+
+    raw_timestamps = data.get("youtube_timestamps") or data.get("timestamps") or []
+    if not isinstance(raw_timestamps, list) or not raw_timestamps:
+        return jsonify({"success": False, "error": "No timestamps provided"}), 400
+    try:
+        timestamps = sorted(set(float(t) for t in raw_timestamps))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Invalid timestamps; must be seconds"}), 400
+    if len(timestamps) > 150:
+        return jsonify({"success": False, "error": "YouTube runs are limited to 150 timestamps."}), 400
+
+    project_info = {
+        "class_name": str(data.get("class_name") or "").strip(),
+        "subject": str(data.get("subject") or "").strip(),
+        "title": str(data.get("title") or "").strip(),
+    }
+    output_format = str(data.get("output_format") or "video")
+    if output_format not in {"images", "pptx", "video"}:
+        return jsonify({
+            "success": False,
+            "error": "YouTube source supports screenshots, PowerPoint, or MP4 video.",
+        }), 400
+
+    youtube_quality = str(data.get("youtube_quality") or "1080p")
+    if youtube_quality not in {"720p", "1080p", "best"}:
+        youtube_quality = "1080p"
+
+    output_name = _safe_name(
+        str(data.get("output_name") or data.get("title") or ""),
+        f"youtube_{int(time.time() * 1000)}",
+    )
+    close_powerpoint = _bool_value(data.get("close_powerpoint_before_start"), True)
+    auto_timing_screenshot_slides = _bool_value(data.get("auto_timing_screenshot_slides"), True)
+    fixed_seconds_per_screenshot_slide = _positive_float(data.get("fixed_seconds_per_screenshot_slide"), 5.0)
+    intro_thumbnail_enabled = _bool_value(data.get("intro_thumbnail_enabled"), False)
+    outro_thumbnail_enabled = _bool_value(data.get("outro_thumbnail_enabled"), False)
+    intro_thumbnail_filename = str(data.get("intro_thumbnail_filename") or "")
+    outro_thumbnail_filename = str(data.get("outro_thumbnail_filename") or "")
+    intro_thumbnail_duration = _positive_float(data.get("intro_thumbnail_duration_sec"), 5.0)
+    outro_thumbnail_duration = _positive_float(data.get("outro_thumbnail_duration_sec"), 5.0)
+    resolution_label = str(data.get("resolution") or "1080p")
+    width, height = _resolution_tuple(resolution_label)
+    try:
+        fps = int(data.get("fps") or 30)
+    except (TypeError, ValueError):
+        fps = 30
+    quality = _ppt_quality(data.get("video_quality", 85))
+    concurrent_pipeline_runs = _bool_value(data.get("concurrent_pipeline_runs"), False)
+    model_choice = "youtube-to-video"
+    synthetic_char_count = max(len(timestamps) * 250, 1)
+    estimated_total_seconds = eta_tracker.predict_process_time(
+        model_choice,
+        synthetic_char_count,
+        resolution=resolution_label,
+        concurrent=concurrent_pipeline_runs,
+    )
+
+    fingerprint_payload = {
+        "tool": "youtube-to-video",
+        "youtube_url": youtube_url,
+        "timestamps": timestamps,
+        "youtube_quality": youtube_quality,
+        "class_name": project_info["class_name"],
+        "subject": project_info["subject"],
+        "title": project_info["title"],
+        "output_format": output_format,
+        "resolution": [width, height],
+        "fps": fps,
+        "quality": quality,
+        "intro_thumbnail_enabled": intro_thumbnail_enabled,
+        "intro_thumbnail_filename": intro_thumbnail_filename,
+        "outro_thumbnail_enabled": outro_thumbnail_enabled,
+        "outro_thumbnail_filename": outro_thumbnail_filename,
+    }
+    input_fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    duplicate = find_active_run_by_fingerprint("youtube-to-video", input_fingerprint)
+    if duplicate:
+        return jsonify({
+            "success": False,
+            "error": f"This exact YouTube job is already {duplicate.get('status')}.",
+            "reason": "duplicate",
+            "duplicate_run_id": duplicate.get("run_id"),
+            "operation_id": duplicate.get("operation_id"),
+        }), 409
+
+    operation_id = f"youtube_video_{time.time_ns()}"
+    cancel_event = register_operation(operation_id)
+    batch_id = get_next_batch_id()
+    screenshot_folder = f"batch {batch_id}"
+    screenshot_abs: list[str] = []
+    screenshot_names: list[str] = []
+    settings = {
+        "class_name": project_info["class_name"],
+        "subject": project_info["subject"],
+        "title": project_info["title"],
+        "output_format": output_format,
+        "output_name": output_name,
+        "youtube_url": youtube_url,
+        "youtube_timestamps": timestamps,
+        "youtube_quality": youtube_quality,
+        "screenshot_folder": screenshot_folder,
+        "resolution": resolution_label,
+        "fps": fps,
+        "video_quality": quality,
+        "auto_timing_screenshot_slides": auto_timing_screenshot_slides,
+        "fixed_seconds_per_screenshot_slide": fixed_seconds_per_screenshot_slide,
+        "close_powerpoint_before_start": close_powerpoint,
+        "intro_thumbnail_enabled": intro_thumbnail_enabled,
+        "intro_thumbnail_filename": intro_thumbnail_filename,
+        "intro_thumbnail_duration_sec": intro_thumbnail_duration,
+        "outro_thumbnail_enabled": outro_thumbnail_enabled,
+        "outro_thumbnail_filename": outro_thumbnail_filename,
+        "outro_thumbnail_duration_sec": outro_thumbnail_duration,
+        "concurrent_pipeline_runs": concurrent_pipeline_runs,
+        "input_fingerprint": input_fingerprint,
+        "estimated_total_seconds": estimated_total_seconds,
+    }
+    run = create_run(
+        tool="youtube-to-video",
+        title=output_name,
+        input_text=f"[YouTube] {youtube_url}\nTimestamps: {', '.join(str(t) for t in timestamps)}",
+        settings=settings,
+        model_choice=model_choice,
+        operation_id=operation_id,
+        run_id=operation_id,
+        status="queued",
+        input_fingerprint=input_fingerprint,
+    )
+    run_id = run["run_id"]
+
+    def worker(ctx: WorkflowContext) -> None:
+        process_started = time.time()
+        presentation_file: str | None = None
+        video_file: str | None = None
+        try:
+            from routes.youtube_screenshots import capture_youtube_screenshots_to_batch
+
+            def progress(stage: str, pct: float, message: str, extra: dict | None = None) -> None:
+                ctx.progress(stage, pct, message, data=extra)
+
+            captured = capture_youtube_screenshots_to_batch(
+                url=youtube_url,
+                timestamps=timestamps,
+                output_dir=OUTPUT_FOLDER,
+                batch_id=batch_id,
+                quality=youtube_quality,
+                progress=progress,
+                is_cancelled=ctx.cancel_event.is_set,
+            )
+            screenshot_abs[:] = captured["abs_paths"]
+            screenshot_names[:] = captured["rel_names"]
+            ctx.output("screenshot_folder", screenshot_folder)
+            ctx.output("screenshot_files", screenshot_names)
+            ctx.output("screenshot_count", len(screenshot_abs))
+            ctx.metrics({"screenshot_count": len(screenshot_abs)})
+            ctx.check_cancelled()
+
+            if output_format == "images":
+                outputs = {
+                    "screenshot_folder": screenshot_folder,
+                    "screenshot_files": screenshot_names,
+                    "screenshot_count": len(screenshot_abs),
+                    "youtube_title": captured.get("title"),
+                    "youtube_duration": captured.get("duration"),
+                }
+                log_generation({
+                    "tool": "youtube-to-video",
+                    "input_preview": youtube_url,
+                    "output_name": output_name,
+                    "screenshot_folder": screenshot_folder,
+                    "screenshot_count": len(screenshot_abs),
+                    "operation_id": operation_id,
+                    "settings": settings,
+                })
+                ctx.complete("Successfully captured YouTube screenshot(s)", outputs=outputs, metrics={"screenshot_count": len(screenshot_abs)})
+                return
+
+            presentation_file, video_file = _run_powerpoint_export(
+                ctx,
+                output_format=output_format,
+                screenshot_files=screenshot_abs,
+                project_info=project_info,
+                output_name=output_name,
+                input_text=output_name,
+                close_powerpoint=close_powerpoint,
+                concurrent_pipeline_runs=concurrent_pipeline_runs,
+                auto_timing_screenshot_slides=auto_timing_screenshot_slides,
+                fixed_seconds_per_screenshot_slide=fixed_seconds_per_screenshot_slide,
+                width=width,
+                height=height,
+                fps=fps,
+                quality=quality,
+                intro_thumbnail_filename=intro_thumbnail_filename,
+                intro_thumbnail_enabled=intro_thumbnail_enabled,
+                intro_thumbnail_duration=intro_thumbnail_duration,
+                outro_thumbnail_filename=outro_thumbnail_filename,
+                outro_thumbnail_enabled=outro_thumbnail_enabled,
+                outro_thumbnail_duration=outro_thumbnail_duration,
+                starting_progress=55,
+            )
+            outputs = {
+                "screenshot_folder": screenshot_folder,
+                "screenshot_files": screenshot_names,
+                "screenshot_count": len(screenshot_abs),
+                "presentation_file": presentation_file,
+                "presentation_path": presentation_file,
+                "video_file": video_file,
+                "video_path": video_file,
+            }
+            log_generation({
+                "tool": "youtube-to-video",
+                "input_preview": youtube_url,
+                "output_name": output_name,
+                "screenshot_folder": screenshot_folder,
+                "screenshot_count": len(screenshot_abs),
+                "presentation_file": presentation_file,
+                "video_file": video_file,
+                "operation_id": operation_id,
+                "settings": settings,
+            })
+            final = "Successfully generated MP4 video" if output_format == "video" else "Successfully generated PowerPoint deck"
+            ctx.complete(final, outputs=outputs, metrics={"screenshot_count": len(screenshot_abs)})
+            eta_tracker.record_process_completion(
+                model_choice,
+                synthetic_char_count,
+                time.time() - process_started,
+                resolution=resolution_label,
+                concurrent=concurrent_pipeline_runs,
+            )
+        except (CancelledError, Exception) as exc:
+            if ctx.cancel_event.is_set() or isinstance(exc, CancelledError):
+                _close_powerpoint_best_effort()
+                outputs = {
+                    "screenshot_folder": screenshot_folder,
+                    "screenshot_files": screenshot_names,
+                    "screenshot_count": len(screenshot_names),
+                    "presentation_file": presentation_file,
+                    "presentation_path": presentation_file,
+                    "video_file": video_file,
+                    "video_path": video_file,
+                }
+                if _delete_outputs_on_cancel_requested(run_id):
+                    _delete_generated_outputs(outputs)
+                    outputs = {"screenshot_files": [], "screenshot_count": 0}
+                ctx.cancel("Operation cancelled", outputs=outputs)
+            elif isinstance(exc, (PowerPointNotFoundError, TemplateError, ExportError)):
+                ctx.fail(str(exc))
+            else:
+                ctx.fail(str(exc))
+        finally:
+            unregister_operation(operation_id)
+
+    position = enqueue(
+        run_id,
+        operation_id,
+        worker,
+        cancel_event,
+        label="YouTube-to-video",
+        pipeline_enabled=concurrent_pipeline_runs,
+    )
+    return jsonify({
+        "success": True,
+        "run_id": run_id,
+        "operation_id": operation_id,
+        "queue_position": position,
+        "estimated_total_seconds": estimated_total_seconds,
+    })
+
+
 # ─── Screenshots → Video ─────────────────────────────────────────────────────
 #
 # Runs the *export* half of the text-to-video pipeline against screenshots

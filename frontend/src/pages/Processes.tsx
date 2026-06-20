@@ -121,10 +121,13 @@ function stageStatusLabel(stage?: string): string {
 
 function toGenerateSettings(settings: Run['settings'] | GenerateSettings | undefined): GenerateSettings {
   const raw = settings ?? {}
-  const { resolution, ...rest } = raw
+  const { resolution, youtube_quality, ...rest } = raw
   const next: GenerateSettings = { ...rest }
   if (['720p', '1080p', '1440p', '4k'].includes(String(resolution))) {
     next.resolution = resolution as GenerateSettings['resolution']
+  }
+  if (['720p', '1080p', 'best'].includes(String(youtube_quality))) {
+    next.youtube_quality = youtube_quality as GenerateSettings['youtube_quality']
   }
   return next
 }
@@ -1496,8 +1499,8 @@ export default function Processes() {
   }
 
   const queueEditorForItem = (item: QueueItem) => {
-    if (item.kind === 'image') {
-      toast.push({ variant: 'info', message: 'Image jobs need their original uploaded file, so edit is unavailable.' })
+    if (item.kind === 'image' || item.kind === 'youtube') {
+      toast.push({ variant: 'info', message: 'This queued job cannot be edited from Processes. Open the wizard to submit a new one.' })
       return
     }
     setEditingProcess({
@@ -1594,6 +1597,7 @@ export default function Processes() {
       'html-to-video': 0,
       'image-to-video': 0,
       'screenshots-to-video': 0,
+      'youtube-to-video': 0,
     }
     for (const r of runs) counts[r.tool] += 1
     return counts
@@ -1604,6 +1608,7 @@ export default function Processes() {
     { key: 'html-to-video', label: 'HTML' },
     { key: 'image-to-video', label: 'Image' },
     { key: 'screenshots-to-video', label: 'Screenshots' },
+    { key: 'youtube-to-video', label: 'YouTube' },
   ]
 
   const totalRuntime = runs

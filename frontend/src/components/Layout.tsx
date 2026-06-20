@@ -61,6 +61,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/workspace/text': 'Text → Video',
   '/workspace/html': 'HTML → Video',
   '/workspace/image': 'Image → Video',
+  '/workspace/youtube': 'YouTube → Screenshots',
   '/library': 'Library',
   '/publish': 'YouTube Publish',
   '/processes': 'Processes',

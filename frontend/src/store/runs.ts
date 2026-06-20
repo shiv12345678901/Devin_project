@@ -10,6 +10,7 @@ export type RunTool =
   | 'html-to-video'
   | 'image-to-video'
   | 'screenshots-to-video'
+  | 'youtube-to-video'
 export type RunStatus = 'running' | 'success' | 'error' | 'cancelled'
 
 export interface RunSettings {
@@ -32,6 +33,9 @@ export interface RunSettings {
   slide_duration_sec?: number
   intro_thumbnail_enabled?: boolean
   outro_thumbnail_enabled?: boolean
+  youtube_url?: string
+  youtube_timestamps?: number[]
+  youtube_quality?: '720p' | '1080p' | 'best'
 }
 
 export interface Run {

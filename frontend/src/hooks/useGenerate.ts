@@ -529,6 +529,12 @@ export function useGenerate() {
     [runBackendQueuedRun],
   )
 
+  const generateFromYoutube = useCallback(
+    (settings: GenerateSettings) =>
+      runBackendQueuedRun(() => api.startYoutubeToVideoRun(settings)),
+    [runBackendQueuedRun],
+  )
+
   const generateFromImage = useCallback(
     (formData: FormData) => runSseForm('/image-to-screenshots-sse', formData),
     [runSseForm],
@@ -590,5 +596,5 @@ export function useGenerate() {
     op?.abort()
   }, [])
 
-  return { state, generate, generateFromHtml, generateFromImage, cancel, reset }
+  return { state, generate, generateFromHtml, generateFromYoutube, generateFromImage, cancel, reset }
 }

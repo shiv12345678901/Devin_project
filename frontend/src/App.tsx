@@ -6,6 +6,7 @@ import TextToVideo from './pages/TextToVideo'
 import HtmlToVideo from './pages/HtmlToVideo'
 import ImageToVideo from './pages/ImageToVideo'
 import ScreenshotsToVideo from './pages/ScreenshotsToVideo'
+import YouTubeScreenshots from './pages/YouTubeScreenshots'
 import Library from './pages/Library'
 import Processes from './pages/Processes'
 import Settings from './pages/Settings'
@@ -23,6 +24,8 @@ function App() {
           <Route path="workspace/html" element={<HtmlToVideo />} />
           <Route path="workspace/image" element={<ImageToVideo />} />
           <Route path="workspace/screenshots" element={<ScreenshotsToVideo />} />
+          <Route path="workspace/youtube" element={<TextToVideo sourceMode="youtube" />} />
+          <Route path="workspace/youtube-screenshots" element={<YouTubeScreenshots />} />
 
           <Route path="library" element={<Library />} />
           <Route path="publish" element={<YouTubePublish />} />

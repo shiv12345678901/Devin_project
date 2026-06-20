@@ -43,7 +43,32 @@ def _write_json(path: Path, data: Any) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, path)
+
+    # On Windows, os.replace raises PermissionError (WinError 5) if another
+    # process momentarily holds a handle on the destination (antivirus, file
+    # indexer, a concurrent reader). Retry with a short backoff before giving up.
+    last_err: Exception | None = None
+    for attempt in range(10):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError as exc:  # WinError 5 / 32
+            last_err = exc
+            time.sleep(0.05 * (attempt + 1))
+
+    # Last resort: write directly to the destination so a transient lock
+    # doesn't lose the update. Then clean up the temp file.
+    try:
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+    if last_err is not None and not path.exists():
+        raise last_err
 
 
 def _normalize_path_string(value: str) -> str:

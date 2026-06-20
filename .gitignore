@@ -55,6 +55,10 @@ ENV/
 # Backend secrets & generated artifacts
 backend/.env
 backend/config/config.py
+backend/config/cookies.txt
+backend/config/cookies.txt.netscape.txt
+cookies.txt
+cookies.txt.netscape.txt
 backend/output/
 backend/logs/
 backend/temp_page.html

@@ -74,6 +74,7 @@ const DEFAULT_SETTINGS: GenerateSettings = {
   video_quality: 85,
   fps: 30,
   slide_duration_sec: 5,
+  youtube_quality: '1080p',
   intro_thumbnail_enabled: false,
   intro_thumbnail_duration_sec: 5,
   outro_thumbnail_enabled: false,
@@ -88,13 +89,15 @@ const DEFAULT_SETTINGS: GenerateSettings = {
 // v1 don't lose the little that was saved.
 const LAST_RUN_STORAGE_KEY = 'textbro:text-to-video:last-run:v2'
 const HTML_LAST_RUN_STORAGE_KEY = 'textbro:html-to-video:last-run:v1'
+const YOUTUBE_LAST_RUN_STORAGE_KEY = 'textbro:youtube-to-video:last-run:v1'
 const LEGACY_PROJECT_DETAILS_STORAGE_KEY = 'textbro:text-to-video:project-details:v1'
 // C3: keys for the always-on draft autosave (every 5s while editing).
 const TEXT_DRAFT_STORAGE_KEY = 'textbro:text-to-video:draft:v1'
 const HTML_DRAFT_STORAGE_KEY = 'textbro:html-to-video:draft:v1'
+const YOUTUBE_DRAFT_STORAGE_KEY = 'textbro:youtube-to-video:draft:v1'
 const DRAFT_AUTOSAVE_MS = 5_000
 
-type SourceMode = 'text' | 'html'
+type SourceMode = 'text' | 'html' | 'youtube'
 
 type LegacyProjectDetails = Pick<GenerateSettings, 'class_name' | 'subject' | 'title' | 'output_format'>
 
@@ -113,7 +116,11 @@ function readLastRunSnapshot(mode: SourceMode = 'text'): LastRunSnapshot | null 
   if (typeof window === 'undefined') return null
   try {
     const raw = window.localStorage.getItem(
-      mode === 'html' ? HTML_LAST_RUN_STORAGE_KEY : LAST_RUN_STORAGE_KEY,
+      mode === 'html'
+        ? HTML_LAST_RUN_STORAGE_KEY
+        : mode === 'youtube'
+          ? YOUTUBE_LAST_RUN_STORAGE_KEY
+          : LAST_RUN_STORAGE_KEY,
     )
     if (raw) {
       const parsed = JSON.parse(raw) as unknown
@@ -156,7 +163,11 @@ function saveLastRunSnapshot(
   const snapshot: LastRunSnapshot = { text, settings }
   try {
     window.localStorage.setItem(
-      mode === 'html' ? HTML_LAST_RUN_STORAGE_KEY : LAST_RUN_STORAGE_KEY,
+      mode === 'html'
+        ? HTML_LAST_RUN_STORAGE_KEY
+        : mode === 'youtube'
+          ? YOUTUBE_LAST_RUN_STORAGE_KEY
+          : LAST_RUN_STORAGE_KEY,
       JSON.stringify(snapshot),
     )
     // Clear the legacy key so the reuse button doesn't surface stale
@@ -175,7 +186,11 @@ function readDraftSnapshot(mode: SourceMode = 'text'): LastRunSnapshot | null {
   if (typeof window === 'undefined') return null
   try {
     const raw = window.localStorage.getItem(
-      mode === 'html' ? HTML_DRAFT_STORAGE_KEY : TEXT_DRAFT_STORAGE_KEY,
+      mode === 'html'
+        ? HTML_DRAFT_STORAGE_KEY
+        : mode === 'youtube'
+          ? YOUTUBE_DRAFT_STORAGE_KEY
+          : TEXT_DRAFT_STORAGE_KEY,
     )
     if (!raw) return null
     const parsed = JSON.parse(raw) as unknown
@@ -195,7 +210,11 @@ function saveDraftSnapshot(text: string, settings: GenerateSettings, mode: Sourc
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(
-      mode === 'html' ? HTML_DRAFT_STORAGE_KEY : TEXT_DRAFT_STORAGE_KEY,
+      mode === 'html'
+        ? HTML_DRAFT_STORAGE_KEY
+        : mode === 'youtube'
+          ? YOUTUBE_DRAFT_STORAGE_KEY
+          : TEXT_DRAFT_STORAGE_KEY,
       JSON.stringify({ text, settings, savedAt: Date.now() }),
     )
   } catch {
@@ -207,7 +226,11 @@ function clearDraftSnapshot(mode: SourceMode = 'text') {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.removeItem(
-      mode === 'html' ? HTML_DRAFT_STORAGE_KEY : TEXT_DRAFT_STORAGE_KEY,
+      mode === 'html'
+        ? HTML_DRAFT_STORAGE_KEY
+        : mode === 'youtube'
+          ? YOUTUBE_DRAFT_STORAGE_KEY
+          : TEXT_DRAFT_STORAGE_KEY,
     )
   } catch {
     /* ignore */
@@ -291,10 +314,16 @@ function validateStep(
       return errs
     }
     case 'content': {
-      if (!text.trim()) errs.text = mode === 'html' ? 'Paste your HTML here' : 'Paste your source text here'
+      if (mode === 'youtube') {
+        if (!(settings.youtube_url ?? '').trim()) errs.youtube_url = 'Paste a YouTube URL here'
+        if (parseYoutubeTimestamps(text).length === 0) errs.text = 'Add at least one timestamp'
+      } else if (!text.trim()) {
+        errs.text = mode === 'html' ? 'Paste your HTML here' : 'Paste your source text here'
+      }
       return errs
     }
     case 'screenshot': {
+      if (mode === 'youtube') return errs
       const zoom = num(settings.zoom)
       if (zoom === null || zoom <= 0 || zoom > 10) errs.zoom = 'Zoom must be between 0.1 and 10'
       const overlap = num(settings.overlap)
@@ -371,19 +400,57 @@ function focusFirstError(stepId: StepId, errs: FieldErrors) {
 
 const fieldId = (step: StepId, name: string) => `field-${step}-${name}`
 
+function parseYoutubeTimestamps(raw: string): number[] {
+  return raw
+    .split(/[,\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => {
+      const parts = s.split(':').map(Number)
+      if (parts.some((p) => !Number.isFinite(p))) return Number.NaN
+      if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
+      if (parts.length === 2) return parts[0] * 60 + parts[1]
+      return Number(s)
+    })
+    .filter((n) => Number.isFinite(n) && n >= 0)
+}
+
+function formatYoutubeTimestamp(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds))
+  if (s >= 3600) {
+    return `${Math.floor(s / 3600)}:${Math.floor((s % 3600) / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`
+  }
+  return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`
+}
+
 // ─── Page ──────────────────────────────────────────────────────────────────
 
 export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: SourceMode }) {
   const nav = useNavigate()
-  const tracked = useTrackedGenerate(sourceMode === 'html' ? 'html-to-video' : 'text-to-video')
+  const tracked = useTrackedGenerate(
+    sourceMode === 'html'
+      ? 'html-to-video'
+      : sourceMode === 'youtube'
+        ? 'youtube-to-video'
+        : 'text-to-video',
+  )
   const { state, cancel } = tracked
-  const generateSource = sourceMode === 'html' ? tracked.generateFromHtml : tracked.generate
+  const generateSource =
+    sourceMode === 'html'
+      ? tracked.generateFromHtml
+      : sourceMode === 'youtube'
+        ? tracked.generateFromYoutube
+        : tracked.generate
   const running = false
   const [text, setText] = useState('')
   const { settings: appSettings } = useSettings()
   const [settings, setSettings] = useState<GenerateSettings>(() => ({
     ...DEFAULT_SETTINGS,
-    output_format: sourceMode === 'html' ? 'video' : appSettings.defaultOutputFormat,
+    output_format: sourceMode === 'html'
+      ? 'video'
+      : sourceMode === 'youtube'
+        ? (appSettings.defaultOutputFormat === 'html' ? 'images' : appSettings.defaultOutputFormat)
+        : appSettings.defaultOutputFormat,
     // When the global Auto-thumbnail-builder preference is on, default
     // both per-run slots to enabled so the wizard mounts with the same
     // intent the user expressed in Settings. They can still toggle each
@@ -422,7 +489,13 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
   )
 
   useEffect(() => {
-    const draft = consumeProcessEditHandoff(sourceMode === 'html' ? 'html-to-video' : 'text-to-video')
+    const draft = consumeProcessEditHandoff(
+      sourceMode === 'html'
+        ? 'html-to-video'
+        : sourceMode === 'youtube'
+          ? 'youtube-to-video'
+          : 'text-to-video',
+    )
     if (!draft) return
     setText(draft.text)
     setSettings((prev) => ({ ...prev, ...draft.settings }))
@@ -739,6 +812,12 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     payload.subject = (payload.subject ?? '').trim() || undefined
     payload.title = (payload.title ?? '').trim() || undefined
     payload.concurrent_pipeline_runs = appSettings.concurrentPipelineRuns
+    if (sourceMode === 'youtube') {
+      payload.youtube_url = (payload.youtube_url ?? '').trim()
+      payload.youtube_timestamps = parseYoutubeTimestamps(text)
+      payload.youtube_quality = payload.youtube_quality ?? '1080p'
+      if (payload.output_format === 'html') payload.output_format = 'images'
+    }
     setAutoThumbnailError(null)
     // Only auto-build the intro / outro slots when the user has the
     // per-run toggle on. The global Auto-thumbnail-builder preference
@@ -807,7 +886,10 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     // the user sees either the running run or the queue entry without
     // staying on the wizard.
     const targets = replaceTargets
-    const { queueId } = generateSource(text, payload, targets ? { replaceTargets: targets } : undefined)
+    const { queueId } =
+      sourceMode === 'youtube'
+        ? tracked.generateFromYoutube(payload, targets ? { replaceTargets: targets } : undefined)
+        : generateSource(text, payload, targets ? { replaceTargets: targets } : undefined)
     setReplaceTargets(null)
     nav(`/processes?queue=${encodeURIComponent(queueId)}`)
   }
@@ -945,6 +1027,7 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
             settings={settings}
             onChange={set}
             errors={showCurrentErrors ? currentErrors : {}}
+            sourceMode={sourceMode}
           />
         )}
 
@@ -1731,6 +1814,7 @@ function ContentStep({
   sourceMode: SourceMode
 }) {
   const isHtml = sourceMode === 'html'
+  const isYoutube = sourceMode === 'youtube'
   const onFile = async (file: File) => {
     onText(await file.text())
   }
@@ -1748,15 +1832,17 @@ function ContentStep({
   return (
     <>
       <StepHeader
-        title={isHtml ? 'HTML input' : 'AI & text'}
+        title={isHtml ? 'HTML input' : isYoutube ? 'YouTube source' : 'AI & text'}
         subtitle={
           isHtml
             ? 'Paste or upload the HTML you already generated. The workflow continues from screenshots onward.'
-            : 'Pick the model, paste the source text, and (optionally) override the system prompt.'
+            : isYoutube
+              ? 'Paste a YouTube link and add timestamps. The workflow continues through the same screenshot, PowerPoint, and MP4 pipeline.'
+              : 'Pick the model, paste the source text, and (optionally) override the system prompt.'
         }
       />
 
-      {!isHtml && (
+      {!isHtml && !isYoutube && (
         <Field label="AI Model">
           <ModelChooser
             value={settings.model_choice ?? 'default'}
@@ -1790,21 +1876,45 @@ function ContentStep({
         </div>
       )}
 
-      <Field label={isHtml ? 'HTML input' : 'Text input'} required error={errors.text}>
+      {isYoutube && (
+        <Field label="YouTube URL" required error={errors.youtube_url}>
+          <input
+            id={fieldId('content', 'youtube_url')}
+            type="url"
+            className={inputCls(errors.youtube_url)}
+            placeholder="https://www.youtube.com/watch?v=..."
+            value={settings.youtube_url ?? ''}
+            onChange={(e) => onChange('youtube_url', e.target.value)}
+            disabled={running}
+          />
+        </Field>
+      )}
+
+      <Field label={isHtml ? 'HTML input' : isYoutube ? 'Timestamps' : 'Text input'} required error={errors.text}>
         <textarea
           id={fieldId('content', 'text')}
-          className={inputCls(errors.text) + ' textarea h-60 resize-y font-mono'}
-          placeholder="Paste your lesson notes here…"
+          className={inputCls(errors.text) + ` textarea ${isYoutube ? 'h-32' : 'h-60'} resize-y font-mono`}
+          placeholder={isYoutube ? '0:30, 1:15, 2:00' : isHtml ? 'Paste your HTML here...' : 'Paste your lesson notes here...'}
           value={text}
           onChange={(e) => onText(e.target.value)}
           disabled={running}
         />
-        <div className="mt-1 text-xs text-slate-500">
-          ~{Math.round(text.length / 4)} tokens · {text.length} characters
-        </div>
+        {isYoutube ? (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {parseYoutubeTimestamps(text).slice(0, 24).map((ts) => (
+              <span key={ts} className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-white/10 dark:text-slate-300">
+                {formatYoutubeTimestamp(ts)}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-1 text-xs text-slate-500">
+            ~{Math.round(text.length / 4)} tokens · {text.length} characters
+          </div>
+        )}
       </Field>
 
-      {!isHtml && (
+      {!isHtml && !isYoutube && (
         <Field label="System prompt (optional)">
           <SystemPromptEditor
             value={settings.system_prompt ?? ''}
@@ -1821,11 +1931,41 @@ function ScreenshotStep({
   settings,
   onChange,
   errors,
+  sourceMode,
 }: {
   settings: GenerateSettings
   onChange: Setter
   errors: FieldErrors
+  sourceMode: SourceMode
 }) {
+  if (sourceMode === 'youtube') {
+    return (
+      <>
+        <StepHeader
+          title="YouTube capture settings"
+          subtitle="How the backend downloads the video stream before capturing timestamp frames."
+        />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Capture quality">
+            <select
+              className="input"
+              value={settings.youtube_quality ?? '1080p'}
+              onChange={(e) => onChange('youtube_quality', e.target.value as GenerateSettings['youtube_quality'])}
+            >
+              <option value="720p">720p fast</option>
+              <option value="1080p">1080p balanced</option>
+              <option value="best">Best available</option>
+            </select>
+          </Field>
+          <Field label="Timestamp limit">
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300">
+              Up to 150 timestamps per run
+            </div>
+          </Field>
+        </div>
+      </>
+    )
+  }
   return (
     <>
       <StepHeader

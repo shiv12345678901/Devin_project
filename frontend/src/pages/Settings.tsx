@@ -48,6 +48,7 @@ export default function Settings() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const [youtubeTemplate, setYoutubeTemplate] = useState(() => readYoutubeTemplate())
+  const [restarting, setRestarting] = useState(false)
 
   const pingBackend = async () => {
     setPingState('pinging')
@@ -59,6 +60,31 @@ export default function Settings() {
       setPingState('error')
       setPingError(e instanceof Error ? e.message : String(e))
     }
+  }
+
+  const restartBackend = async () => {
+    setRestarting(true)
+    try {
+      await fetch('/restart', { method: 'POST' })
+    } catch { /* expected — server dies mid-response */ }
+    // Wait for backend to come back
+    const deadline = Date.now() + 30_000
+    const poll = async () => {
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1000))
+        try {
+          const res = await fetch('/preflight')
+          if (res.ok) {
+            setRestarting(false)
+            toast.push({ variant: 'success', message: 'Backend restarted' })
+            return
+          }
+        } catch { /* still restarting */ }
+      }
+      setRestarting(false)
+      toast.push({ variant: 'error', message: 'Backend did not come back within 30s' })
+    }
+    poll()
   }
 
   const loadBackendHistory = async () => {
@@ -375,6 +401,24 @@ export default function Settings() {
               disabled={pingState === 'pinging'}
             >
               Test connection
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={restartBackend}
+              disabled={restarting}
+            >
+              {restarting ? (
+                <>
+                  <RefreshCw size={14} className="animate-spin" />
+                  Restarting…
+                </>
+              ) : (
+                <>
+                  <RotateCcw size={14} />
+                  Restart backend
+                </>
+              )}
             </button>
           </div>
           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">

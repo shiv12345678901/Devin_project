@@ -105,6 +105,9 @@ export const api = {
   startHtmlToVideoRun: (html: string, settings: GenerateSettings = {}) =>
     postJson<BackendRunStartResponse>('/runs/html-to-video', { html, ...settings }),
 
+  startYoutubeToVideoRun: (settings: GenerateSettings = {}) =>
+    postJson<BackendRunStartResponse>('/runs/youtube-to-video', settings),
+
   /**
    * Submit pre-captured screenshots to the same MP4/PPTX export pipeline
    * used by Text → Video. The screenshots are uploaded as

@@ -8,6 +8,11 @@ flask-cors==4.0.0
 # Screenshot engine
 playwright==1.40.0
 
+# YouTube screenshots
+yt-dlp>=2026.3.17
+opencv-python>=4.9.0
+numpy>=1.26.0
+
 # Image / PDF processing
 Pillow==10.1.0
 PyMuPDF==1.23.26  # PDF conversion to images

@@ -37,6 +37,10 @@ export interface GenerateSettings {
   model_choice?: string
   system_prompt?: string
   concurrent_pipeline_runs?: boolean
+  // YouTube source mode
+  youtube_url?: string
+  youtube_timestamps?: number[]
+  youtube_quality?: '720p' | '1080p' | 'best'
   // Output paths / names
   output_name?: string
   screenshot_folder?: string

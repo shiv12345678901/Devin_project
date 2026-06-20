@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ArrowRight, Code2, FileText, Image as ImageIcon, Images, Info } from 'lucide-react'
+import { ArrowRight, Code2, FileText, Image as ImageIcon, Images, Info, Video } from 'lucide-react'
 
 const TOOLS = [
   {
@@ -45,6 +45,16 @@ const TOOLS = [
     accent: 'amber',
     highlights: ['Drag-drop multiple PNG/JPG', 'Same export pipeline', 'Canonical filenames'],
   },
+  {
+    to: '/workspace/youtube',
+    title: 'YouTube → Screenshots',
+    tagline: 'Scene change capture',
+    description:
+      'Paste a YouTube URL. The video is downloaded and screenshots are captured at every visual scene change automatically.',
+    icon: Video,
+    accent: 'rose',
+    highlights: ['Auto scene detection', 'Adjustable sensitivity', 'Deduplication'],
+  },
 ] as const
 
 const ACCENT_CLASSES: Record<
@@ -74,6 +84,12 @@ const ACCENT_CLASSES: Record<
     bg: 'bg-amber-50 dark:bg-amber-500/10',
     text: 'text-amber-700 dark:text-amber-200',
     ring: 'group-hover:ring-amber-200 dark:group-hover:ring-amber-500/30',
+  },
+  rose: {
+    border: 'border-rose-200 dark:border-rose-500/30',
+    bg: 'bg-rose-50 dark:bg-rose-500/10',
+    text: 'text-rose-700 dark:text-rose-200',
+    ring: 'group-hover:ring-rose-200 dark:group-hover:ring-rose-500/30',
   },
 }
 
