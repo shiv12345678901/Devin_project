@@ -1,19 +1,24 @@
-import { Play, Upload, X } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { Eye, Play, Upload, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type React from 'react'
 
 import { api } from '../api/client'
 import Checkbox from '../components/Checkbox'
+import PreflightModal from '../components/PreflightModal'
+import { RunReviewPanel } from '../components/RunReviewPanel'
 import { useToast } from '../store/toast'
 import { useRuns } from '../store/runs'
+import {
+  DEFAULT_CLASS_OPTIONS,
+  DEFAULT_SUBJECT_OPTIONS,
+  useSettings,
+} from '../store/settings'
 import type { GenerateSettings, OutputFormat } from '../api/types'
 
 const ACCEPTED_MIME = /^image\/.+$/
 const ACCEPTED_EXT = /\.(png|jpe?g|webp|bmp)$/i
 
-const CLASS_OPTIONS = ['Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12']
-const SUBJECT_OPTIONS = ['Nepali', 'English', 'Science', 'Math', 'Social', 'Model Question']
 const RESOLUTION_OPTIONS: Array<NonNullable<GenerateSettings['resolution']>> = ['720p', '1080p', '1440p', '4k']
 
 const DEFAULT_SETTINGS: GenerateSettings = {
@@ -47,9 +52,24 @@ export default function ScreenshotsToVideo() {
   const [reorderDragKey, setReorderDragKey] = useState<string | null>(null)
   const [reorderOverKey, setReorderOverKey] = useState<string | null>(null)
   const [previewKey, setPreviewKey] = useState<string | null>(null)
+  const [showPreflight, setShowPreflight] = useState(false)
+  const entriesRef = useRef<ScreenshotEntry[]>([])
   const toast = useToast()
   const runs = useRuns()
+  const { settings: appSettings } = useSettings()
   const nav = useNavigate()
+  const classOptions = appSettings.customClassOptions.length > 0
+    ? appSettings.customClassOptions
+    : DEFAULT_CLASS_OPTIONS
+  const subjectOptions = appSettings.customSubjectOptions.length > 0
+    ? appSettings.customSubjectOptions
+    : DEFAULT_SUBJECT_OPTIONS
+  const visibleClassOptions = classOptions.includes(settings.class_name ?? '')
+    ? classOptions
+    : [settings.class_name ?? DEFAULT_SETTINGS.class_name ?? 'Class 10', ...classOptions]
+  const visibleSubjectOptions = subjectOptions.includes(settings.subject ?? '')
+    ? subjectOptions
+    : [settings.subject ?? DEFAULT_SETTINGS.subject ?? 'Nepali', ...subjectOptions]
 
   useEffect(() => {
     if (!previewKey) return
@@ -60,7 +80,18 @@ export default function ScreenshotsToVideo() {
     return () => window.removeEventListener('keydown', onKey)
   }, [previewKey])
 
+  useEffect(() => {
+    entriesRef.current = entries
+  }, [entries])
+
+  useEffect(() => {
+    return () => {
+      for (const entry of entriesRef.current) URL.revokeObjectURL(entry.url)
+    }
+  }, [])
+
   const totalBytes = useMemo(() => entries.reduce((s, e) => s + e.file.size, 0), [entries])
+  const canStart = entries.length > 0 && Boolean(settings.title?.trim())
 
   const acceptFiles = (incoming: FileList | File[] | null) => {
     if (!incoming) return
@@ -138,11 +169,10 @@ export default function ScreenshotsToVideo() {
   const set = <K extends keyof GenerateSettings>(key: K, value: GenerateSettings[K]) =>
     setSettings((prev) => ({ ...prev, [key]: value }))
 
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const validateBeforeStart = () => {
     if (entries.length === 0) {
       toast.push({ variant: 'error', message: 'Add at least one screenshot.' })
-      return
+      return false
     }
     if (!settings.title?.trim()) {
       toast.push({
@@ -150,8 +180,20 @@ export default function ScreenshotsToVideo() {
         title: 'Chapter title required',
         message: 'Provide the chapter title so the canonical filename is correct.',
       })
-      return
+      return false
     }
+    return true
+  }
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!validateBeforeStart()) return
+    setShowPreflight(true)
+  }
+
+  const startRun = async () => {
+    if (!validateBeforeStart()) return
+    setShowPreflight(false)
     setSubmitting(true)
     try {
       const files = entries.map((e) => e.file)
@@ -193,7 +235,7 @@ export default function ScreenshotsToVideo() {
   }
 
   return (
-    <div className="container-form space-y-6">
+    <div className="container-workbench space-y-6">
       <div>
         <div className="eyebrow">
           <span className="h-1 w-1 rounded-full bg-brand-500" />
@@ -210,7 +252,8 @@ export default function ScreenshotsToVideo() {
         </p>
       </div>
 
-      <form onSubmit={onSubmit} className="space-y-4">
+      <div className="workbench-grid">
+      <form onSubmit={onSubmit} className="min-w-0 space-y-4">
         <div className="card">
           <label className="label" htmlFor="screenshots-input">
             Screenshots ({entries.length})
@@ -255,7 +298,7 @@ export default function ScreenshotsToVideo() {
           {entries.length > 0 && (
             <>
               <div className="mt-3 text-[11px] text-muted">
-                Drag tiles to reorder. Double-click any tile to preview at full size.
+                Drag tiles to reorder. Use the preview button to inspect a screenshot at full size.
               </div>
               <ol className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
               {entries.map((entry, index) => (
@@ -305,10 +348,17 @@ export default function ScreenshotsToVideo() {
                   <img
                     src={entry.url}
                     alt={entry.file.name}
-                    className="h-24 w-full cursor-zoom-in object-cover"
-                    onDoubleClick={() => setPreviewKey(entry.key)}
-                    title="Double-click to preview"
+                    className="h-24 w-full object-cover"
                   />
+                  <button
+                    type="button"
+                    className="absolute right-2 top-2 rounded-md bg-black/55 p-1.5 text-white opacity-100 transition hover:bg-black/70 sm:opacity-0 sm:group-hover:opacity-100"
+                    onClick={() => setPreviewKey(entry.key)}
+                    aria-label={`Preview ${entry.file.name}`}
+                    title="Preview"
+                  >
+                    <Eye size={14} />
+                  </button>
                   <div className="px-2 pb-1 pt-1 text-xs">
                     <div className="truncate font-medium text-slate-700 dark:text-slate-200">
                       {index + 1}. {entry.file.name}
@@ -383,7 +433,7 @@ export default function ScreenshotsToVideo() {
               value={settings.class_name ?? ''}
               onChange={(e) => set('class_name', e.target.value)}
             >
-              {CLASS_OPTIONS.map((c) => (
+              {visibleClassOptions.map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
@@ -396,7 +446,7 @@ export default function ScreenshotsToVideo() {
               value={settings.subject ?? ''}
               onChange={(e) => set('subject', e.target.value)}
             >
-              {SUBJECT_OPTIONS.map((s) => (
+              {visibleSubjectOptions.map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
@@ -524,6 +574,41 @@ export default function ScreenshotsToVideo() {
           </span>
         </div>
       </form>
+      <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">
+        <RunReviewPanel
+          title="Review before start"
+          source={[
+            { label: 'Files', value: `${entries.length} screenshot${entries.length === 1 ? '' : 's'}` },
+            { label: 'Size', value: entries.length > 0 ? `${(totalBytes / 1024 / 1024).toFixed(1)} MB` : 'No files yet' },
+          ]}
+          project={[
+            { label: 'Class', value: settings.class_name || '-' },
+            { label: 'Subject', value: settings.subject || '-' },
+            { label: 'Title', value: settings.title || 'Required' },
+          ]}
+          output={[
+            { label: 'Type', value: settings.output_format === 'pptx' ? 'PPTX deck' : 'MP4 video' },
+            { label: 'Resolution', value: settings.output_format === 'video' ? settings.resolution ?? '1080p' : 'Not needed' },
+          ]}
+          settings={[
+            { label: 'Timing', value: settings.auto_timing_screenshot_slides ? 'Auto-paced' : `${settings.fixed_seconds_per_screenshot_slide ?? 5}s per slide` },
+            { label: 'Thumbnails', value: `${settings.intro_thumbnail_enabled ? 'Intro' : ''}${settings.intro_thumbnail_enabled && settings.outro_thumbnail_enabled ? ' + ' : ''}${settings.outro_thumbnail_enabled ? 'Outro' : ''}` || 'None' },
+          ]}
+          dependencies={[
+            { label: 'PowerPoint', value: 'Required for export' },
+            { label: 'Queue', value: 'Visible in Processes' },
+          ]}
+          destination="output/presentations and output/videos"
+          estimate="Usually a few minutes; longer for large screenshot sets"
+          onStart={() => {
+            if (!validateBeforeStart()) return
+            setShowPreflight(true)
+          }}
+          disabled={!canStart || submitting}
+          busy={submitting}
+        />
+      </aside>
+      </div>
 
       {previewKey && (() => {
         const entry = entries.find((e) => e.key === previewKey)
@@ -561,6 +646,13 @@ export default function ScreenshotsToVideo() {
           </div>
         )
       })()}
+      {showPreflight && (
+        <PreflightModal
+          outputFormat={(settings.output_format as OutputFormat) ?? 'video'}
+          onCancel={() => setShowPreflight(false)}
+          onProceed={() => void startRun()}
+        />
+      )}
     </div>
   )
 }

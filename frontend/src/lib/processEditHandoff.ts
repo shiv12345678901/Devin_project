@@ -12,7 +12,7 @@ export interface ReplacementTargets {
 }
 
 export interface ProcessEditHandoff {
-  tool: Exclude<RunTool, 'image-to-video' | 'screenshots-to-video'>
+  tool: Exclude<RunTool, 'image-to-video' | 'screenshots-to-video' | 'youtube-screenshots'>
   text: string
   settings: GenerateSettings
   replaceTargets: ReplacementTargets
@@ -26,7 +26,11 @@ export function readProcessEditHandoff(): ProcessEditHandoff | null {
     const parsed = JSON.parse(raw) as unknown
     if (!parsed || typeof parsed !== 'object') return null
     const draft = parsed as Partial<ProcessEditHandoff>
-    if (draft.tool !== 'text-to-video' && draft.tool !== 'html-to-video') return null
+    if (
+      draft.tool !== 'text-to-video' &&
+      draft.tool !== 'html-to-video' &&
+      draft.tool !== 'youtube-to-video'
+    ) return null
     if (typeof draft.text !== 'string') return null
     return {
       tool: draft.tool,

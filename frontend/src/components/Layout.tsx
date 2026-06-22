@@ -11,6 +11,7 @@ import {
   Loader2,
   Menu,
   RefreshCw,
+  Search,
   UploadCloud,
   Settings as SettingsIcon,
   X,
@@ -18,10 +19,12 @@ import {
 import clsx from 'clsx'
 
 import { api, invalidatePreflightCache } from '../api/client'
+import CommandPalette from './CommandPalette'
 import { useRuns } from '../store/runs'
 import { useGenerationQueue } from '../hooks/useTrackedGenerate'
 import { readSelectedProcessId, SELECTED_PROCESS_EVENT } from '../lib/selectedProcess'
 import { useSettings } from '../store/settings'
+import { preloadRoute } from '../lib/routePreload'
 import Banner from './Banner'
 
 type NavItem = {
@@ -60,8 +63,9 @@ const ROUTE_TITLES: Record<string, string> = {
   '/workspace': 'Workspace',
   '/workspace/text': 'Text → Video',
   '/workspace/html': 'HTML → Video',
-  '/workspace/image': 'Image → Video',
-  '/workspace/youtube': 'YouTube → Screenshots',
+  '/workspace/image': 'Image → Screenshots',
+  '/workspace/youtube': 'YouTube → Video',
+  '/workspace/youtube-screenshots': 'YouTube → Screenshots',
   '/library': 'Library',
   '/publish': 'YouTube Publish',
   '/processes': 'Processes',
@@ -70,6 +74,7 @@ const ROUTE_TITLES: Record<string, string> = {
 
 export default function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
   const { settings, update } = useSettings()
@@ -101,6 +106,27 @@ export default function Layout() {
     const t = setTimeout(() => setMobileOpen(false), 0)
     return () => clearTimeout(t)
   }, [location.pathname])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const typing =
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setPaletteOpen(true)
+        return
+      }
+      if (!typing && event.key === '/') {
+        event.preventDefault()
+        setPaletteOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   return (
     <div className="relative flex min-h-full">
@@ -159,7 +185,7 @@ export default function Layout() {
 
       {/* ─── Main column ────────────────────────────────────────────── */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar onOpenMenu={() => setMobileOpen(true)} />
+        <Topbar onOpenMenu={() => setMobileOpen(true)} onOpenPalette={() => setPaletteOpen(true)} />
         <DocumentTitleSync />
         <BackendOfflineBanner />
         <main className="flex-1 px-4 pb-12 pt-6 md:px-10 md:pt-8">
@@ -168,6 +194,7 @@ export default function Layout() {
           </div>
         </main>
       </div>
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   )
 }
@@ -312,6 +339,8 @@ function SidebarNav({ collapsed = false }: { collapsed?: boolean }) {
                 key={item.to}
                 to={item.to}
                 end={item.end}
+                onMouseEnter={() => preloadRoute(item.to)}
+                onFocus={() => preloadRoute(item.to)}
                 title={collapsed ? (showRunningBadge ? `${item.label} (${badgeLabel})` : item.label) : undefined}
                 className={({ isActive }) =>
                   clsx(
@@ -558,7 +587,7 @@ export function SidebarFooter() {
   )
 }
 
-function Topbar({ onOpenMenu }: { onOpenMenu: () => void }) {
+function Topbar({ onOpenMenu, onOpenPalette }: { onOpenMenu: () => void; onOpenPalette: () => void }) {
   const location = useLocation()
   const path = location.pathname.replace(/\/+$/, '') || '/'
 
@@ -613,12 +642,15 @@ function Topbar({ onOpenMenu }: { onOpenMenu: () => void }) {
       </nav>
 
       <div className="ml-auto flex items-center gap-2">
-        {/* Tiny keyboard hint — like Linear / Raycast. Decorative; no
-            shortcut wired yet, but signals "this app expects keyboard use". */}
-        <span className="hidden items-center gap-1 text-[11px] text-faint md:inline-flex">
-          <span className="kbd">⌘</span>
-          <span className="kbd">K</span>
-        </span>
+        <button
+          type="button"
+          className="hidden items-center gap-2 rounded-md border border-[rgb(var(--line))] bg-[rgb(var(--bg-surface))] px-2.5 py-1.5 text-xs text-muted transition hover:bg-[rgb(var(--bg-muted))] hover:text-[rgb(var(--text-strong))] md:inline-flex"
+          onClick={onOpenPalette}
+        >
+          <Search size={13} />
+          Search
+          <span className="kbd">Ctrl K</span>
+        </button>
       </div>
     </header>
   )

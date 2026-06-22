@@ -223,6 +223,15 @@ def _normalize_error_shape(response):
         pass
     return response
 
+
+@app.after_request
+def _security_headers(response):
+    """Apply conservative headers that are safe for the local web UI."""
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('Referrer-Policy', 'same-origin')
+    response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+    return response
+
 _restart_recovery = mark_interrupted_active_runs()
 _interrupted_count = _restart_recovery.get("interrupted", 0) if isinstance(_restart_recovery, dict) else 0
 _recovered_count = _restart_recovery.get("recovered", 0) if isinstance(_restart_recovery, dict) else 0
@@ -341,6 +350,8 @@ def preflight():
         # cross-platform MoviePy path satisfies this check. The frontend
         # uses it to decide whether to expose the MP4 output option.
         'video_engine': {'ok': False, 'detail': '', 'engines': []},
+        'youtube_cookies': {'ok': False, 'detail': ''},
+        'output_folders': {'ok': False, 'detail': ''},
     }
 
     # AI config: does config/config.py have a non-placeholder API_KEY and at
@@ -449,11 +460,41 @@ def preflight():
             'or run on Windows with PowerPoint.'
         )
 
+    cookies_path = os.path.join(BACKEND_DIR, 'config', 'cookies.txt')
+    try:
+        if os.path.isfile(cookies_path) and os.path.getsize(cookies_path) > 0:
+            checks['youtube_cookies']['ok'] = True
+            checks['youtube_cookies']['detail'] = 'YouTube cookies.txt is present'
+        else:
+            checks['youtube_cookies']['detail'] = (
+                'Optional: add backend/config/cookies.txt if YouTube asks for sign-in'
+            )
+    except Exception as e:
+        checks['youtube_cookies']['detail'] = f'Could not inspect cookies.txt: {e}'
+
+    try:
+        for folder in (
+            os.path.join('output', 'html'),
+            os.path.join('output', 'screenshots'),
+            os.path.join('output', 'presentations'),
+            os.path.join('output', 'videos'),
+            os.path.join('output', 'runs'),
+        ):
+            os.makedirs(folder, exist_ok=True)
+            probe = os.path.join(folder, '.write-test')
+            with open(probe, 'w', encoding='utf-8') as fp:
+                fp.write('ok')
+            os.remove(probe)
+        checks['output_folders']['ok'] = True
+        checks['output_folders']['detail'] = 'Output folders are writable'
+    except Exception as e:
+        checks['output_folders']['detail'] = f'Output folder check failed: {e}'
+
     payload = {
         # Top-level ok: platform, backend, and ai_config must pass. The
         # powerpoint / video_engine / moviepy checks are soft — the wizard
         # gates individual output formats on them instead.
-        'ok': all(c['ok'] for k, c in checks.items() if k not in {'powerpoint', 'video_engine'}),
+        'ok': all(c['ok'] for k, c in checks.items() if k not in {'powerpoint', 'video_engine', 'youtube_cookies'}),
         'checks': checks,
     }
     with _preflight_lock:
@@ -463,6 +504,101 @@ def preflight():
 
 
 # ─── Error handlers ──────────────────────────────────────────────────────
+
+@app.route('/models/check', methods=['POST'])
+def check_models():
+    """Send a tiny request to each configured UI model and report live health."""
+    import time as _time
+
+    try:
+        from openai import OpenAI  # type: ignore
+        import httpx  # type: ignore
+        from config import API_URL, MODELS_CONFIG  # type: ignore
+        from core.ai_client import resolve_model_config  # type: ignore
+    except Exception as exc:
+        return jsonify({
+            'success': False,
+            'error': f'Could not load AI model configuration: {exc}',
+            'results': [],
+        }), 500
+
+    choices = ['default', 'fast', 'balanced', 'quality', 'long', 'short']
+    labels = {
+        'default': 'Qwen 122B default',
+        'fast': 'Fast - DeepSeek V4 Flash',
+        'balanced': 'Balanced - GLM-5.1',
+        'quality': 'Powerful - Nemotron 3 Super 120B',
+        'long': 'Long input - DeepSeek V4 Pro',
+        'short': 'Small / fastest - Llama 3.1 Nemotron Nano 8B',
+    }
+    placeholders = {'', 'your-api-key-here', 'REPLACE_ME'}
+    results = []
+
+    for choice in choices:
+        started = _time.time()
+        try:
+            if choice not in MODELS_CONFIG:
+                raise RuntimeError('Model choice is missing from backend config.')
+            cfg = resolve_model_config(choice)
+            api_key = str(cfg.get('api_key') or '').strip()
+            if api_key in placeholders:
+                raise RuntimeError('API key is missing or still set to the placeholder.')
+
+            extra_body = cfg.get('extra_body')
+            if isinstance(extra_body, dict):
+                extra_body = dict(extra_body)
+                if 'reasoning_budget' in extra_body:
+                    extra_body['reasoning_budget'] = 16
+
+            kwargs = {
+                'model': cfg['model'],
+                'messages': [{'role': 'user', 'content': 'Reply with exactly: OK'}],
+                'temperature': cfg.get('temperature', 0.2),
+                'top_p': cfg.get('top_p', 0.95),
+                'max_tokens': 32,
+                'stream': False,
+            }
+            if extra_body:
+                kwargs['extra_body'] = extra_body
+
+            client = OpenAI(
+                base_url=API_URL,
+                api_key=api_key,
+                timeout=httpx.Timeout(connect=10.0, read=45.0, write=20.0, pool=20.0),
+                max_retries=0,
+            )
+            completion = client.chat.completions.create(**kwargs)
+            content = (completion.choices[0].message.content or '').strip()
+            results.append({
+                'choice': choice,
+                'label': labels.get(choice, choice),
+                'model': cfg['model'],
+                'ok': True,
+                'latency_seconds': round(_time.time() - started, 2),
+                'response_preview': content[:120],
+            })
+        except Exception as exc:
+            model = None
+            try:
+                model = resolve_model_config(choice).get('model')
+            except Exception:
+                pass
+            results.append({
+                'choice': choice,
+                'label': labels.get(choice, choice),
+                'model': model,
+                'ok': False,
+                'latency_seconds': round(_time.time() - started, 2),
+                'error': f'{type(exc).__name__}: {exc}',
+            })
+
+    return jsonify({
+        'success': True,
+        'ok': all(item.get('ok') for item in results),
+        'checked_at': _time.time(),
+        'results': results,
+    })
+
 
 @app.errorhandler(413)
 def _too_large(_err):
@@ -562,6 +698,7 @@ _API_EXACT = {
     '/upload-thumbnail',
     '/thumbnail-templates',
     '/render-thumbnail-template',
+    '/pptx-preview',
 }
 _API_PATH_PREFIXES = (
     '/cancel/',
@@ -570,6 +707,7 @@ _API_PATH_PREFIXES = (
     '/html/',
     '/thumbnails/',
     '/thumbnail-templates/',
+    '/pptx-preview/',
     '/download/',
     '/delete/',
     '/cache/',

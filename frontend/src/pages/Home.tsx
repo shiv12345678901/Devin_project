@@ -34,7 +34,7 @@ const TOOL_META: Record<
     tint: 'text-sky-700 dark:text-sky-200',
   },
   'image-to-video': {
-    label: 'Image → Video',
+    label: 'Image → Screenshots',
     icon: ImageIcon,
     tint: 'text-violet-700 dark:text-violet-200',
   },

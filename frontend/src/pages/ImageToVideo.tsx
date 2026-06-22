@@ -3,17 +3,24 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type React from 'react'
 import BackendRejectedBanner from '../components/BackendRejectedBanner'
+import RunErrorPanel from '../components/RunErrorPanel'
+import { RunReviewPanel } from '../components/RunReviewPanel'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import type { GenerateSettings } from '../api/types'
 
 const ACCEPTED_MIME = /^(image\/.+|application\/pdf)$/
+const clampNumber = (value: unknown, fallback: number, min: number, max: number) => {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
 
 const defaultSettings: GenerateSettings = {
   zoom: 2.1,
   overlap: 20,
   viewport_width: 1920,
   viewport_height: 1080,
-  max_screenshots: 50,
+  max_screenshots: 75,
 }
 
 export default function ImageToVideo() {
@@ -27,10 +34,8 @@ export default function ImageToVideo() {
   const running = state.status === 'running'
   const nav = useNavigate()
 
-  // Drag-and-drop — accepts the first dropped file that matches an image
-  // or a PDF. Mirrors the accept="image/*,application/pdf" rule on the
-  // <input>. We deliberately ignore drops of multiple files; the backend
-  // only processes a single source per run.
+  // Drag-and-drop accepts a single image or PDF. The backend processes one
+  // source per run, so multi-file drops are rejected with a visible message.
   const onDragOver = (e: React.DragEvent<HTMLLabelElement>) => {
     if (running) return
     e.preventDefault()
@@ -45,7 +50,12 @@ export default function ImageToVideo() {
     e.preventDefault()
     setDragActive(false)
     setDropError(null)
-    const dropped = e.dataTransfer?.files?.[0]
+    const droppedFiles = Array.from(e.dataTransfer?.files ?? [])
+    if (droppedFiles.length > 1) {
+      setDropError('Drop one image or PDF at a time. This tool processes a single source per run.')
+      return
+    }
+    const dropped = droppedFiles[0]
     if (!dropped) return
     if (!ACCEPTED_MIME.test(dropped.type) && !dropped.name.match(/\.(png|jpe?g|gif|webp|bmp|pdf)$/i)) {
       setDropError(`Unsupported file type: ${dropped.type || dropped.name}. Drop an image or PDF.`)
@@ -57,34 +67,43 @@ export default function ImageToVideo() {
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!file) return
+    const cleanSettings: GenerateSettings = {
+      ...settings,
+      zoom: clampNumber(settings.zoom, 2.1, 0.1, 5),
+      overlap: clampNumber(settings.overlap, 20, 0, 500),
+      viewport_width: clampNumber(settings.viewport_width, 1920, 320, 7680),
+      viewport_height: clampNumber(settings.viewport_height, 1080, 240, 4320),
+      max_screenshots: Math.round(clampNumber(settings.max_screenshots, 75, 1, 500)),
+    }
     const fd = new FormData()
     fd.append('image', file)
     fd.append('instructions', instructions)
     if (systemPrompt) fd.append('system_prompt', systemPrompt)
-    fd.append('zoom', String(settings.zoom ?? 2.1))
-    fd.append('overlap', String(settings.overlap ?? 20))
-    fd.append('viewport_width', String(settings.viewport_width ?? 1920))
-    fd.append('viewport_height', String(settings.viewport_height ?? 1080))
-    fd.append('max_screenshots', String(settings.max_screenshots ?? 50))
-    const { queueId } = generateFromImage(fd, { files: [file], settings })
+    fd.append('zoom', String(cleanSettings.zoom))
+    fd.append('overlap', String(cleanSettings.overlap))
+    fd.append('viewport_width', String(cleanSettings.viewport_width))
+    fd.append('viewport_height', String(cleanSettings.viewport_height))
+    fd.append('max_screenshots', String(cleanSettings.max_screenshots))
+    const { queueId } = generateFromImage(fd, { files: [file], settings: cleanSettings })
     nav(`/processes?queue=${encodeURIComponent(queueId)}`)
   }
 
   return (
-    <div className="container-form space-y-6">
+    <div className="container-workbench space-y-6">
       <div>
         <div className="eyebrow">
           <span className="h-1 w-1 rounded-full bg-brand-500" />
-          Tool · Image → Video
+          Tool · Image → Screenshots
         </div>
-        <h1 className="h-page mt-2">Image / PDF to Video</h1>
+        <h1 className="h-page mt-2">Image / PDF to Screenshots</h1>
         <p className="mt-2 text-sm text-muted">
           Upload a screenshot, photo, or PDF. Vision AI extracts text, formats it as HTML, and
-          captures screenshots.
+          captures screenshots for the Library.
         </p>
       </div>
 
-      <form onSubmit={onSubmit} className="space-y-4">
+      <div className="workbench-grid">
+      <form onSubmit={onSubmit} className="min-w-0 space-y-4">
         <div className="card">
           <label className="label" htmlFor="image-file-input">Source file</label>
           <label
@@ -118,7 +137,13 @@ export default function ImageToVideo() {
               className="hidden"
               accept="image/*,application/pdf"
               onChange={(e) => {
-                setFile(e.target.files?.[0] ?? null)
+                const picked = Array.from(e.target.files ?? [])
+                if (picked.length > 1) {
+                  setDropError('Pick one image or PDF at a time. This tool processes a single source per run.')
+                  setFile(null)
+                  return
+                }
+                setFile(picked[0] ?? null)
                 setDropError(null)
               }}
               disabled={running}
@@ -168,9 +193,11 @@ export default function ImageToVideo() {
                 id="img-zoom"
                 type="number"
                 step="0.1"
+                min={0.1}
+                max={5}
                 className="input"
                 value={settings.zoom ?? 2.1}
-                onChange={(e) => setSettings({ ...settings, zoom: Number(e.target.value) })}
+                onChange={(e) => setSettings({ ...settings, zoom: clampNumber(e.target.value, 2.1, 0.1, 5) })}
                 disabled={running}
               />
             </Field>
@@ -178,9 +205,11 @@ export default function ImageToVideo() {
               <input
                 id="img-overlap"
                 type="number"
+                min={0}
+                max={500}
                 className="input"
                 value={settings.overlap ?? 20}
-                onChange={(e) => setSettings({ ...settings, overlap: Number(e.target.value) })}
+                onChange={(e) => setSettings({ ...settings, overlap: clampNumber(e.target.value, 20, 0, 500) })}
                 disabled={running}
               />
             </Field>
@@ -188,10 +217,12 @@ export default function ImageToVideo() {
               <input
                 id="img-max"
                 type="number"
+                min={1}
+                max={500}
                 className="input"
-                value={settings.max_screenshots ?? 50}
+                value={settings.max_screenshots ?? 75}
                 onChange={(e) =>
-                  setSettings({ ...settings, max_screenshots: Number(e.target.value) })
+                  setSettings({ ...settings, max_screenshots: Math.round(clampNumber(e.target.value, 75, 1, 500)) })
                 }
                 disabled={running}
               />
@@ -202,10 +233,12 @@ export default function ImageToVideo() {
               <input
                 id="img-vw"
                 type="number"
+                min={320}
+                max={7680}
                 className="input"
                 value={settings.viewport_width ?? 1920}
                 onChange={(e) =>
-                  setSettings({ ...settings, viewport_width: Number(e.target.value) })
+                  setSettings({ ...settings, viewport_width: clampNumber(e.target.value, 1920, 320, 7680) })
                 }
                 disabled={running}
               />
@@ -214,10 +247,12 @@ export default function ImageToVideo() {
               <input
                 id="img-vh"
                 type="number"
+                min={240}
+                max={4320}
                 className="input"
                 value={settings.viewport_height ?? 1080}
                 onChange={(e) =>
-                  setSettings({ ...settings, viewport_height: Number(e.target.value) })
+                  setSettings({ ...settings, viewport_height: clampNumber(e.target.value, 1080, 240, 4320) })
                 }
                 disabled={running}
               />
@@ -228,17 +263,24 @@ export default function ImageToVideo() {
         <div className="flex flex-wrap items-center gap-3">
           {!running ? (
             <button type="submit" className="btn-primary" disabled={!file}>
-              <Play size={16} /> Generate
+              <Play size={16} /> Generate screenshots
             </button>
           ) : (
             <button type="button" className="btn-danger" onClick={() => cancel()}>
               <StopCircle size={16} /> Cancel
             </button>
           )}
-          {state.status === 'error' && !state.rejectedReason && (
-            <span className="text-sm text-red-600 dark:text-red-400">{state.error}</span>
-          )}
         </div>
+        {state.status === 'error' && !state.rejectedReason && (
+          <RunErrorPanel
+            title="Image/PDF extraction failed"
+            message={state.error ?? 'The backend could not generate screenshots.'}
+            onRetry={() => {
+              const form = document.querySelector('form')
+              form?.requestSubmit()
+            }}
+          />
+        )}
         {state.status === 'error' && state.rejectedReason && (
           <BackendRejectedBanner
             reason={state.rejectedReason}
@@ -246,7 +288,38 @@ export default function ImageToVideo() {
           />
         )}
       </form>
-
+      <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">
+        <RunReviewPanel
+          title="Review before start"
+          source={[
+            { label: 'File', value: file?.name ?? 'No file selected' },
+            { label: 'Type', value: file?.type || 'Image or PDF' },
+          ]}
+          output={[
+            { label: 'Type', value: 'HTML + screenshots' },
+            { label: 'Limit', value: `${settings.max_screenshots ?? 75} screenshots` },
+          ]}
+          settings={[
+            { label: 'Viewport', value: `${settings.viewport_width ?? 1920} x ${settings.viewport_height ?? 1080}` },
+            { label: 'Zoom', value: `${settings.zoom ?? 2.1}x` },
+            { label: 'Overlap', value: `${settings.overlap ?? 20}px` },
+          ]}
+          dependencies={[
+            { label: 'Vision AI', value: 'Required' },
+            { label: 'Browser capture', value: 'Required' },
+          ]}
+          destination="output/html and output/screenshots"
+          estimate="Usually 1-3 minutes depending on source size"
+          onStart={() => {
+            const form = document.querySelector('form')
+            form?.requestSubmit()
+          }}
+          disabled={!file || running}
+          busy={running}
+          startLabel="Generate screenshots"
+        />
+      </aside>
+      </div>
     </div>
   )
 }

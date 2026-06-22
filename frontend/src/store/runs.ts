@@ -11,6 +11,7 @@ export type RunTool =
   | 'image-to-video'
   | 'screenshots-to-video'
   | 'youtube-to-video'
+  | 'youtube-screenshots'
 export type RunStatus = 'running' | 'success' | 'error' | 'cancelled'
 
 export interface RunSettings {
@@ -60,6 +61,7 @@ export interface Run {
   videoFile?: string
   operationId?: string
   error?: string
+  metrics?: Record<string, unknown>
 }
 
 export interface RunsContextValue {
@@ -82,6 +84,7 @@ export interface RunsContextValue {
         | 'message'
         | 'progress'
         | 'etaSeconds'
+        | 'metrics'
       >
     >,
   ) => void

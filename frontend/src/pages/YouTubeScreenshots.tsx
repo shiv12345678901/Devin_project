@@ -23,6 +23,11 @@ import {
 } from 'lucide-react'
 
 import AssetPreviewModal from '../components/AssetPreviewModal'
+import { useConfirm } from '../components/ConfirmDialog'
+import RunErrorPanel from '../components/RunErrorPanel'
+import { RunReviewPanel } from '../components/RunReviewPanel'
+import { buildUrl } from '../api/client'
+import { useRuns } from '../store/runs'
 import { useToast } from '../store/toast'
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -83,10 +88,10 @@ interface FolderListResponse {
 }
 
 const ytScreenshotUrl = (folder: string, file: string) =>
-  `/youtube-screenshots/file/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`
+  buildUrl(`/youtube-screenshots/file/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`)
 
 const ytFolderUrl = (path: string, folder: string) =>
-  `/youtube-screenshots/${path}/${encodeURIComponent(folder)}`
+  buildUrl(`/youtube-screenshots/${path}/${encodeURIComponent(folder)}`)
 
 const downloadBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob)
@@ -103,6 +108,8 @@ const downloadBlob = (blob: Blob, filename: string) => {
 
 export default function YouTubeScreenshots() {
   const toast = useToast()
+  const confirm = useConfirm()
+  const runs = useRuns()
   const [url, setUrl] = useState('')
   const [timestampsRaw, setTimestampsRaw] = useState('')
 
@@ -128,10 +135,11 @@ export default function YouTubeScreenshots() {
   const [preview, setPreview] = useState<{ folder: string; files: string[]; index: number } | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
+  const runIdRef = useRef<string | null>(null)
 
   // Check if tool is available on mount
   useEffect(() => {
-    fetch('/youtube-screenshots/check')
+    fetch(buildUrl('/youtube-screenshots/check'))
       .then((r) => r.json())
       .then((d: CheckResponse) => {
         setAvailable(d.available)
@@ -148,7 +156,7 @@ export default function YouTubeScreenshots() {
 
   // Load saved folders
   const loadFolders = useCallback((page = folderPage) => {
-    fetch(`/youtube-screenshots/list?page=${page}&size=${folderPageSize}`)
+    fetch(buildUrl(`/youtube-screenshots/list?page=${page}&size=${folderPageSize}`))
       .then((r) => r.json())
       .then((d: FolderListResponse) => {
         setFolders(d.folders || [])
@@ -179,9 +187,24 @@ export default function YouTubeScreenshots() {
     switch (payload.type) {
       case 'started':
         setOperationId(payload.operation_id || '')
+        if (runIdRef.current) {
+          runs.update(runIdRef.current, {
+            operationId: payload.operation_id,
+            stage: 'started',
+            message: payload.message || 'Starting YouTube screenshot capture',
+            progress: payload.percent ?? 0,
+          })
+        }
         break
       case 'progress':
         setProgress(payload)
+        if (runIdRef.current) {
+          runs.update(runIdRef.current, {
+            stage: payload.stage,
+            message: payload.message,
+            progress: payload.percent,
+          })
+        }
         if (payload.stage === 'complete' && payload.folder && payload.files) {
           setResult({
             folder: payload.folder,
@@ -190,22 +213,69 @@ export default function YouTubeScreenshots() {
             duration: payload.duration || 0,
           })
           setStatus('done')
+          if (runIdRef.current) {
+            runs.finish(runIdRef.current, {
+              status: 'success',
+              stage: 'complete',
+              message: `${payload.files.length} screenshots captured`,
+              progress: 100,
+              screenshotFolder: payload.folder,
+            })
+            runIdRef.current = null
+          }
           loadFolders(1)
         }
         break
       case 'error':
         setError(payload.message || 'Extraction failed')
         setStatus('error')
+        if (runIdRef.current) {
+          runs.finish(runIdRef.current, {
+            status: 'error',
+            error: payload.message || 'Extraction failed',
+            stage: 'error',
+            message: payload.message || 'Extraction failed',
+            progress: 100,
+          })
+          runIdRef.current = null
+        }
         break
       case 'cancelled':
         setStatus('cancelled')
+        if (runIdRef.current) {
+          runs.finish(runIdRef.current, {
+            status: 'cancelled',
+            stage: 'cancelled',
+            message: 'Cancelled',
+            progress: 100,
+          })
+          runIdRef.current = null
+        }
         break
       case 'complete':
+        if (payload.folder && payload.files) {
+          setResult({
+            folder: payload.folder,
+            files: payload.files,
+            title: payload.title || '',
+            duration: payload.duration || 0,
+          })
+        }
         setStatus((s) => s === 'running' ? 'done' : s)
+        if (runIdRef.current) {
+          runs.finish(runIdRef.current, {
+            status: 'success',
+            stage: 'complete',
+            message: `${payload.files?.length ?? payload.screenshot_count ?? 0} screenshots captured`,
+            progress: 100,
+            screenshotFolder: payload.folder,
+          })
+          runIdRef.current = null
+        }
         loadFolders(1)
         break
     }
-  }, [loadFolders])
+  }, [loadFolders, runs])
 
   // Start extraction
   const startExtraction = useCallback(() => {
@@ -217,11 +287,23 @@ export default function YouTubeScreenshots() {
     setProgress(null)
     setResult(null)
     setError('')
+    runIdRef.current = runs.start({
+      tool: 'youtube-screenshots',
+      inputPreview: `${url.trim()} (${timestamps.length} timestamp${timestamps.length === 1 ? '' : 's'})`,
+      inputText: `${url.trim()}\nTimestamps: ${timestamps.join(', ')}`,
+      settings: {
+        youtube_url: url.trim(),
+        youtube_timestamps: timestamps,
+      },
+      stage: 'queued',
+      message: 'Queued YouTube screenshot capture',
+      progress: 0,
+    })
 
     const abort = new AbortController()
     abortRef.current = abort
 
-    fetch('/youtube-screenshots/start', {
+    fetch(buildUrl('/youtube-screenshots/start'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -242,10 +324,19 @@ export default function YouTubeScreenshots() {
         function read(): Promise<void> {
           if (!reader) return Promise.resolve()
           return reader.read().then(({ done, value }) => {
-            if (done) {
-              setStatus((s) => s === 'running' ? 'done' : s)
-              loadFolders(1)
-              return
+          if (done) {
+            setStatus((s) => s === 'running' ? 'done' : s)
+            if (runIdRef.current) {
+              runs.finish(runIdRef.current, {
+                status: 'success',
+                stage: 'complete',
+                message: 'YouTube screenshot stream finished',
+                progress: 100,
+              })
+              runIdRef.current = null
+            }
+            loadFolders(1)
+            return
             }
 
             buffer += decoder.decode(value, { stream: true })
@@ -270,32 +361,66 @@ export default function YouTubeScreenshots() {
       .catch((e) => {
         if (e.name === 'AbortError') {
           setStatus('cancelled')
+          if (runIdRef.current) {
+            runs.finish(runIdRef.current, {
+              status: 'cancelled',
+              stage: 'cancelled',
+              message: 'Cancelled',
+              progress: 100,
+            })
+            runIdRef.current = null
+          }
         } else {
           setError(e.message || 'Unknown error')
           setStatus('error')
+          if (runIdRef.current) {
+            runs.finish(runIdRef.current, {
+              status: 'error',
+              error: e.message || 'Unknown error',
+              stage: 'error',
+              message: e.message || 'Unknown error',
+              progress: 100,
+            })
+            runIdRef.current = null
+          }
         }
       })
-  }, [url, timestampsRaw, loadFolders, handleEvent])
+  }, [url, timestampsRaw, loadFolders, handleEvent, runs])
 
   // Cancel
   const cancel = useCallback(() => {
     abortRef.current?.abort()
     if (operationId) {
-      fetch(`/youtube-screenshots/cancel/${encodeURIComponent(operationId)}`, { method: 'POST' }).catch(() => {})
+      fetch(buildUrl(`/youtube-screenshots/cancel/${encodeURIComponent(operationId)}`), { method: 'POST' }).catch(() => {})
     }
     setStatus('cancelled')
-  }, [operationId])
+    if (runIdRef.current) {
+      runs.finish(runIdRef.current, {
+        status: 'cancelled',
+        stage: 'cancelled',
+        message: 'Cancelled',
+        progress: 100,
+      })
+      runIdRef.current = null
+    }
+  }, [operationId, runs])
 
   // Delete folder
-  const deleteFolder = useCallback((name: string) => {
-    if (!confirm(`Delete "${name}" and all its screenshots?`)) return
+  const deleteFolder = useCallback(async (name: string) => {
+    const ok = await confirm({
+      title: `Delete "${name}"?`,
+      message: 'This permanently removes the extraction folder and all screenshots inside it.',
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    })
+    if (!ok) return
     fetch(ytFolderUrl('delete', name), { method: 'DELETE' })
       .then(() => {
         toast.push({ variant: 'success', message: 'Extraction deleted.' })
         loadFolders()
       })
       .catch(() => toast.push({ variant: 'error', message: 'Could not delete extraction.' }))
-  }, [loadFolders, toast])
+  }, [confirm, loadFolders, toast])
 
   const downloadFolder = useCallback((folder: SavedFolder) => {
     fetch(ytFolderUrl('download-zip', folder.name))
@@ -319,6 +444,8 @@ export default function YouTubeScreenshots() {
       toast.push({ variant: 'error', message: 'Could not copy folder path.' })
     }
   }, [toast])
+
+  const parsedTimestamps = parseTimestamps(timestampsRaw)
 
   // ─── Render ────────────────────────────────────────────────────────────
 
@@ -354,7 +481,7 @@ export default function YouTubeScreenshots() {
   }
 
   return (
-    <div className="container-form space-y-8">
+    <div className="container-workbench space-y-8">
       {/* Header */}
       <header>
         <div className="eyebrow">
@@ -367,6 +494,8 @@ export default function YouTubeScreenshots() {
         </p>
       </header>
 
+      <div className="workbench-grid">
+      <div className="min-w-0 space-y-5">
       {/* Input form */}
       <div className="surface p-6 space-y-5">
         {!hasCookies && (
@@ -473,14 +602,41 @@ export default function YouTubeScreenshots() {
 
       {/* Error */}
       {status === 'error' && error && (
-        <div className="surface border-rose-200 dark:border-rose-500/30 p-5 flex items-start gap-3">
-          <AlertCircle size={18} className="text-rose-500 mt-0.5 shrink-0" />
-          <div>
-            <p className="text-sm font-medium text-rose-700 dark:text-rose-300">Extraction failed</p>
-            <p className="mt-1 text-sm text-muted">{error}</p>
-          </div>
-        </div>
+        <RunErrorPanel
+          title="YouTube screenshot capture failed"
+          message={error}
+          onRetry={startExtraction}
+        />
       )}
+      </div>
+      <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">
+        <RunReviewPanel
+          title="Review before start"
+          source={[
+            { label: 'URL', value: url.trim() || 'No URL entered' },
+            { label: 'Timestamps', value: `${parsedTimestamps.length} timestamp${parsedTimestamps.length === 1 ? '' : 's'}` },
+          ]}
+          output={[
+            { label: 'Type', value: 'Screenshot folder + ZIP' },
+            { label: 'Saved as', value: 'YouTube extraction folder' },
+          ]}
+          settings={[
+            { label: 'yt-dlp', value: ytDlpVersion || 'unknown' },
+            { label: 'Cookies', value: hasCookies ? 'Configured' : 'Optional / missing' },
+          ]}
+          dependencies={[
+            { label: 'yt-dlp', value: available ? 'Available' : 'Missing' },
+            { label: 'Cookies', value: hasCookies ? 'Ready' : 'May be needed' },
+          ]}
+          destination="output/youtube_screenshots"
+          estimate="Usually under a minute for short timestamp lists"
+          onStart={startExtraction}
+          disabled={!url.trim() || parsedTimestamps.length === 0 || status === 'running'}
+          busy={status === 'running'}
+          startLabel="Capture screenshots"
+        />
+      </aside>
+      </div>
 
       {/* Result */}
       {status === 'done' && result && (

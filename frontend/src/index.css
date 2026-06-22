@@ -286,6 +286,18 @@
     @apply mx-auto w-full max-w-5xl;
   }
 
+  .container-workbench {
+    @apply mx-auto w-full max-w-7xl;
+  }
+
+  .workbench-grid {
+    @apply grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px];
+  }
+
+  .settings-section {
+    @apply border-t border-[rgb(var(--line-soft))] pt-5 first:border-t-0 first:pt-0;
+  }
+
   /* Sticky action bar used at the bottom of long forms / wizards.
      Sits flush with the viewport bottom, gets a hairline top border
      and a soft surface tint so it reads above the form content. */

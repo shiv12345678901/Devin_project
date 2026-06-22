@@ -14,6 +14,7 @@ from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from core.ai_client import (
     CancelledError,
+    append_missing_content,
     get_ai_response,
     register_operation,
     unregister_operation,
@@ -28,6 +29,7 @@ from core.run_manager import (
     find_recent_run_by_fingerprint,
     get_run,
     list_runs,
+    update_metrics,
 )
 from core.workflow_runner import WorkflowContext, subscribe_run, unsubscribe_run
 from routes.helpers import (
@@ -39,6 +41,7 @@ from routes.helpers import (
     take_screenshots,
     youtube_video_stem,
 )
+from utils.content_matcher import match_input_to_html
 from utils.eta_tracker import eta_tracker
 
 
@@ -271,6 +274,38 @@ def _delete_generated_outputs(outputs: dict) -> None:
                 candidate.unlink()
         except Exception:
             pass
+
+
+def _read_run_html_for_match(outputs: dict) -> tuple[str | None, str | None]:
+    html_file = outputs.get("html_file") or outputs.get("html_filename")
+    if not html_file:
+        return None, "Run has no HTML output to compare."
+    html_path = Path("output/html") / str(html_file)
+    try:
+        resolved = html_path.resolve()
+        root = Path("output/html").resolve()
+        if root not in resolved.parents and resolved != root:
+            return None, "Unsafe HTML output path."
+        if not resolved.exists():
+            return None, f"HTML output not found: {html_file}"
+        return resolved.read_text(encoding="utf-8", errors="replace"), None
+    except Exception as exc:
+        return None, f"Could not read HTML output: {exc}"
+
+
+def _compute_and_store_content_match(run_id: str) -> tuple[dict | None, str | None]:
+    run = get_run(run_id, include_input=True)
+    if not run:
+        return None, "Run not found."
+    input_text = str(run.get("input") or "")
+    if not input_text.strip():
+        return None, "Run has no saved input text to compare."
+    html_text, error = _read_run_html_for_match(run.get("outputs") or {})
+    if error:
+        return None, error
+    match = match_input_to_html(input_text, html_text or "")
+    update_metrics(run_id, {"content_match": match})
+    return match, None
 
 
 def _delete_outputs_on_cancel_requested(run_id: str) -> bool:
@@ -673,6 +708,15 @@ def run_detail(run_id: str):
     return jsonify({"success": True, "run": run})
 
 
+@runs_bp.route("/runs/<run_id>/content-match", methods=["POST"])
+def run_content_match(run_id: str):
+    match, error = _compute_and_store_content_match(run_id)
+    if error:
+        return jsonify({"success": False, "error": error}), 400
+    run = get_run(run_id)
+    return jsonify({"success": True, "content_match": match, "run": run})
+
+
 @runs_bp.route("/runs/<run_id>/events", methods=["GET"])
 def run_events(run_id: str):
     if not get_run(run_id):
@@ -751,7 +795,7 @@ def start_text_to_video():
     overlap = int(data.get("overlap") or 15)
     viewport_width = int(data.get("viewport_width") or 1920)
     viewport_height = int(data.get("viewport_height") or 1080)
-    max_screenshots = int(data.get("max_screenshots") or 50)
+    max_screenshots = int(data.get("max_screenshots") or 75)
     auto_timing_screenshot_slides = _bool_value(data.get("auto_timing_screenshot_slides"), True)
     fixed_seconds_per_screenshot_slide = _positive_float(data.get("fixed_seconds_per_screenshot_slide"), 5.0)
     slide_duration = _positive_float(data.get("slide_duration_sec"), 5.0)
@@ -980,7 +1024,23 @@ def start_text_to_video():
             if not html_content:
                 ctx.fail("Failed to generate HTML", progress=10)
                 return
-            ctx.metrics({"ai_seconds": round(time.time() - ai_started, 2), "html_characters": len(html_content)})
+            ctx.progress("ai_verify", 29, "Checking HTML completeness...")
+            repaired_html, missing_reason = append_missing_content(
+                text,
+                html_content,
+                cancel_event=ctx.cancel_event,
+                model_choice=model_choice,
+            )
+            ctx.check_cancelled()
+            if missing_reason:
+                html_content = repaired_html
+                ctx.progress("ai_repair", 30, f"Added missing content: {missing_reason}")
+            content_match = match_input_to_html(text, html_content)
+            ctx.metrics({
+                "ai_seconds": round(time.time() - ai_started, 2),
+                "html_characters": len(html_content),
+                "content_match": content_match,
+            })
 
             if beautify_html:
                 try:
@@ -1504,7 +1564,7 @@ def start_html_to_video():
     overlap = int(data.get("overlap") or 15)
     viewport_width = int(data.get("viewport_width") or 1920)
     viewport_height = int(data.get("viewport_height") or 1080)
-    max_screenshots = int(data.get("max_screenshots") or 50)
+    max_screenshots = int(data.get("max_screenshots") or 75)
     close_powerpoint = _bool_value(data.get("close_powerpoint_before_start"), True)
     auto_timing_screenshot_slides = _bool_value(data.get("auto_timing_screenshot_slides"), True)
     fixed_seconds_per_screenshot_slide = _positive_float(data.get("fixed_seconds_per_screenshot_slide"), 5.0)
@@ -1663,6 +1723,7 @@ def start_html_to_video():
 
             html_filename, _ = save_html(html_content, prefix=operation_id, folder="output/html")
             ctx.output("html_file", html_filename)
+            ctx.metrics({"content_match": match_input_to_html(html_content, html_content)})
             ctx.progress("html_saved", 30, "HTML saved; starting screenshots...", data=progress_data)
 
             html_outputs = {

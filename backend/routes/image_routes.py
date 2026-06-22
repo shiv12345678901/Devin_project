@@ -105,7 +105,7 @@ def image_to_screenshots_sse():
         overlap = int(request.form.get('overlap', 20))
         viewport_width = int(request.form.get('viewport_width', 1920))
         viewport_height = int(request.form.get('viewport_height', 1080))
-        max_screenshots = int(request.form.get('max_screenshots', 50))
+        max_screenshots = int(request.form.get('max_screenshots', 75))
         system_prompt = request.form.get('system_prompt', '')
 
         # Save temp file
@@ -248,11 +248,11 @@ def image_to_screenshots_sse():
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshots', 'message': 'Generating screenshots from HTML...', 'progress': 65})}\n\n"
 
                 batch_id = get_next_batch_id()
-                screenshot_folder = os.path.join(OUTPUT_FOLDER, f"batch {batch_id}")
+                screenshot_folder = f"batch {batch_id}"
 
                 screenshot_files, screenshot_names = take_screenshots(
                     html_content, batch_id,
-                    screenshot_folder=screenshot_folder,
+                    screenshot_folder=OUTPUT_FOLDER,
                     zoom=zoom, overlap=overlap,
                     viewport_width=viewport_width, viewport_height=viewport_height,
                     max_screenshots=max_screenshots
@@ -267,7 +267,7 @@ def image_to_screenshots_sse():
                     'tool': 'image-to-screenshots',
                     'input_preview': raw_text[:200],
                     'html_file': html_filename,
-                    'screenshot_folder': f"batch {batch_id}",
+                    'screenshot_folder': screenshot_folder,
                     'screenshot_count': len(screenshot_files),
                     'operation_id': operation_id,
                     'settings': {'zoom': zoom, 'overlap': overlap, 'width': viewport_width, 'height': viewport_height},
@@ -275,7 +275,7 @@ def image_to_screenshots_sse():
 
                 yield f"data: {json.dumps({'type': 'progress', 'stage': 'screenshots_complete', 'message': 'Screenshots captured successfully', 'progress': 90})}\n\n"
 
-                yield f"data: {json.dumps({'type': 'complete', 'stage': 'complete', 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'progress': 100, 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': [f'batch {batch_id}/{name}' for name in screenshot_names], 'screenshot_count': len(screenshot_files), 'screenshot_folder': f'batch {batch_id}', 'operation_id': operation_id, 'raw_text': raw_text})}\n\n"
+                yield f"data: {json.dumps({'type': 'complete', 'stage': 'complete', 'message': f'Successfully generated {len(screenshot_files)} screenshot(s)', 'progress': 100, 'html_filename': html_filename, 'html_content': html_content, 'screenshot_files': screenshot_names, 'screenshot_count': len(screenshot_files), 'screenshot_folder': screenshot_folder, 'operation_id': operation_id, 'raw_text': raw_text})}\n\n"
 
             except CancelledError:
                 # Must be caught before the generic Exception handler, otherwise

@@ -13,6 +13,21 @@ _NON_RETRYABLE_NAMES = frozenset({
     'GeneratorExit',
 })
 
+_NON_RETRYABLE_PROVIDER_MARKERS = (
+    'degraded function cannot be invoked',
+    '404 page not found',
+    'model not found',
+    'model_not_found',
+)
+
+
+def _is_non_retryable_provider_error(exc):
+    """Provider errors that should fail over immediately instead of backing off."""
+    if type(exc).__name__ == 'NotFoundError':
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in _NON_RETRYABLE_PROVIDER_MARKERS)
+
 
 def retry_with_backoff(max_retries=3, base_delay=1, max_delay=30, exceptions_to_skip=()):
     """
@@ -37,6 +52,9 @@ def retry_with_backoff(max_retries=3, base_delay=1, max_delay=30, exceptions_to_
                 except Exception as e:
                     # Let cancellations and shutdowns propagate instantly.
                     if type(e).__name__ in _NON_RETRYABLE_NAMES:
+                        raise
+                    if _is_non_retryable_provider_error(e):
+                        print(f"⚠️  Non-retryable provider error: {str(e)}")
                         raise
 
                     retries += 1

@@ -164,7 +164,7 @@ def sanitize_filename(name, default):
 
 def take_screenshots(html_content, screenshot_name, screenshot_folder=None,
                      zoom=2.1, overlap=15, viewport_width=1920,
-                     viewport_height=1080, max_screenshots=50,
+                     viewport_height=1080, max_screenshots=75,
                      progress_callback=None, cancel_event=None):
     """
     Shared screenshot helper that handles:

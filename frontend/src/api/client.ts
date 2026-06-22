@@ -6,6 +6,8 @@ import type {
   ListResponse,
   ListCategory,
   ListCategoryResponse,
+  LogTailResponse,
+  ModelCheckResponse,
   PreflightResponse,
   SseEvent,
   BackendRunStartResponse,
@@ -13,6 +15,7 @@ import type {
   PendingClientQueueItem,
   SavedThumbnailTemplate,
   YoutubeVideosResponse,
+  PptxPreviewResponse,
 } from './types'
 
 // Base URL for the Flask backend. Starts from the build-time env var, but can
@@ -29,7 +32,7 @@ export function getBackendBaseUrl(): string {
   return API_BASE
 }
 
-function buildUrl(path: string): string {
+export function buildUrl(path: string): string {
   if (!API_BASE) return path
   return `${API_BASE.replace(/\/$/, '')}${path}`
 }
@@ -40,6 +43,9 @@ async function parseJson<T>(res: Response): Promise<T> {
   try {
     return JSON.parse(text) as T
   } catch {
+    if (/^\s*<!doctype html/i.test(text) || /^\s*<html/i.test(text)) {
+      throw new Error(`Backend returned the frontend HTML page for ${res.url}. Check the backend URL/proxy and restart the dev server.`)
+    }
     throw new Error(`Invalid JSON response (${res.status}): ${text.slice(0, 200)}`)
   }
 }
@@ -63,6 +69,9 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   try {
     data = JSON.parse(text) as T & { error?: string }
   } catch {
+    if (/^\s*<!doctype html/i.test(text) || /^\s*<html/i.test(text)) {
+      throw new Error(`Backend returned the frontend HTML page for ${res.url}. Check the backend URL/proxy and restart the dev server.`)
+    }
     throw new Error(`Invalid JSON response (${res.status}): ${text.slice(0, 200)}`)
   }
   if (!res.ok || data.error) {
@@ -155,6 +164,12 @@ export const api = {
   getRun: (runId: string) =>
     getJson<BackendRunDetail>(`/runs/${encodeURIComponent(runId)}`),
 
+  runContentMatch: (runId: string) =>
+    postJson<{ success: boolean; content_match?: Record<string, unknown>; run?: BackendRunDetail['run'] }>(
+      `/runs/${encodeURIComponent(runId)}/content-match`,
+      {},
+    ),
+
   /**
    * Subscribe to a server-sent event stream for a run. Used by the
    * Processes page to react to status changes immediately instead of
@@ -223,6 +238,9 @@ export const api = {
   history: () => getJson<HistoryEntry[]>('/history'),
   youtubeVideos: () => getJson<YoutubeVideosResponse>('/youtube/videos'),
   clearHistory: () => postJson<{ success: boolean; message: string }>('/history/clear', {}),
+  checkModels: () => postJson<ModelCheckResponse>('/models/check', {}),
+  pptxPreview: (presentationFile: string) =>
+    postJson<PptxPreviewResponse>('/pptx-preview', { presentation_file: presentationFile }),
   deleteFile: async (type: 'screenshot' | 'html' | 'presentation' | 'video', filename: string) => {
     // Encode each path segment separately. encodeURIComponent would escape
     // `/` as `%2F`, which Werkzeug's dev server does NOT decode back to `/`
@@ -280,6 +298,8 @@ export const api = {
   },
 
   cacheStats: () => getJson<CacheStats>('/cache/stats'),
+  logTail: (operationId: string, tail = 200) =>
+    getJson<LogTailResponse>(`/logs/${encodeURIComponent(operationId)}?tail=${encodeURIComponent(String(tail))}`),
   clearCache: () => postJson<{ success: boolean; message: string }>('/cache/clear', {}),
 
   /**
@@ -297,6 +317,8 @@ export const api = {
     buildUrl(`/download/${filepath.split(/[\\/]/).map(encodeURIComponent).join('/')}`),
   thumbnailUrl: (filename: string) =>
     buildUrl(`/thumbnails/${encodeURIComponent(filename)}`),
+  pptxPreviewUrl: (filename: string) =>
+    buildUrl(`/pptx-preview/${filename.split('/').map(encodeURIComponent).join('/')}`),
 
   listThumbnailTemplates: (className?: string, subject?: string) => {
     const params = new URLSearchParams()

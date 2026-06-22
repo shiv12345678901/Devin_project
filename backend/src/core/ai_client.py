@@ -1,5 +1,6 @@
 """AI API client for processing text input."""
 import os
+import re
 import sys
 import threading
 import httpx  # type: ignore
@@ -20,6 +21,189 @@ from retry_handler import retry_with_backoff  # type: ignore
 
 # Initialize cache manager
 cache = CacheManager()
+
+MODEL_SLUG_ALIASES = {
+    "z-ai/glm-4.7": "z-ai/glm-5.1",
+    "deepseek-ai/deepseek-v3.2": "nvidia/nemotron-3-super-120b-a12b",
+    "meta/llama-3.1-8b-instruct": "nvidia/llama-3.1-nemotron-nano-8b-v1",
+}
+
+MODEL_FALLBACK_ORDER = ("balanced", "fast", "long", "quality", "short", "default")
+
+
+def resolve_model_config(model_choice='default'):
+    """Return a copy of the selected model config with deprecated slugs upgraded."""
+    model_config = dict(MODELS_CONFIG.get(model_choice, MODELS_CONFIG['default']))
+    model = model_config.get('model')
+    replacement = MODEL_SLUG_ALIASES.get(model)
+    if replacement:
+        print(f"🔁 Upgrading deprecated model slug: {model} -> {replacement}", flush=True)
+        model_config['model'] = replacement
+    return model_config
+
+
+def model_fallback_choices(model_choice='default'):
+    """Return the requested model choice followed by safe fallback choices."""
+    choices = []
+    for choice in (model_choice, *MODEL_FALLBACK_ORDER):
+        if choice in MODELS_CONFIG and choice not in choices:
+            choices.append(choice)
+    return choices
+
+
+def is_model_unavailable_error(exc):
+    message = str(exc).lower()
+    return (
+        type(exc).__name__ == 'NotFoundError'
+        or 'degraded function cannot be invoked' in message
+        or '404 page not found' in message
+        or 'model not found' in message
+        or 'model_not_found' in message
+    )
+
+
+def make_openai_client(model_config):
+    placeholder_keys = {'', 'your-api-key-here', 'REPLACE_ME'}
+    resolved_key = (model_config.get('api_key') or '').strip()
+    if resolved_key in placeholder_keys:
+        raise RuntimeError(
+            "AI is not configured: API_KEY is missing or a placeholder. "
+            "Edit backend/config/config.py (or set the API_KEY env var) "
+            "with a real key and restart the backend."
+        )
+
+    connect_timeout = float(os.environ.get('AI_CONNECT_TIMEOUT', '15'))
+    read_timeout = float(os.environ.get('AI_READ_TIMEOUT', '600'))
+    return OpenAI(
+        base_url=API_URL,
+        api_key=resolved_key,
+        timeout=httpx.Timeout(
+            connect=connect_timeout,
+            read=read_timeout,
+            write=30.0,
+            pool=30.0,
+        ),
+        max_retries=0,  # _make_ai_request already handles retries
+    )
+
+
+def clean_ai_response(full_response):
+    full_response = full_response.strip()
+    if full_response.startswith("```html"):
+        full_response = full_response[7:]  # Remove ```html
+    if full_response.startswith("```"):
+        full_response = full_response[3:]  # Remove ```
+    if full_response.endswith("```"):
+        full_response = full_response[:-3]  # Remove trailing ```
+    return full_response.strip()
+
+
+_DEVANAGARI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+
+
+def _plain_text(value):
+    value = re.sub(r"(?is)<style.*?</style>|<script.*?</script>", " ", value or "")
+    value = re.sub(r"(?s)<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", value.translate(_DEVANAGARI_DIGITS)).strip()
+
+
+def _numbered_items(value):
+    text = _plain_text(value)
+    found = set()
+    for match in re.finditer(r"(?:^|\s)(?:q(?:uestion)?\s*)?([0-9]{1,3})\s*(?:[.)।:]|\-)", text, re.I):
+        number = int(match.group(1))
+        if 0 < number < 200:
+            found.add(number)
+    return found
+
+
+def _tail_segments(value):
+    text = _plain_text(value)
+    pieces = [
+        p.strip()
+        for p in re.split(r"(?:\n+|[।.!?]\s+)", text)
+        if len(p.strip()) >= 35
+    ]
+    return pieces[-4:]
+
+
+def missing_content_reason(input_text, html_content):
+    """Detect obvious partial output, especially numbered Q/A lists cut short."""
+    input_numbers = _numbered_items(input_text)
+    output_numbers = _numbered_items(html_content)
+    if input_numbers:
+        missing = sorted(input_numbers - output_numbers)
+        # A missing tail like 8,9,10 is a strong signal. Missing scattered
+        # numbers can happen inside examples, so require the highest input
+        # number to be absent or at least two missing items.
+        if missing and (max(input_numbers) in missing or len(missing) >= 2):
+            return f"Missing numbered items from input: {', '.join(map(str, missing[:12]))}"
+
+    output_text = _plain_text(html_content).lower()
+    tail_missing = [
+        segment
+        for segment in _tail_segments(input_text)
+        if segment.lower()[:80] not in output_text
+    ]
+    if len(tail_missing) >= 2:
+        return "The ending/tail content from the input is missing in the generated HTML."
+    return None
+
+
+def _tail_source_for_repair(input_text, html_content):
+    input_text = input_text.strip()
+    input_numbers = _numbered_items(input_text)
+    output_numbers = _numbered_items(html_content)
+    missing = sorted(input_numbers - output_numbers)
+    if missing:
+        first = missing[0]
+        pattern = re.compile(rf"(?m)(?:^|\n)\s*(?:q(?:uestion)?\s*)?{first}\s*(?:[.)।:]|\-)")
+        match = pattern.search(input_text.translate(_DEVANAGARI_DIGITS))
+        if match:
+            return input_text[match.start():].strip()
+    return input_text[-6000:].strip()
+
+
+def append_missing_content(input_text, html_content, cancel_event=None, model_choice='default'):
+    reason = missing_content_reason(input_text, html_content)
+    if not reason:
+        return html_content, None
+
+    missing_source = _tail_source_for_repair(input_text, html_content)
+    repair_prompt = (
+        "You are repairing an incomplete educational HTML document.\n"
+        "The previous HTML omitted content from the original input.\n"
+        "Generate ONLY HTML body fragments for the missing source content below.\n"
+        "Do not output <!DOCTYPE>, <html>, <head>, <body>, CSS, markdown, or explanations.\n"
+        "Do not repeat content that is already in the previous HTML.\n"
+        "Preserve every question, answer, option, example, and paragraph from the missing source.\n"
+        "Use the same classes when useful: content-card, question, answer, vocabulary-item, section-title.\n"
+    )
+    repair_input = (
+        f"Reason detected: {reason}\n\n"
+        f"--- PREVIOUS HTML TAIL ---\n{html_content[-4000:]}\n\n"
+        f"--- MISSING SOURCE CONTENT TO CONVERT ---\n{missing_source}"
+    )
+    fragment = get_ai_response(
+        repair_input,
+        use_cache=False,
+        cancel_event=cancel_event,
+        system_prompt=repair_prompt,
+        model_choice=model_choice,
+    )
+    if not fragment:
+        return html_content, reason
+
+    marker = "\n<section class=\"content-card repaired-missing-content\">\n"
+    repaired = marker + clean_ai_response(fragment) + "\n</section>\n"
+    lower = html_content.lower()
+    body_idx = lower.rfind("</body>")
+    if body_idx >= 0:
+        return html_content[:body_idx] + repaired + html_content[body_idx:], reason
+    html_idx = lower.rfind("</html>")
+    if html_idx >= 0:
+        return html_content[:html_idx] + repaired + html_content[html_idx:], reason
+    return html_content + repaired, reason
 
 
 def load_system_prompt():
@@ -143,7 +327,7 @@ def verify_html_content(input_text, html_content, cancel_event=None, model_choic
     )
     
     try:
-        model_config = MODELS_CONFIG.get(model_choice, MODELS_CONFIG['default'])
+        model_config = resolve_model_config(model_choice)
         client = OpenAI(base_url=API_URL, api_key=model_config['api_key'])
         response = _make_ai_request(client, verification_sys_prompt, verification_user_prompt, model_config, cancel_event=cancel_event)
         
@@ -195,7 +379,7 @@ def _cache_key(input_text, model_choice, system_prompt):
     return f"{model_choice}|{system_prompt or ''}|{input_text}"
 
 
-def get_ai_response(input_text, use_cache=True, cancel_event=None, system_prompt=None, model_choice='default'):
+def _get_ai_response_legacy_unused(input_text, use_cache=True, cancel_event=None, system_prompt=None, model_choice='default'):
     """Send text to AI model and get response with proper system/user message roles."""
     print("=" * 60, flush=True)
     print("🤖 Sending request to AI using OpenAI library...", flush=True)
@@ -210,7 +394,7 @@ def get_ai_response(input_text, use_cache=True, cancel_event=None, system_prompt
             return cached_response
 
     try:
-        model_config = MODELS_CONFIG.get(model_choice, MODELS_CONFIG['default'])
+        model_config = resolve_model_config(model_choice)
 
         # Fail fast on an obviously-unconfigured key rather than making the
         # UI sit at 0% while the OpenAI client retries a bogus endpoint.
@@ -282,6 +466,76 @@ def get_ai_response(input_text, use_cache=True, cancel_event=None, system_prompt
         return None
     except Exception as e:
         print(f"❌ Request failed: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    finally:
+        print("=" * 60)
+
+
+def get_ai_response(input_text, use_cache=True, cancel_event=None, system_prompt=None, model_choice='default'):
+    """Send text to AI model, falling back when a provider endpoint is degraded."""
+    print("=" * 60, flush=True)
+    print("Sending request to AI using OpenAI library...", flush=True)
+
+    resolved_system_prompt = system_prompt if system_prompt is not None else load_system_prompt()
+    cache_key = _cache_key(input_text, model_choice, resolved_system_prompt)
+    if use_cache:
+        cached_response = cache.get(cache_key)
+        if cached_response:
+            print("=" * 60, flush=True)
+            return cached_response
+
+    try:
+        print(f"Input length: {len(input_text)} characters", flush=True)
+        print(f"System prompt length: {len(resolved_system_prompt)} characters", flush=True)
+        print(f"API URL: {API_URL}", flush=True)
+
+        full_response = None
+        last_error = None
+        for choice in model_fallback_choices(model_choice):
+            model_config = resolve_model_config(choice)
+            client = make_openai_client(model_config)
+            print(f"Using model config: {choice} -> {model_config['model']}", flush=True)
+            print("Sending request with streaming...\n", flush=True)
+            try:
+                full_response = _make_ai_request(
+                    client,
+                    resolved_system_prompt,
+                    input_text,
+                    model_config,
+                    cancel_event=cancel_event,
+                )
+                if choice != model_choice:
+                    print(f"Fallback model succeeded: {choice}", flush=True)
+                break
+            except CancelledError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if not is_model_unavailable_error(exc):
+                    raise
+                print(f"Model {choice} is unavailable/degraded; trying next fallback.", flush=True)
+
+        if full_response is None:
+            if last_error:
+                raise last_error
+            raise RuntimeError("AI request did not return a response.")
+
+        print("Response received successfully", flush=True)
+        print(f"Content length: {len(full_response)} characters", flush=True)
+        full_response = clean_ai_response(full_response)
+        print(f"First 100 chars: {full_response[:100]}...", flush=True)
+
+        if use_cache:
+            cache.set(cache_key, full_response)
+        return full_response
+
+    except CancelledError:
+        print("Generation was cancelled")
+        return None
+    except Exception as e:
+        print(f"Request failed: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
         return None

@@ -445,12 +445,15 @@ export default function ProgressBar({
   // it is capped per stage and never reaches 100 until the server does.
   const [displayProgress, setDisplayProgress] = useState<number>(() => clamped)
   useEffect(() => {
-    setDisplayProgress((prev) => {
-      if (!active || clamped >= 100) return clamped
-      if (clamped + 8 < prev) return clamped
-      if (clamped > prev) return clamped
-      return prev
-    })
+    const id = window.setTimeout(() => {
+      setDisplayProgress((prev) => {
+        if (!active || clamped >= 100) return clamped
+        if (clamped + 8 < prev) return clamped
+        if (clamped > prev) return clamped
+        return prev
+      })
+    }, 0)
+    return () => window.clearTimeout(id)
   }, [active, clamped])
   useEffect(() => {
     if (!active || clamped >= 100) return

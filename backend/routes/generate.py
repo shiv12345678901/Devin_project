@@ -91,7 +91,7 @@ def generate():
         overlap = data.get('overlap', 15)
         viewport_width = data.get('viewport_width', 1920)
         viewport_height = data.get('viewport_height', 1080)
-        max_screenshots = data.get('max_screenshots', 50)
+        max_screenshots = data.get('max_screenshots', 75)
         use_cache = data.get('use_cache', True)
         beautify_html = data.get('beautify_html', False)
         project_info = {
@@ -273,7 +273,7 @@ def generate_sse():
     overlap = data.get('overlap', 15)
     viewport_width = data.get('viewport_width', 1920)
     viewport_height = data.get('viewport_height', 1080)
-    max_screenshots = data.get('max_screenshots', 50)
+    max_screenshots = data.get('max_screenshots', 75)
     use_cache = data.get('use_cache', True)
     beautify_html = data.get('beautify_html', False)
 

@@ -143,9 +143,10 @@ class ETATracker:
             "models": {
                 "default": {"chars_per_second": 500.0, "samples": 0},
                 "fast": {"chars_per_second": 1500.0, "samples": 0},
-                "kimi": {"chars_per_second": 300.0, "samples": 0},
-                "deepseek": {"chars_per_second": 400.0, "samples": 0},
-                "devstral": {"chars_per_second": 1000.0, "samples": 0}
+                "balanced": {"chars_per_second": 700.0, "samples": 0},
+                "quality": {"chars_per_second": 450.0, "samples": 0},
+                "long": {"chars_per_second": 500.0, "samples": 0},
+                "short": {"chars_per_second": 1800.0, "samples": 0}
             },
             "screenshots": {"seconds_per_screenshot": 1.5, "samples": 0},
             "verification": {"average_seconds": 15.0, "samples": 0}

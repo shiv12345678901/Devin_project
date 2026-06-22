@@ -84,7 +84,7 @@ The system tracks these settings for changes:
 - Overlap (0-200px)
 - Viewport width (800-3840px)
 - Viewport height (600-2160px)
-- Max screenshots (1-100)
+- Max screenshots (1-500, default 75)
 
 ### Version Comparison
 - Creates side-by-side grid layout

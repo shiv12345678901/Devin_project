@@ -152,7 +152,7 @@ function nepaliChapterName(...values: string[]): string {
 function englishChapterName(...values: string[]): string {
   for (const value of values) {
     const text = String(value || '')
-    const afterUnit = text.match(/\bunit\s*\d+\s*[:\-]?\s*([A-Za-z][A-Za-z\s'&,-]{2,90})/i)
+    const afterUnit = text.match(/\bunit\s*\d+\s*[:-]?\s*([A-Za-z][A-Za-z\s'&,-]{2,90})/i)
     if (afterUnit) return cleanupEnglishTitle(afterUnit[1])
     const beforeNepaliParen = text.match(/([A-Za-z][A-Za-z\s'-]{2,80})\s*\([\u0900-\u097F]/)
     if (beforeNepaliParen) return cleanupEnglishTitle(beforeNepaliParen[1])
@@ -317,8 +317,8 @@ function textFromHtmlOrPlain(value: string): string {
 
 function cleanProblemLine(value: string): string {
   return String(value || '')
-    .replace(/^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s*[\).:\-]\s*/i, '')
-    .replace(/^\s*[\(\[]?[a-z][\)\].:\-]\s*/i, '')
+    .replace(/^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s*[).:-]\s*/i, '')
+    .replace(/^\s*(?:\(|\[)?[a-z][)\].:-]\s*/i, '')
     .replace(/\s+/g, ' ')
     .replace(/^[\s"'“”]+|[\s"'“”]+$/g, '')
     .trim()
@@ -329,7 +329,7 @@ function looksLikeProblem(value: string): boolean {
   if (text.length < 12 || text.length > 180) return false
   if (/^(chapter|unit|lesson|exercise|summary|answer|solution|glossary|youtube|class)\b/i.test(text)) return false
   if (/[?？]\s*$/.test(text)) return true
-  if (/^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s*[\).:\-]/i.test(value)) return true
+  if (/^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s*[).:-]/i.test(value)) return true
   return /\b(what|why|how|when|where|which|who|calculate|find|write|answer|explain|describe|discuss|solve|fill|choose|match|complete|translate|rearrange|convert|prove|show)\b/i.test(text)
 }
 
@@ -349,13 +349,23 @@ function extractProblemQuestions(video: YoutubeVideoItem, metadataInput: string)
   for (const line of lines) {
     if (!looksLikeProblem(line)) continue
     const problem = cleanProblemLine(line)
-    const key = problem.toLowerCase().replace(/[^a-z0-9\u0900-\u097F]+/g, ' ')
+    const key = problemKey(problem)
     if (seen.has(key)) continue
     seen.add(key)
     problems.push(problem)
     if (problems.length >= 15) break
   }
   return problems
+}
+
+function problemKey(value: string): string {
+  return Array.from(value.toLowerCase())
+    .map((ch) => {
+      if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) return ch
+      if (ch >= '\u0900' && ch <= '\u097F') return ch
+      return ' '
+    })
+    .join('')
 }
 
 function formatProblemTimestamp(totalSeconds: number): string {
@@ -396,6 +406,42 @@ function buildMetadata(video: YoutubeVideoItem, metadataInput: string, template:
     tags: defaultTagsText(video),
     problems: buildProblemsText(video, metadataInput),
   }
+}
+
+function publishChecks(video: YoutubeVideoItem, title: string, description: string, tags: string, problems: string) {
+  const tagItems = tags.split(',').map((tag) => tag.trim()).filter(Boolean)
+  return [
+    {
+      label: 'MP4 video file',
+      ok: Boolean(video.video_file),
+      detail: video.video_file || 'Missing video file',
+    },
+    {
+      label: 'Thumbnail image',
+      ok: Boolean(video.thumbnail_file),
+      detail: video.thumbnail_file || 'No thumbnail selected',
+    },
+    {
+      label: 'Title length',
+      ok: title.trim().length > 0 && title.length <= 100,
+      detail: `${title.length}/100 characters`,
+    },
+    {
+      label: 'Description length',
+      ok: description.trim().length > 0 && description.length <= 5000,
+      detail: `${description.length}/5000 characters`,
+    },
+    {
+      label: 'Tags length',
+      ok: tagItems.length > 0 && tags.length <= 500,
+      detail: `${tagItems.length} tags · ${tags.length}/500 characters`,
+    },
+    {
+      label: 'Problem timestamps',
+      ok: problems.trim().length > 0 && problems.length <= 800,
+      detail: problems.trim() ? `${problems.split('\n').filter(Boolean).length} timestamp lines` : 'Optional, but recommended',
+    },
+  ]
 }
 
 export default function YouTubePublish() {
@@ -645,6 +691,28 @@ function PublishDetail({
     toast.push({ variant: 'success', message: 'Metadata regenerated.' })
   }
 
+  const copyPackage = async () => {
+    if (!video) return
+    const value = [
+      `VIDEO: ${videoDisplayPath(video)}`,
+      `THUMBNAIL: ${thumbnailDisplayPath(video)}`,
+      '',
+      'TITLE:',
+      title,
+      '',
+      'DESCRIPTION:',
+      description,
+      '',
+      'PROBLEMS:',
+      problems,
+      '',
+      'TAGS:',
+      tags,
+    ].join('\n')
+    await navigator.clipboard.writeText(value)
+    toast.push({ variant: 'success', message: 'Upload package copied.' })
+  }
+
   if (error) {
     return <ErrorCard title="Couldn't load publish detail" message={error} onRetry={onRefresh} />
   }
@@ -662,6 +730,9 @@ function PublishDetail({
     )
   }
 
+  const checklist = publishChecks(video, title, description, tags, problems)
+  const readyCount = checklist.filter((item) => item.ok).length
+
   return (
     <div className="container-page space-y-6">
       <div className="rounded-lg border border-slate-200 bg-[rgb(var(--bg-surface))] p-4 dark:border-white/10">
@@ -677,10 +748,16 @@ function PublishDetail({
             {video.duration_seconds != null && <InfoPill label="Runtime" value={formatRuntime(video.duration_seconds * 1000)} />}
           </div>
         </div>
-        <button type="button" className="btn-primary" onClick={regenerateMetadata}>
-          <Sparkles size={14} />
-          Regenerate metadata
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn-secondary" onClick={() => void copyPackage()}>
+            <Clipboard size={14} />
+            Copy package
+          </button>
+          <button type="button" className="btn-primary" onClick={regenerateMetadata}>
+            <Sparkles size={14} />
+            Regenerate metadata
+          </button>
+        </div>
         </div>
       </div>
 
@@ -726,6 +803,30 @@ function PublishDetail({
         </section>
 
         <section className="rounded-lg border border-slate-200 bg-[rgb(var(--bg-surface))] p-4 dark:border-white/10">
+          <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="text-sm font-semibold text-[rgb(var(--text-strong))]">
+                Upload checklist
+              </div>
+              <span className="badge-neutral">{readyCount}/{checklist.length} ready</span>
+            </div>
+            <div className="space-y-1.5">
+              {checklist.map((item) => (
+                <div key={item.label} className="flex items-start gap-2 text-xs">
+                  <Check
+                    size={14}
+                    className={item.ok ? 'mt-0.5 shrink-0 text-emerald-500' : 'mt-0.5 shrink-0 text-slate-300 dark:text-slate-600'}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className={item.ok ? 'font-medium text-[rgb(var(--text-strong))]' : 'font-medium text-muted'}>
+                      {item.label}
+                    </div>
+                    <div className="truncate text-faint">{item.detail}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
           <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3 dark:border-white/5">
             <div>
               <h2 className="text-sm font-semibold text-[rgb(var(--text-strong))]">Upload metadata</h2>

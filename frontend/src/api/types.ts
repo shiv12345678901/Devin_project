@@ -17,7 +17,35 @@ export interface PreflightResponse {
     ai_config: PreflightCheck
     powerpoint: PreflightCheck
     video_engine?: VideoEngineCheck
+    youtube_cookies?: PreflightCheck
+    output_folders?: PreflightCheck
   }
+}
+
+export interface ModelCheckResult {
+  choice: string
+  label: string
+  model?: string | null
+  ok: boolean
+  latency_seconds?: number
+  response_preview?: string
+  error?: string
+}
+
+export interface ModelCheckResponse {
+  success: boolean
+  ok: boolean
+  checked_at?: number
+  results: ModelCheckResult[]
+  error?: string
+}
+
+export interface PptxPreviewResponse {
+  success: boolean
+  presentation_file?: string
+  slides?: string[]
+  slide_count?: number
+  error?: string
 }
 
 export interface GenerateSettings {
@@ -292,6 +320,16 @@ export interface CacheStats {
   hits?: number
   misses?: number
   [k: string]: unknown
+}
+
+export interface LogTailResponse {
+  operation_id: string
+  path: string
+  returned_lines: number
+  total_lines: number
+  truncated: boolean
+  lines: string[]
+  error?: string
 }
 
 export interface YoutubeVideoItem {

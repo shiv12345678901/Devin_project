@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 
 import { api } from '../api/client'
+import type { HistoryEntry } from '../api/types'
 import AssetPreviewModal from '../components/AssetPreviewModal'
 import Checkbox from '../components/Checkbox'
 import ErrorCard from '../components/ErrorCard'
@@ -101,6 +102,7 @@ const LIBRARY_PAGE_SIZE = 60
 
 export default function Library() {
   const [kind, setKind] = useState<AssetKind>('screenshot')
+  const [view, setView] = useState<'bundles' | 'files'>('bundles')
   const [screenshots, setScreenshots] = useState<string[]>([])
   const [htmlFiles, setHtmlFiles] = useState<string[]>([])
   const [presentationFiles, setPresentationFiles] = useState<string[]>([])
@@ -108,6 +110,7 @@ export default function Library() {
   const [htmlSizes, setHtmlSizes] = useState<FileSizes>({})
   const [presentationSizes, setPresentationSizes] = useState<FileSizes>({})
   const [videoSizes, setVideoSizes] = useState<FileSizes>({})
+  const [history, setHistory] = useState<HistoryEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -130,6 +133,8 @@ export default function Library() {
       setHtmlSizes(r.html_sizes ?? {})
       setPresentationSizes(r.presentation_sizes ?? {})
       setVideoSizes(r.video_sizes ?? {})
+      const h = await api.history().catch(() => [] as HistoryEntry[])
+      setHistory(Array.isArray(h) ? h.slice().reverse() : [])
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -308,6 +313,56 @@ export default function Library() {
       </div>
 
       {/* Tabs — keyboard navigable per WAI-ARIA tablist pattern. */}
+      <div className="inline-flex rounded-lg border border-[rgb(var(--line))] bg-[rgb(var(--bg-surface))] p-1">
+        {(['bundles', 'files'] as const).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            className={
+              'rounded-md px-3 py-1.5 text-sm font-medium transition-colors ' +
+              (view === mode
+                ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-100'
+                : 'text-muted hover:bg-[rgb(var(--bg-muted))] hover:text-[rgb(var(--text-strong))]')
+            }
+            onClick={() => setView(mode)}
+          >
+            {mode === 'bundles' ? 'Run bundles' : 'Files'}
+          </button>
+        ))}
+      </div>
+
+      {view === 'bundles' && history.length > 0 && (
+        <section className="space-y-3" aria-label="Recent run bundles">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="h-section">Recent Run Bundles</h2>
+              <p className="mt-1 text-xs text-muted">
+                Related outputs grouped by the run that produced them.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {history.slice(0, 6).map((entry, index) => (
+              <RunBundleCard
+                key={`${entry.operation_id ?? entry.html_file ?? entry.timestamp ?? index}`}
+                entry={entry}
+                onPreviewHtml={(filename) => setPreview({ kind: 'html', filename })}
+                onPreviewVideo={(filename) => setPreview({ kind: 'video', filename })}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+      {view === 'bundles' && history.length === 0 && !loading && (
+        <EmptyState
+          icon={<Archive size={20} />}
+          title="No run bundles yet"
+          description="Completed runs will appear here as organized bundles with their source, screenshots, HTML, PPTX, MP4, logs, and settings."
+        />
+      )}
+
+      {view === 'files' && (
+      <>
       <LibraryTabs
         kind={kind}
         screenshots={screenshots.length}
@@ -483,6 +538,8 @@ export default function Library() {
         </>
       )}
       </div>
+      </>
+      )}
 
       {preview && preview.kind !== 'presentation' && (
         <AssetPreviewModal
@@ -501,6 +558,82 @@ export default function Library() {
       )}
     </div>
   )
+}
+
+function bundleTitle(entry: HistoryEntry): string {
+  const settings = entry.settings ?? {}
+  const parts = [settings.class_name, settings.subject, settings.title]
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter(Boolean)
+  if (parts.length > 0) return parts.join(' · ')
+  return entry.input_preview || entry.html_file || 'Generated run'
+}
+
+function bundleToolLabel(tool: string | undefined): string {
+  if (tool === 'html-to-video' || tool === 'html-to-image') return 'HTML'
+  if (tool === 'image-to-video' || tool === 'image-to-screenshots') return 'Image/PDF'
+  if (tool === 'screenshots-to-video') return 'Screenshots'
+  if (tool === 'youtube-to-video') return 'YouTube video'
+  if (tool === 'youtube-screenshots') return 'YouTube screenshots'
+  return 'Text'
+}
+
+function RunBundleCard({
+  entry,
+  onPreviewHtml,
+  onPreviewVideo,
+}: {
+  entry: HistoryEntry
+  onPreviewHtml: (filename: string) => void
+  onPreviewVideo: (filename: string) => void
+}) {
+  const title = bundleTitle(entry)
+  const time = entry.datetime ?? formatHistoryTimestamp(entry.timestamp)
+  return (
+    <article className="surface flex min-h-[150px] flex-col gap-3 p-4">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="badge-neutral">{bundleToolLabel(entry.tool)}</span>
+          {time && <span className="text-[11px] text-faint">{time}</span>}
+        </div>
+        <h3 className="mt-2 truncate text-sm font-semibold text-[rgb(var(--text-strong))]" title={title}>
+          {title}
+        </h3>
+        <p className="mt-1 line-clamp-2 text-xs text-muted">
+          {entry.input_preview || 'No input preview recorded.'}
+        </p>
+      </div>
+      <div className="mt-auto flex flex-wrap gap-2">
+        {entry.html_file && (
+          <button type="button" className="btn-secondary btn-sm" onClick={() => onPreviewHtml(entry.html_file!)}>
+            <Eye size={12} /> HTML
+          </button>
+        )}
+        {entry.video_file && (
+          <button type="button" className="btn-secondary btn-sm" onClick={() => onPreviewVideo(entry.video_file!)}>
+            <Film size={12} /> MP4
+          </button>
+        )}
+        {entry.presentation_file && (
+          <a href={api.downloadUrl(entry.presentation_file)} className="btn-secondary btn-sm">
+            <Presentation size={12} /> PPTX
+          </a>
+        )}
+        {entry.screenshot_count != null && (
+          <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600 dark:bg-white/10 dark:text-slate-300">
+            {entry.screenshot_count} screenshots
+          </span>
+        )}
+      </div>
+    </article>
+  )
+}
+
+function formatHistoryTimestamp(ts: number | string | undefined): string {
+  if (ts == null) return ''
+  const num = typeof ts === 'number' ? ts : Number(ts)
+  if (Number.isFinite(num)) return new Date(num * 1000).toLocaleString()
+  return String(ts)
 }
 
 function LibraryPaginator({

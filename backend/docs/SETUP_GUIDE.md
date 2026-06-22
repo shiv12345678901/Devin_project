@@ -128,7 +128,7 @@ DEFAULT_FONT_SIZE = 250         # Font size percentage
 DEFAULT_OVERLAP = 35            # Overlap between shots
 
 # Limits
-MAX_SCREENSHOTS_LIMIT = 50      # Maximum screenshots per request
+MAX_SCREENSHOTS_LIMIT = 75      # Maximum screenshots per request
 MAX_TOKENS = 100000             # Maximum AI tokens
 ```
 

@@ -251,6 +251,7 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   // "user resubmits the same content" before we ever POST.
   const activeFingerprintRef = useRef<string | null>(null)
   const activeReplaceTargetsRef = useRef<ReplacementTargets | null>(null)
+  const notifiedTerminalRef = useRef<string | null>(null)
   // Guards against accidentally dispatching the same queue id twice
   // (StrictMode re-invoking effects, duplicate auto-dequeue firings, etc).
   const dispatchedIdsRef = useRef<Set<string>>(new Set())
@@ -366,14 +367,36 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
         })
       }
       runIdRef.current = null
+      const key = `success:${s.result?.operation_id ?? s.operationId ?? Date.now()}`
+      if (notifiedTerminalRef.current !== key) {
+        notifiedTerminalRef.current = key
+        toast.push({
+          variant: 'success',
+          title: 'Run completed',
+          message: s.result?.video_file || s.result?.presentation_file
+            ? 'Export finished. Open Processes or Library to inspect the outputs.'
+            : `Generated ${s.result?.screenshot_files?.length ?? 0} screenshot(s).`,
+          durationMs: 8000,
+        })
+      }
     } else if (s.status === 'error') {
       runs.finish(runIdRef.current, { status: 'error', error: s.error })
       runIdRef.current = null
+      const key = `error:${s.operationId ?? s.error ?? Date.now()}`
+      if (notifiedTerminalRef.current !== key) {
+        notifiedTerminalRef.current = key
+        toast.push({
+          variant: 'error',
+          title: 'Run failed',
+          message: s.error || 'Open Processes for details.',
+          durationMs: 0,
+        })
+      }
     } else if (s.status === 'cancelled') {
       runs.finish(runIdRef.current, { status: 'cancelled' })
       runIdRef.current = null
     }
-  }, [gen.state, runs])
+  }, [gen.state, runs, toast])
 
   useEffect(() => {
     if (gen.state.status !== 'running') return
@@ -633,20 +656,23 @@ export function TrackedGenerationProvider({ children }: { children: ReactNode })
   // item cannot jump ahead of older queued work.
   useEffect(() => {
     if (!appSettings.concurrentPipelineRuns || paused || queue.length === 0) return
-    setQueue((prev) => {
-      const runnable: QueueItem[] = []
-      let index = 0
-      while (index < prev.length && canRunInBackground(prev[index])) {
-        runnable.push(prev[index])
-        index += 1
-      }
-      if (runnable.length === 0) return prev
-      const rest = prev.slice(index)
-      runnable.forEach((item, offset) => {
-        window.setTimeout(() => dispatchBackgroundText(item), offset * 25)
+    const id = window.setTimeout(() => {
+      setQueue((prev) => {
+        const runnable: QueueItem[] = []
+        let index = 0
+        while (index < prev.length && canRunInBackground(prev[index])) {
+          runnable.push(prev[index])
+          index += 1
+        }
+        if (runnable.length === 0) return prev
+        const rest = prev.slice(index)
+        runnable.forEach((item, offset) => {
+          window.setTimeout(() => dispatchBackgroundText(item), offset * 25)
+        })
+        return rest
       })
-      return rest
-    })
+    }, 0)
+    return () => window.clearTimeout(id)
   }, [
     appSettings.concurrentPipelineRuns,
     canRunInBackground,
@@ -992,13 +1018,14 @@ export function useGenerationQueue() {
     pauseQueue: ctx.pauseQueue,
     state: ctx.state,
     paused: ctx.paused,
-      pausedReason: ctx.pausedReason,
-      queueModeNotice: ctx.queueModeNotice,
-      dismissQueueModeNotice: ctx.dismissQueueModeNotice,
-      resumeQueue: ctx.resumeQueue,
+    pausedReason: ctx.pausedReason,
+    queueModeNotice: ctx.queueModeNotice,
+    dismissQueueModeNotice: ctx.dismissQueueModeNotice,
+    resumeQueue: ctx.resumeQueue,
     reorderQueued: ctx.reorderQueued,
     updateQueued: ctx.updateQueued,
     enqueueText: ctx.enqueueText,
     enqueueHtml: ctx.enqueueHtml,
+    enqueueYoutube: ctx.enqueueYoutube,
   }
 }

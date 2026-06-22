@@ -468,7 +468,7 @@ async function executeRegenerate(htmlFilename) {
         overlap: parseInt(document.getElementById('regenOverlap').value) || 35,
         viewport_width: parseInt(document.getElementById('regenWidth').value) || 1920,
         viewport_height: parseInt(document.getElementById('regenHeight').value) || 1080,
-        max_screenshots: parseInt(document.getElementById('regenMaxScreenshots').value) || 50
+        max_screenshots: parseInt(document.getElementById('regenMaxScreenshots').value) || 75
     };
 
     // Close modal

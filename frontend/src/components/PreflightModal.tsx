@@ -46,6 +46,22 @@ const OUTPUT_LABELS: Record<OutputFormat, string> = {
   video: 'MP4 video',
 }
 
+function fixSuggestion(
+  key: keyof PreflightResponse['checks'],
+  outputFormat: OutputFormat,
+): string {
+  if (key === 'backend') return 'Restart the Flask backend, then use Retry from Settings or run preflight again.'
+  if (key === 'ai_config') return 'Open Settings, confirm the backend URL, then check backend/config/config.py for a real model API key.'
+  if (key === 'powerpoint') {
+    return outputFormat === 'pptx'
+      ? 'Install Microsoft PowerPoint on this Windows host, or switch the output to screenshots/HTML.'
+      : 'PowerPoint is optional for this output, but PPTX export will stay unavailable until it is installed.'
+  }
+  if (key === 'video_engine') return 'Install MoviePy/ffmpeg or use PowerPoint export on Windows, then retry.'
+  if (key === 'platform') return 'This app works best on Windows for PowerPoint/PPTX features; use screenshots or HTML on unsupported hosts.'
+  return 'Fix the failed dependency, then run preflight again.'
+}
+
 export default function PreflightModal({ outputFormat, onCancel, onProceed }: PreflightModalProps) {
   const [data, setData] = useState<PreflightResponse | null>(null)
   const [loadingKey, setLoadingKey] = useState<keyof PreflightResponse['checks'] | null>('platform')
@@ -167,6 +183,11 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
                   {detail && (
                     <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{detail}</p>
                   )}
+                  {data && s === 'fail' && (
+                    <p className="mt-1 rounded-md bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:bg-rose-500/10 dark:text-rose-200">
+                      Fix: {fixSuggestion(row.key, outputFormat)}
+                    </p>
+                  )}
                 </div>
               </li>
             )
@@ -181,7 +202,8 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
 
         {data && blocked && (
           <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
-            {!aiOk && <p>AI config is missing — edit <code>backend/config/config.py</code> and restart the backend.</p>}
+            <p className="font-medium">This run is blocked until the required checks pass.</p>
+            {!aiOk && <p className="mt-1">AI config is missing. Open Settings to verify the backend URL, then update <code>backend/config/config.py</code> and restart the backend.</p>}
             {needsPpt && !pptOk && (
               <p className="mt-1">
                 Output is <strong>{OUTPUT_LABELS[outputFormat]}</strong> but PowerPoint isn't

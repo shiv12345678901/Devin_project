@@ -6,7 +6,10 @@ import uuid
 import zipfile
 import time
 import json
+import shutil
+import subprocess
 from datetime import datetime
+from pathlib import Path
 
 from flask import Blueprint, request, jsonify, send_file, Response
 from core.thumbnail_builder import ThumbnailParams, render_thumbnail_png
@@ -16,9 +19,11 @@ THUMBNAILS_FOLDER = 'output/thumbnails'
 THUMBNAIL_TEMPLATES_FILE = 'output/thumbnail_templates.json'
 PRESENTATIONS_FOLDER = 'output/presentations'
 VIDEOS_FOLDER = 'output/videos'
+PPTX_PREVIEWS_FOLDER = 'output/pptx_previews'
 os.makedirs(THUMBNAILS_FOLDER, exist_ok=True)
 os.makedirs(PRESENTATIONS_FOLDER, exist_ok=True)
 os.makedirs(VIDEOS_FOLDER, exist_ok=True)
+os.makedirs(PPTX_PREVIEWS_FOLDER, exist_ok=True)
 os.makedirs(os.path.dirname(THUMBNAIL_TEMPLATES_FILE), exist_ok=True)
 
 from core.ai_client import cache
@@ -46,6 +51,158 @@ def _safe_child(base_folder, user_path):
     if candidate == abs_base or candidate.startswith(abs_base + os.sep):
         return candidate
     return None
+
+
+def _resolve_presentation_file(user_path):
+    """Resolve a presentation output path under output/presentations."""
+    raw = str(user_path or '').replace('\\', '/').strip()
+    if not raw:
+        return None
+    prefix = 'output/presentations/'
+    if raw.startswith(prefix):
+        raw = raw[len(prefix):]
+    safe = _safe_child(PRESENTATIONS_FOLDER, raw)
+    if safe and os.path.isfile(safe):
+        return safe
+    basename = os.path.basename(raw)
+    if basename:
+        candidate = _safe_child(PRESENTATIONS_FOLDER, basename)
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _preview_folder_for_pptx(pptx_path):
+    path = Path(pptx_path)
+    safe_stem = re.sub(r'[^A-Za-z0-9._-]+', '_', path.stem)[:80] or 'presentation'
+    stat = path.stat()
+    return Path(PPTX_PREVIEWS_FOLDER) / f'{safe_stem}_{int(stat.st_mtime)}_{stat.st_size}'
+
+
+def _existing_preview_slides(preview_dir):
+    if not preview_dir.exists():
+        return []
+    slides = sorted(preview_dir.glob('slide-*.png'))
+    return [f'{preview_dir.name}/{slide.name}' for slide in slides if slide.is_file()]
+
+
+def _render_pptx_preview_with_powerpoint(pptx_path, preview_dir):
+    """Render PPTX slides to PNG using installed PowerPoint on Windows."""
+    if os.name != 'nt':
+        return [], 'PowerPoint preview fallback is only available on Windows.'
+    try:
+        import pythoncom  # type: ignore
+        import win32com.client  # type: ignore
+    except ImportError:
+        return [], 'PowerPoint preview fallback needs pywin32. Install with: pip install pywin32'
+
+    ppt = None
+    presentation = None
+    com_initialized = False
+    try:
+        pythoncom.CoInitialize()
+        com_initialized = True
+        ppt = win32com.client.DispatchEx('PowerPoint.Application')
+        ppt.Visible = 1
+        ppt.DisplayAlerts = 1
+        presentation = ppt.Presentations.Open(str(Path(pptx_path).resolve()), ReadOnly=True, Untitled=False, WithWindow=False)
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        slide_count = int(presentation.Slides.Count)
+        if slide_count <= 0:
+            return [], 'PowerPoint opened the deck, but it contains no slides.'
+        for index in range(1, slide_count + 1):
+            output = preview_dir / f'slide-{index:03d}.png'
+            # Slide.Export(FileName, FilterName, ScaleWidth, ScaleHeight)
+            presentation.Slides(index).Export(str(output.resolve()), 'PNG', 1920, 1080)
+        slides = _existing_preview_slides(preview_dir)
+        if not slides:
+            return [], 'PowerPoint finished export, but no slide images were created.'
+        return slides, None
+    except Exception as exc:
+        return [], f'PowerPoint preview export failed: {exc}'
+    finally:
+        if presentation is not None:
+            try:
+                presentation.Close()
+            except Exception:
+                pass
+        if ppt is not None:
+            try:
+                ppt.Quit()
+            except Exception:
+                pass
+        if com_initialized:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+
+
+def _render_pptx_preview(pptx_path):
+    preview_dir = _preview_folder_for_pptx(pptx_path)
+    slides = _existing_preview_slides(preview_dir)
+    if slides:
+        return slides, None
+
+    office = shutil.which('libreoffice') or shutil.which('soffice')
+    pdftoppm = shutil.which('pdftoppm')
+    missing = []
+    if not office:
+        missing.append('LibreOffice/soffice was not found')
+    if not pdftoppm:
+        missing.append('pdftoppm was not found')
+    if missing:
+        slides, error = _render_pptx_preview_with_powerpoint(pptx_path, preview_dir)
+        if not error:
+            return slides, None
+        return [], f"{'; '.join(missing)}. PowerPoint fallback also failed: {error}"
+
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    pptx = Path(pptx_path)
+    pdf_path = preview_dir / f'{pptx.stem}.pdf'
+    try:
+        subprocess.run(
+            [office, '--headless', '--convert-to', 'pdf', '--outdir', str(preview_dir), str(pptx)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=180,
+        )
+        converted = preview_dir / f'{pptx.stem}.pdf'
+        if converted.exists() and converted != pdf_path:
+            converted.replace(pdf_path)
+        if not pdf_path.exists():
+            pdfs = sorted(preview_dir.glob('*.pdf'), key=lambda p: p.stat().st_mtime, reverse=True)
+            if pdfs:
+                pdf_path = pdfs[0]
+            else:
+                return [], 'LibreOffice did not produce a PDF preview.'
+
+        output_prefix = preview_dir / 'slide'
+        subprocess.run(
+            [pdftoppm, '-png', '-r', '144', str(pdf_path), str(output_prefix)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=180,
+        )
+        for index, slide in enumerate(sorted(preview_dir.glob('slide-*.png')), start=1):
+            target = preview_dir / f'slide-{index:03d}.png'
+            if slide != target:
+                slide.replace(target)
+        slides = _existing_preview_slides(preview_dir)
+        if not slides:
+            return [], 'PDF conversion finished, but no slide images were created.'
+        return slides, None
+    except subprocess.TimeoutExpired:
+        return [], 'PPTX preview conversion timed out.'
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        return [], f'PPTX preview conversion failed: {detail[:500]}'
+    except Exception as exc:
+        return [], f'PPTX preview conversion failed: {exc}'
 
 
 def _read_thumbnail_templates():
@@ -108,6 +265,39 @@ def get_thumbnail(filename):
         return jsonify({'error': 'Invalid file path'}), 403
     if os.path.exists(safe):
         return send_file(safe)
+    return jsonify({'error': 'File not found'}), 404
+
+
+@resources_bp.route('/pptx-preview', methods=['POST'])
+def pptx_preview():
+    """Convert a generated PPTX into cached slide PNGs for browser preview."""
+    data = request.get_json(silent=True) or {}
+    pptx_path = _resolve_presentation_file(data.get('presentation_file') or data.get('file'))
+    if not pptx_path:
+        return jsonify({'success': False, 'error': 'Presentation file not found.'}), 404
+    ext = os.path.splitext(pptx_path)[1].lower()
+    if ext not in ('.pptx', '.pptm'):
+        return jsonify({'success': False, 'error': 'Only .pptx and .pptm files can be previewed.'}), 400
+
+    slides, error = _render_pptx_preview(pptx_path)
+    if error:
+        return jsonify({'success': False, 'error': error}), 500
+    return jsonify({
+        'success': True,
+        'presentation_file': os.path.relpath(pptx_path).replace(os.sep, '/'),
+        'slides': slides,
+        'slide_count': len(slides),
+    })
+
+
+@resources_bp.route('/pptx-preview/<path:filename>')
+def get_pptx_preview_slide(filename):
+    """Serve a cached PPTX preview slide image."""
+    safe = _safe_child(PPTX_PREVIEWS_FOLDER, filename)
+    if safe is None:
+        return jsonify({'error': 'Invalid file path'}), 403
+    if os.path.exists(safe) and os.path.isfile(safe):
+        return send_file(safe, mimetype='image/png')
     return jsonify({'error': 'File not found'}), 404
 
 
@@ -524,7 +714,7 @@ def regenerate():
         overlap = data.get('overlap', 15)
         viewport_width = data.get('viewport_width', 1920)
         viewport_height = data.get('viewport_height', 1080)
-        max_screenshots = data.get('max_screenshots', 50)
+        max_screenshots = data.get('max_screenshots', 75)
 
         screenshot_name = get_next_batch_id()
         screenshot_files, screenshot_names = take_screenshots(

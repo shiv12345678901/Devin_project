@@ -288,6 +288,114 @@
                     "concurrent": false
                 }
             ]
+        },
+        "short": {
+            "seconds_per_char": 0.007627049764722658,
+            "samples": 1,
+            "runs": [
+                {
+                    "input_chars": 14026,
+                    "seconds": 106.977,
+                    "resolution": "1080p",
+                    "concurrent": false
+                }
+            ]
+        },
+        "balanced": {
+            "seconds_per_char": 0.029336825457359817,
+            "samples": 9,
+            "runs": [
+                {
+                    "input_chars": 14026,
+                    "seconds": 227.386,
+                    "resolution": "1080p",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 14026,
+                    "seconds": 209.377,
+                    "resolution": "1080p",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 14026,
+                    "seconds": 559.215,
+                    "resolution": "1440p",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 22064,
+                    "seconds": 527.291,
+                    "resolution": "1440p",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 21545,
+                    "seconds": 557.051,
+                    "resolution": "1440p",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 24505,
+                    "seconds": 523.338,
+                    "resolution": "1440p",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 24505,
+                    "seconds": 1153.846,
+                    "resolution": "1440p",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 21545,
+                    "seconds": 669.698,
+                    "resolution": "1440p",
+                    "concurrent": false
+                },
+                {
+                    "input_chars": 22064,
+                    "seconds": 803.73,
+                    "resolution": "1440p",
+                    "concurrent": false
+                }
+            ]
+        },
+        "long": {
+            "seconds_per_char": 0.05031905033509197,
+            "samples": 1,
+            "runs": [
+                {
+                    "input_chars": 14026,
+                    "seconds": 705.775,
+                    "resolution": "1080p",
+                    "concurrent": false
+                }
+            ]
+        },
+        "quality": {
+            "seconds_per_char": 0.05380051333238272,
+            "samples": 1,
+            "runs": [
+                {
+                    "input_chars": 14026,
+                    "seconds": 754.606,
+                    "resolution": "1080p",
+                    "concurrent": false
+                }
+            ]
+        },
+        "html-to-video": {
+            "seconds_per_char": 0.00549123950617284,
+            "samples": 1,
+            "runs": [
+                {
+                    "input_chars": 50625,
+                    "seconds": 277.994,
+                    "resolution": "1440p",
+                    "concurrent": false
+                }
+            ]
         }
     }
 }

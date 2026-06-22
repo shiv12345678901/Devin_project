@@ -15,20 +15,18 @@ import {
   Copy as CopyIcon,
   Eye,
   EyeOff,
-  Gauge,
   Sparkles,
-  Sliders,
   Layers,
   Lock,
   Unlock,
   RotateCcw,
   ArrowLeftRight,
-  Zap,
 } from 'lucide-react'
 
 import PreflightModal from '../components/PreflightModal'
 import BackendRejectedBanner from '../components/BackendRejectedBanner'
 import Banner from '../components/Banner'
+import { useConfirm } from '../components/ConfirmDialog'
 import Toggle from '../components/Toggle'
 import { useTrackedGenerate } from '../hooks/useTrackedGenerate'
 import { useBackendCapabilities } from '../hooks/useBackendPlatform'
@@ -64,7 +62,7 @@ const DEFAULT_SETTINGS: GenerateSettings = {
   overlap: 15,
   viewport_width: 1920,
   viewport_height: 1080,
-  max_screenshots: 50,
+  max_screenshots: 75,
   use_cache: true,
   beautify_html: false,
   close_powerpoint_before_start: true,
@@ -503,7 +501,8 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     setStepId('project')
     setErroredSteps(new Set())
     setDraftSnapshot(null)
-  }, [])
+    clearDraftSnapshot(sourceMode)
+  }, [sourceMode])
 
   const set = <K extends keyof GenerateSettings>(key: K, v: GenerateSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: v }))
@@ -565,11 +564,13 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     // editor's own mini-preview is independent and always reflects the
     // current template.)
     if (!shouldAutoBuildThumbnail || (settings.intro_thumbnail_filename ?? '').trim()) {
-      setAutoThumbnailPreviewUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev)
-        return null
-      })
-      return
+      const id = window.setTimeout(() => {
+        setAutoThumbnailPreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev)
+          return null
+        })
+      }, 0)
+      return () => window.clearTimeout(id)
     }
 
     let cancelled = false
@@ -934,10 +935,18 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
       <div>
         <div className="eyebrow">
           <span className="h-1 w-1 rounded-full bg-brand-500" />
-          {sourceMode === 'html' ? 'Tool · HTML → Video' : 'Tool · Text → Video'}
+          {sourceMode === 'html'
+            ? 'Tool · HTML → Video'
+            : sourceMode === 'youtube'
+              ? 'Tool · YouTube → Video'
+              : 'Tool · Text → Video'}
         </div>
         <h1 className="h-page mt-2">
-          {sourceMode === 'html' ? 'HTML to Video' : 'Text to Video'}
+          {sourceMode === 'html'
+            ? 'HTML to Video'
+            : sourceMode === 'youtube'
+              ? 'YouTube to Video'
+              : 'Text to Video'}
         </h1>
         <p className="mt-2 text-sm text-muted">
           Step through the wizard to configure the run. Nothing starts until you hit{' '}
@@ -1107,7 +1116,7 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
               disabled={running}
               title="All steps look good — start the run now"
             >
-              <Play size={14} /> Start Process
+              <Play size={14} /> Review & Start
             </button>
           )}
           {activeStepId !== 'advanced' && (
@@ -1571,59 +1580,49 @@ function WindowsOnlyWarning({ outputFormat }: { outputFormat: OutputFormat }) {
   return null
 }
 
-/**
- * C7: card-based AI-model chooser. Each card shows the model's tradeoff
- * dimensions (speed / quality / context) at a glance instead of a raw
- * dropdown. Same canonical `model_choice` values as before so backend
- * routing is unchanged.
- */
-type ModelTier = 'fast' | 'medium' | 'good' | 'best'
 const MODEL_OPTIONS: Array<{
   value: string
   label: string
-  vendor: string
-  speed: ModelTier
-  quality: ModelTier
-  context: string
-  blurb: string
-  icon: typeof Zap
+  model: string
+  note: string
 }> = [
-  { value: 'default',  label: 'Default',           vendor: 'Qwen 3.5 122B',          speed: 'good',   quality: 'good',   context: 'Standard', blurb: 'Balanced default for textbook chapters.',     icon: Sparkles },
-  { value: 'fast',     label: 'Fast (1M ctx)',     vendor: 'DeepSeek V4 Flash',      speed: 'best',   quality: 'medium', context: '1M tokens', blurb: 'Whole books in one go, fastest turnaround.',  icon: Zap },
-  { value: 'short',    label: 'Shortest & fastest', vendor: 'Llama 3.1 8B',          speed: 'best',   quality: 'fast',   context: 'Standard', blurb: 'Tiny chapters / quick drafts.',               icon: Gauge },
-  { value: 'balanced', label: 'Balanced',          vendor: 'GLM 4.7',                speed: 'good',   quality: 'good',   context: 'Standard', blurb: 'Higher fidelity for the same time budget.',   icon: Sliders },
-  { value: 'quality',  label: 'Highest quality',   vendor: 'DeepSeek V3.2',          speed: 'medium', quality: 'best',   context: 'Standard', blurb: 'Slow but the best at structured exercises.',  icon: Wand2 },
-  { value: 'long',     label: 'Long context',      vendor: 'DeepSeek V4 Pro',        speed: 'medium', quality: 'good',   context: '1M tokens', blurb: 'Very long inputs, careful tone.',             icon: Layers },
+  {
+    value: 'default',
+    label: 'Qwen 122B default',
+    model: 'Qwen 3.5 122B',
+    note: 'Kept as the default quality choice.',
+  },
+  {
+    value: 'fast',
+    label: 'Fast',
+    model: 'DeepSeek V4 Flash',
+    note: 'Fast 1M-context model for quick lesson drafts.',
+  },
+  {
+    value: 'balanced',
+    label: 'Balanced',
+    model: 'GLM-5.1',
+    note: 'Good middle ground for HTML slide generation.',
+  },
+  {
+    value: 'quality',
+    label: 'Powerful',
+    model: 'Nemotron 3 Super 120B',
+    note: 'Stronger reasoning choice for careful structured output.',
+  },
+  {
+    value: 'long',
+    label: 'Long input',
+    model: 'DeepSeek V4 Pro',
+    note: 'Use for very large source text and long context.',
+  },
+  {
+    value: 'short',
+    label: 'Small / fastest',
+    model: 'Llama 3.1 Nemotron Nano 8B',
+    note: 'Lowest latency option for tiny drafts.',
+  },
 ]
-function tierBars(tier: ModelTier): number {
-  switch (tier) {
-    case 'fast': return 1
-    case 'medium': return 2
-    case 'good': return 3
-    case 'best': return 4
-  }
-}
-function ModelTierBar({ tier, label }: { tier: ModelTier; label: string }) {
-  const filled = tierBars(tier)
-  return (
-    <div className="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
-      <span className="w-12 truncate">{label}</span>
-      <div className="flex gap-0.5">
-        {[1, 2, 3, 4].map((i) => (
-          <span
-            key={i}
-            className={
-              'h-1.5 w-3 rounded-sm ' +
-              (i <= filled
-                ? 'bg-brand-500 dark:bg-brand-400'
-                : 'bg-slate-200 dark:bg-white/10')
-            }
-          />
-        ))}
-      </div>
-    </div>
-  )
-}
 function ModelChooser({
   value,
   onChange,
@@ -1633,49 +1632,26 @@ function ModelChooser({
   onChange: (v: string) => void
   disabled?: boolean
 }) {
+  const selected = MODEL_OPTIONS.find((m) => m.value === value) ?? MODEL_OPTIONS[0]
   return (
-    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-      {MODEL_OPTIONS.map((m) => {
-        const active = value === m.value
-        const Icon = m.icon
-        return (
-          <button
-            key={m.value}
-            type="button"
-            onClick={() => !disabled && onChange(m.value)}
-            disabled={disabled}
-            aria-pressed={active}
-            className={
-              'flex flex-col gap-2 rounded-md border px-3 py-2.5 text-left transition-colors ' +
-              (active
-                ? 'border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-500/10'
-                : 'border-slate-200 bg-white hover:border-slate-300 dark:border-white/10 dark:bg-white/[0.03]')
-            }
-          >
-            <div className="flex items-start gap-2">
-              <Icon size={16} className={active ? 'mt-0.5 text-brand-600' : 'mt-0.5 text-slate-400'} />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-50">
-                  {m.label}
-                </div>
-                <div className="mt-0.5 truncate text-[11px] text-slate-500 dark:text-slate-400">
-                  {m.vendor}
-                </div>
-              </div>
-              {m.context !== 'Standard' && (
-                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-slate-500 dark:bg-white/10 dark:text-slate-300">
-                  {m.context}
-                </span>
-              )}
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <ModelTierBar tier={m.speed} label="Speed" />
-              <ModelTierBar tier={m.quality} label="Quality" />
-            </div>
-            <div className="text-[11px] text-slate-500 dark:text-slate-400">{m.blurb}</div>
-          </button>
-        )
-      })}
+    <div className="space-y-2">
+      <select
+        className="select"
+        value={selected.value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+      >
+        {MODEL_OPTIONS.map((m) => (
+          <option key={m.value} value={m.value}>
+            {m.label} - {m.model}
+          </option>
+        ))}
+      </select>
+      <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300">
+        <span className="font-medium text-slate-800 dark:text-slate-100">{selected.model}</span>
+        {' - '}
+        {selected.note}
+      </p>
     </div>
   )
 }
@@ -2202,6 +2178,7 @@ function AutoThumbnailPanel({
   const [templateVersion, setTemplateVersion] = useState(0)
   const [savedTemplates, setSavedTemplates] = useState<SavedThumbnailTemplate[]>([])
   const [templateSaveStatus, setTemplateSaveStatus] = useState<string | null>(null)
+  const confirm = useConfirm()
   // Auto-suggested name derives from the current class/subject. We only
   // store an override when the user has actually edited the field, so the
   // suggestion follows class/subject changes without a setState-in-effect.
@@ -2237,11 +2214,16 @@ function AutoThumbnailPanel({
         item.subject.trim().toLowerCase() === subject.toLowerCase() &&
         item.name.trim().toLowerCase() === name.toLowerCase(),
     )
-    if (collision && !window.confirm(
-      `A template named "${name}" already exists for ${className} ${subject}. Overwrite it?`,
-    )) {
-      setTemplateSaveStatus('Save cancelled.')
-      return
+    if (collision) {
+      const ok = await confirm({
+        title: `Overwrite "${name}"?`,
+        message: `A template named "${name}" already exists for ${className} ${subject}.`,
+        confirmLabel: 'Overwrite',
+      })
+      if (!ok) {
+        setTemplateSaveStatus('Save cancelled.')
+        return
+      }
     }
 
     setTemplateSaveStatus('Saving...')

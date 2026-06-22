@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   AlertCircle,
   Check,
@@ -16,8 +16,8 @@ import {
   Trash2,
 } from 'lucide-react'
 
-import { api } from '../api/client'
-import type { HistoryEntry } from '../api/types'
+import { api, buildUrl } from '../api/client'
+import type { HistoryEntry, ModelCheckResponse, PreflightCheck, PreflightResponse } from '../api/types'
 import { useRuns } from '../store/runs'
 import {
   BRAND_SWATCHES,
@@ -49,6 +49,12 @@ export default function Settings() {
   const [historyError, setHistoryError] = useState('')
   const [youtubeTemplate, setYoutubeTemplate] = useState(() => readYoutubeTemplate())
   const [restarting, setRestarting] = useState(false)
+  const [systemCheck, setSystemCheck] = useState<PreflightResponse | null>(null)
+  const [systemCheckLoading, setSystemCheckLoading] = useState(false)
+  const [systemCheckError, setSystemCheckError] = useState('')
+  const [modelCheck, setModelCheck] = useState<ModelCheckResponse | null>(null)
+  const [modelCheckLoading, setModelCheckLoading] = useState(false)
+  const [modelCheckError, setModelCheckError] = useState('')
 
   const pingBackend = async () => {
     setPingState('pinging')
@@ -62,10 +68,36 @@ export default function Settings() {
     }
   }
 
+  const runSystemCheck = useCallback(async () => {
+    setSystemCheckLoading(true)
+    setSystemCheckError('')
+    try {
+      const response = await api.preflight({ fresh: true })
+      setSystemCheck(response)
+    } catch (e) {
+      setSystemCheckError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSystemCheckLoading(false)
+    }
+  }, [])
+
+  const runModelCheck = async () => {
+    setModelCheckLoading(true)
+    setModelCheckError('')
+    try {
+      const response = await api.checkModels()
+      setModelCheck(response)
+    } catch (e) {
+      setModelCheckError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setModelCheckLoading(false)
+    }
+  }
+
   const restartBackend = async () => {
     setRestarting(true)
     try {
-      await fetch('/restart', { method: 'POST' })
+      await fetch(buildUrl('/restart'), { method: 'POST' })
     } catch { /* expected — server dies mid-response */ }
     // Wait for backend to come back
     const deadline = Date.now() + 30_000
@@ -73,7 +105,7 @@ export default function Settings() {
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 1000))
         try {
-          const res = await fetch('/preflight')
+          const res = await fetch(buildUrl('/preflight'))
           if (res.ok) {
             setRestarting(false)
             toast.push({ variant: 'success', message: 'Backend restarted' })
@@ -105,6 +137,10 @@ export default function Settings() {
     setYoutubeTemplate(value)
     writeYoutubeTemplate(value)
   }
+
+  useEffect(() => {
+    void runSystemCheck()
+  }, [runSystemCheck])
 
   return (
     <div className="container-form space-y-8">
@@ -143,6 +179,109 @@ export default function Settings() {
       </div>
 
       {/* ─── Appearance ─────────────────────────────────────────────────── */}
+      <Section title="System Check" icon={<Server size={16} />}>
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              First-run readiness for backend, API keys, PowerPoint, video export, YouTube cookies, and output folders.
+            </p>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={runSystemCheck}
+              disabled={systemCheckLoading}
+            >
+              <RefreshCw size={14} className={systemCheckLoading ? 'animate-spin' : ''} />
+              Refresh check
+            </button>
+          </div>
+          {systemCheckError ? (
+            <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+              {systemCheckError}
+            </div>
+          ) : (
+            <div className="grid gap-2 md:grid-cols-2">
+              {systemCheck ? (
+                systemCheckItems(systemCheck).map(({ key, ...item }) => (
+                  <SystemCheckRow key={key} {...item} />
+                ))
+              ) : (
+                <div className="text-sm text-muted">
+                  {systemCheckLoading ? 'Checking system...' : 'No system check has run yet.'}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="border-t border-slate-100 pt-4 dark:border-white/5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-slate-800 dark:text-slate-100">
+                  Live AI model check
+                </div>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                  Sends a tiny prompt to every configured NVIDIA model using this backend's API key.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={runModelCheck}
+                disabled={modelCheckLoading}
+              >
+                <RefreshCw size={14} className={modelCheckLoading ? 'animate-spin' : ''} />
+                Check AI models
+              </button>
+            </div>
+            {modelCheckError && (
+              <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+                {modelCheckError}
+              </div>
+            )}
+            {modelCheck && (
+              <div className="mt-3 overflow-hidden rounded-md border border-slate-200 dark:border-white/10">
+                <div className="grid grid-cols-[1fr_auto] gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-400 sm:grid-cols-[1fr_1.4fr_auto_auto]">
+                  <span>Choice</span>
+                  <span className="hidden sm:block">Model</span>
+                  <span>Status</span>
+                  <span className="hidden sm:block">Latency</span>
+                </div>
+                {modelCheck.results.map((result) => (
+                  <div
+                    key={result.choice}
+                    className="grid grid-cols-[1fr_auto] gap-3 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0 dark:border-white/5 sm:grid-cols-[1fr_1.4fr_auto_auto]"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium text-slate-800 dark:text-slate-100">{result.label}</div>
+                      {(result.response_preview || result.error) && (
+                        <div className={result.ok ? 'mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400' : 'mt-0.5 text-xs text-rose-600 dark:text-rose-300'}>
+                          {result.response_preview || result.error}
+                        </div>
+                      )}
+                    </div>
+                    <div className="hidden min-w-0 truncate font-mono text-xs text-slate-500 dark:text-slate-400 sm:block">
+                      {result.model || 'unknown'}
+                    </div>
+                    <span
+                      className={
+                        'inline-flex h-6 items-center justify-center rounded-full px-2 text-xs font-medium ' +
+                        (result.ok
+                          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200'
+                          : 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-200')
+                      }
+                    >
+                      {result.ok ? 'OK' : 'Failed'}
+                    </span>
+                    <span className="hidden text-right text-xs text-slate-500 dark:text-slate-400 sm:block">
+                      {typeof result.latency_seconds === 'number' ? `${result.latency_seconds}s` : '-'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </Section>
+
       <Section title="Appearance" icon={<Paintbrush size={16} />}>
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           <div>
@@ -589,7 +728,7 @@ function BackendHistoryRow({ entry }: { entry: HistoryEntry }) {
 
 function historyToolLabel(tool: string | undefined): string {
   if (tool === 'html-to-video' || tool === 'html-to-image') return 'HTML to Video'
-  if (tool === 'image-to-video' || tool === 'image-to-screenshots') return 'Image to Video'
+  if (tool === 'image-to-video' || tool === 'image-to-screenshots') return 'Image to Screenshots'
   if (tool === 'screenshots-to-video') return 'Screenshots to Video'
   return 'Text to Video'
 }
@@ -599,6 +738,58 @@ function formatHistoryTimestamp(ts: number | string | undefined): string {
   const num = typeof ts === 'number' ? ts : Number(ts)
   if (Number.isFinite(num)) return new Date(num * 1000).toLocaleString()
   return String(ts)
+}
+
+function systemCheckItems(response: PreflightResponse) {
+  const checks = response.checks
+  return [
+    checkItem('backend', 'Backend online', checks.backend, 'Start the Flask backend and verify the backend URL override.'),
+    checkItem('ai_config', 'API key configured', checks.ai_config, 'Edit backend/config/config.py and set a real API key.'),
+    checkItem('powerpoint', 'PowerPoint detected', checks.powerpoint, 'Install PowerPoint and pywin32, or use screenshot-only outputs.'),
+    checkItem('video_engine', 'MoviePy / ffmpeg detected', checks.video_engine, 'Install MoviePy/ffmpeg or run on Windows with PowerPoint.'),
+    checkItem('youtube_cookies', 'YouTube cookies valid', checks.youtube_cookies, 'Optional: export YouTube cookies to backend/config/cookies.txt.'),
+    checkItem('output_folders', 'Output folders writable', checks.output_folders, 'Check permissions for output/html, screenshots, presentations, videos, and runs.'),
+  ]
+}
+
+function checkItem(key: string, label: string, check: PreflightCheck | undefined, fix: string) {
+  return {
+    key,
+    label,
+    ok: Boolean(check?.ok),
+    detail: check?.detail || 'Not reported by backend',
+    fix,
+  }
+}
+
+function SystemCheckRow({
+  label,
+  ok,
+  detail,
+  fix,
+}: {
+  label: string
+  ok: boolean
+  detail: string
+  fix: string
+}) {
+  return (
+    <div
+      className={
+        'rounded-md border px-3 py-3 ' +
+        (ok
+          ? 'border-emerald-200 bg-emerald-50/70 dark:border-emerald-500/30 dark:bg-emerald-500/10'
+          : 'border-rose-200 bg-rose-50/70 dark:border-rose-500/30 dark:bg-rose-500/10')
+      }
+    >
+      <div className="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-100">
+        {ok ? <Check size={14} className="text-emerald-600 dark:text-emerald-300" /> : <AlertCircle size={14} className="text-rose-600 dark:text-rose-300" />}
+        {label}
+      </div>
+      <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{detail}</p>
+      {!ok && <p className="mt-1 text-xs text-rose-700 dark:text-rose-200">Fix: {fix}</p>}
+    </div>
+  )
 }
 
 function Section({

@@ -69,11 +69,11 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
               role="alertdialog"
               aria-modal="true"
               aria-labelledby="confirm-title"
+              aria-describedby={opts.message ? 'confirm-message' : undefined}
               tabIndex={-1}
               className="relative w-full max-w-sm rounded-xl border border-slate-200 bg-white p-5 shadow-lg dark:border-white/10 dark:bg-slate-900"
               onKeyDown={(e) => {
                 if (e.key === 'Escape') close(false)
-                if (e.key === 'Enter') close(true)
               }}
             >
               <h2
@@ -83,7 +83,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
                 {opts.title}
               </h2>
               {opts.message && (
-                <div className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+                <div id="confirm-message" className="mt-2 text-sm text-slate-600 dark:text-slate-400">
                   {opts.message}
                 </div>
               )}

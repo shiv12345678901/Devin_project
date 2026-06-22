@@ -64,51 +64,54 @@ MODELS_CONFIG = {
     # pick from the UI's "Default" slot.
     "default": {
         "model": _env("MODEL_DEFAULT", "qwen/qwen3.5-122b-a10b"),
-        "temperature": 0.2,
-        "top_p": 0.9,
-        "max_tokens": int(_env("MAX_TOKENS_DEFAULT", str(DEFAULT_MAX_TOKENS))),
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "max_tokens": int(_env("MAX_TOKENS_DEFAULT", "16384")),
         "api_key": API_KEY,
     },
     # Fast — DeepSeek V4 Flash (284B MoE, 1M ctx), tuned for throughput.
     "fast": {
         "model": _env("MODEL_FAST", "deepseek-ai/deepseek-v4-flash"),
-        "temperature": 0.3,
-        "top_p": 0.9,
-        "max_tokens": int(_env("MAX_TOKENS_FAST", str(DEFAULT_MAX_TOKENS))),
+        "temperature": 1,
+        "top_p": 0.95,
+        "max_tokens": int(_env("MAX_TOKENS_FAST", "16384")),
         "api_key": API_KEY,
+        "extra_body": {"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}},
     },
-    # Short & fastest — Llama 3.1 8B Instruct for very low latency runs.
+    # Short & fastest — Llama 3.1 Nemotron Nano 8B for very low latency runs.
     "short": {
-        "model": _env("MODEL_SHORT", "meta/llama-3.1-8b-instruct"),
-        "temperature": 0.3,
-        "top_p": 0.9,
-        "max_tokens": int(_env("MAX_TOKENS_SHORT", str(DEFAULT_MAX_TOKENS))),
+        "model": _env("MODEL_SHORT", "nvidia/llama-3.1-nemotron-nano-8b-v1"),
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "max_tokens": int(_env("MAX_TOKENS_SHORT", "4096")),
         "api_key": API_KEY,
     },
-    # Balanced — GLM-4.7 (358B, 131K ctx). Solid middle ground for
-    # coding / HTML generation + tool calling.
+    # Balanced — GLM-5.1. Solid middle ground for coding / HTML generation
+    # + tool calling.
     "balanced": {
-        "model": _env("MODEL_BALANCED", "z-ai/glm-4.7"),
-        "temperature": 0.2,
-        "top_p": 0.9,
-        "max_tokens": int(_env("MAX_TOKENS_BALANCED", str(DEFAULT_MAX_TOKENS))),
+        "model": _env("MODEL_BALANCED", "z-ai/glm-5.1"),
+        "temperature": 1,
+        "top_p": 1,
+        "max_tokens": int(_env("MAX_TOKENS_BALANCED", "16384")),
         "api_key": API_KEY,
     },
-    # Quality — DeepSeek V3.2 (685B), long-context reasoning.
+    # Quality — NVIDIA Nemotron 3 Super 120B (12B active, up to 1M ctx).
     "quality": {
-        "model": _env("MODEL_QUALITY", "deepseek-ai/deepseek-v3.2"),
-        "temperature": 0.1,
-        "top_p": 0.9,
-        "max_tokens": int(_env("MAX_TOKENS_QUALITY", str(DEFAULT_MAX_TOKENS))),
+        "model": _env("MODEL_QUALITY", "nvidia/nemotron-3-super-120b-a12b"),
+        "temperature": 1,
+        "top_p": 0.95,
+        "max_tokens": int(_env("MAX_TOKENS_QUALITY", "16384")),
         "api_key": API_KEY,
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 16384},
     },
     # Long context — DeepSeek V4 Pro (1.6T MoE, 49B active, 1M ctx).
     "long": {
         "model": _env("MODEL_LONG", "deepseek-ai/deepseek-v4-pro"),
-        "temperature": 0.1,
-        "top_p": 0.9,
-        "max_tokens": int(_env("MAX_TOKENS_LONG", str(DEFAULT_MAX_TOKENS))),
+        "temperature": 1,
+        "top_p": 0.95,
+        "max_tokens": int(_env("MAX_TOKENS_LONG", "16384")),
         "api_key": API_KEY,
+        "extra_body": {"chat_template_kwargs": {"thinking": False}},
     },
     # Llama 3.3 70B kept for back-compat with old stored runs that set
     # `model_choice: "llama"`. New UI does not expose it separately.
@@ -147,7 +150,7 @@ DEFAULT_VIEWPORT_WIDTH = 1920
 DEFAULT_VIEWPORT_HEIGHT = 1080
 DEFAULT_ZOOM = 2.1
 DEFAULT_OVERLAP = 15
-MAX_SCREENSHOTS_LIMIT = 50
+MAX_SCREENSHOTS_LIMIT = 75
 
 # Cap on how many pages we'll rasterize from a PDF in /extract-from-image.
 PDF_MAX_PAGES = int(_env("PDF_MAX_PAGES", "100"))

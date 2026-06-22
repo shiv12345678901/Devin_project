@@ -272,7 +272,6 @@ def start_extraction():
                 yield ": keepalive\n\n"
                 continue
             if evt == "done":
-                yield _sse_event("complete", payload or {})
                 break
             yield _sse_event(evt, payload)
 
@@ -537,7 +536,7 @@ def _process_job(video_id: str, timestamps: list[float], operation_id: str, even
             )
 
         emit(
-            "progress",
+            "complete",
             stage="complete",
             message=f"Done! {len(final_files)} screenshots"
             + (f" ({len(skipped)} skipped beyond video length)" if skipped else ""),

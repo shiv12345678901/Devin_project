@@ -90,7 +90,7 @@ class GenerationManager {
             overlap: parseInt(document.getElementById(`${this.mode}Overlap`)?.value) || 20,
             viewport_width: parseInt(document.getElementById(`${this.mode}ViewportWidth`)?.value) || 1920,
             viewport_height: parseInt(document.getElementById(`${this.mode}ViewportHeight`)?.value) || 1080,
-            max_screenshots: parseInt(document.getElementById(`${this.mode}MaxScreenshots`)?.value) || 50,
+            max_screenshots: parseInt(document.getElementById(`${this.mode}MaxScreenshots`)?.value) || 75,
             enable_verification: verificationToggle ? verificationToggle.checked : true,
             model_choice: modelSelector ? modelSelector.value : 'default'
         };

@@ -10,6 +10,7 @@ import {
   Copy,
   Database,
   Download,
+  ExternalLink,
   FileText,
   Film,
   GripVertical,
@@ -20,6 +21,7 @@ import {
   Pencil,
   Play,
   RefreshCw,
+  Search,
   StopCircle,
   Trash2,
   Wand2,
@@ -36,6 +38,7 @@ import AssetPreviewModal from '../components/AssetPreviewModal'
 import Banner from '../components/Banner'
 import EmptyState from '../components/EmptyState'
 import ProgressBar from '../components/ProgressBar'
+import RunErrorPanel from '../components/RunErrorPanel'
 import { useGenerationQueue } from '../hooks/useTrackedGenerate'
 import type { QueueItem } from '../hooks/useTrackedGenerate'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -57,6 +60,20 @@ type EditableProcess = {
   settings: GenerateSettings
   mode: 'queue' | 'regenerate'
 }
+type ContentMatchMetric = {
+  coverage_percent?: number
+  input_unique_words?: number
+  matched_unique_words?: number
+  missing_unique_words?: number
+  missing_words?: string[]
+  missing_sections?: Array<{
+    line_number?: number
+    text?: string
+    missing_words?: string[]
+    coverage_percent?: number
+  }>
+  status?: string
+}
 
 function trackedOutputsFromBackendRun(
   run: BackendRunDetail['run'],
@@ -76,7 +93,13 @@ function trackedOutputsFromBackendRun(
     videoFile: outputs.video_file ?? outputs.video_path,
     operationId: run.operation_id ?? fallbackOperationId,
     etaSeconds: Number.isFinite(etaSeconds) && etaSeconds > 0 ? etaSeconds : undefined,
+    metrics: run.metrics,
   }
+}
+
+function contentMatchMetric(run: Run): ContentMatchMetric | null {
+  const value = run.metrics?.content_match
+  return value && typeof value === 'object' ? value as ContentMatchMetric : null
 }
 
 const TOOL_META: Record<string, { label: string; icon: typeof FileText }> = {
@@ -84,9 +107,10 @@ const TOOL_META: Record<string, { label: string; icon: typeof FileText }> = {
   'text-to-image': { label: 'Text → Video', icon: FileText },
   'html-to-video': { label: 'HTML → Video', icon: Code2 },
   'html-to-image': { label: 'HTML → Video', icon: Code2 },
-  'image-to-video': { label: 'Image → Video', icon: ImageIcon },
-  'image-to-screenshots': { label: 'Image → Video', icon: ImageIcon },
+  'image-to-video': { label: 'Image → Screenshots', icon: ImageIcon },
+  'image-to-screenshots': { label: 'Image → Screenshots', icon: ImageIcon },
   'screenshots-to-video': { label: 'Screenshots → Video', icon: ImageIcon },
+  'youtube-screenshots': { label: 'YouTube → Screenshots', icon: ImageIcon },
   regenerate: { label: 'Regenerate', icon: Wand2 },
 }
 
@@ -130,6 +154,77 @@ function toGenerateSettings(settings: Run['settings'] | GenerateSettings | undef
     next.youtube_quality = youtube_quality as GenerateSettings['youtube_quality']
   }
   return next
+}
+
+function firstUrl(value: string): string {
+  return value.match(/https?:\/\/\S+/)?.[0] ?? ''
+}
+
+function formatYoutubeSeconds(value: number): string {
+  const total = Math.max(0, Math.round(value))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+  }
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
+
+function youtubeTimestampText(settings: GenerateSettings, fallback: string): string {
+  const timestamps = Array.isArray(settings.youtube_timestamps)
+    ? settings.youtube_timestamps.filter((value): value is number => Number.isFinite(value))
+    : []
+  if (timestamps.length > 0) return timestamps.map(formatYoutubeSeconds).join(', ')
+  const match = fallback.match(/Timestamps:\s*([\s\S]+)/i)
+  return match?.[1]?.trim() ?? ''
+}
+
+function editWizardPath(tool: RunTool): string {
+  if (tool === 'html-to-video') return '/workspace/html'
+  if (tool === 'youtube-to-video') return '/workspace/youtube'
+  return '/workspace/text'
+}
+
+function processSearchText(run: Run): string {
+  return [
+    run.id,
+    run.operationId,
+    run.tool,
+    toolMeta(run.tool).label,
+    run.status,
+    run.stage,
+    run.message,
+    run.inputPreview,
+    run.inputText,
+    run.htmlFilename,
+    run.presentationFile,
+    run.videoFile,
+    ...(run.screenshotFiles ?? []),
+    run.settings?.class_name,
+    run.settings?.subject,
+    run.settings?.title,
+    run.settings?.model_choice,
+    run.settings?.output_format,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
+function historySearchText(entry: HistoryEntry): string {
+  return [
+    entry.operation_id,
+    entry.input_preview,
+    entry.html_file,
+    entry.video_file,
+    entry.presentation_file,
+    entry.tool,
+    entry.screenshot_folder,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
 }
 
 function StatusBadge({ status }: { status: RunStatus | 'completed' }) {
@@ -251,12 +346,234 @@ function StageStrip({
   )
 }
 
+type OutputFileKind = 'html' | 'image' | 'pptx' | 'video'
+
+function outputIcon(kind: OutputFileKind) {
+  switch (kind) {
+    case 'html':
+      return FileText
+    case 'image':
+      return ImageIcon
+    case 'pptx':
+      return Database
+    case 'video':
+      return Film
+  }
+}
+
+function OutputFileActions({
+  kind,
+  label,
+  filename,
+  previewLabel = 'Preview',
+  onPreview,
+  openHref,
+  downloadHref,
+}: {
+  kind: OutputFileKind
+  label: string
+  filename: string
+  previewLabel?: string
+  onPreview?: () => void
+  openHref?: string
+  downloadHref?: string
+}) {
+  const Icon = outputIcon(kind)
+  const toast = useToast()
+  const [moreOpen, setMoreOpen] = useState(false)
+
+  const copyPath = async () => {
+    try {
+      await navigator.clipboard.writeText(filename)
+      toast.push({ variant: 'success', message: 'File path copied.' })
+    } catch (e) {
+      toast.push({
+        variant: 'error',
+        title: 'Copy failed',
+        message: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
+
+  return (
+    <div className="relative rounded-md border border-slate-200 bg-slate-50 p-2.5 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="flex min-w-0 items-center gap-2">
+        <Icon size={15} className="shrink-0 text-brand-500" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            {label}
+          </div>
+          <div className="truncate text-xs text-slate-700 dark:text-slate-200" title={filename}>
+            {filename}
+          </div>
+        </div>
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          {onPreview ? (
+            <button
+              type="button"
+              className="rounded border border-brand-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-brand-700 hover:bg-brand-50 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-100 dark:hover:bg-brand-500/20"
+              onClick={onPreview}
+            >
+              {previewLabel}
+            </button>
+          ) : openHref ? (
+            <a
+              href={openHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded border border-brand-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-brand-700 hover:bg-brand-50 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-100 dark:hover:bg-brand-500/20"
+            >
+              <ExternalLink size={11} /> Open
+            </a>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className="rounded border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10"
+          onClick={() => setMoreOpen((value) => !value)}
+          aria-expanded={moreOpen}
+        >
+          More
+        </button>
+      </div>
+      {moreOpen && (
+        <div className="absolute right-2 top-[calc(100%-0.25rem)] z-10 w-40 overflow-hidden rounded-md border border-slate-200 bg-white py-1 text-xs shadow-lg dark:border-white/10 dark:bg-slate-900">
+          {openHref && onPreview && (
+            <a
+              href={openHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2 text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-white/10"
+              onClick={() => setMoreOpen(false)}
+            >
+              <ExternalLink size={12} /> Open
+            </a>
+          )}
+          {downloadHref && (
+            <a
+              href={downloadHref}
+              download={filename.split(/[\\/]/).pop() ?? filename}
+              className="flex items-center gap-2 px-3 py-2 text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-white/10"
+              onClick={() => setMoreOpen(false)}
+            >
+              <Download size={12} /> Download
+            </a>
+          )}
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-white/10"
+            onClick={() => {
+              setMoreOpen(false)
+              void copyPath()
+            }}
+          >
+            <Copy size={12} /> Copy path
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function InlineHtmlPreview({
+  src,
+  title,
+  onOpen,
+}: {
+  src: string
+  title: string
+  onOpen: () => void
+}) {
+  const [html, setHtml] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    fetch(src, { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.text()
+      })
+      .then((text) => {
+        if (!cancelled) setHtml(text)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setHtml('')
+        setError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [reloadKey, src])
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <FileText size={16} className="shrink-0 text-brand-500" />
+          <div className="min-w-0">
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              HTML preview
+            </div>
+            <div className="truncate text-xs text-slate-600 dark:text-slate-300" title={title}>
+              {title}
+            </div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button type="button" className="btn-secondary btn-sm" onClick={() => setReloadKey((value) => value + 1)}>
+            <RefreshCw size={12} /> Reload
+          </button>
+          <button type="button" className="btn-secondary btn-sm" onClick={onOpen}>
+            Maximize
+          </button>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="block aspect-video w-full overflow-hidden rounded-md border border-slate-200 bg-white text-left dark:border-white/10 dark:bg-slate-950"
+        title="Open HTML preview"
+      >
+        {loading ? (
+          <div className="flex h-full items-center justify-center text-sm text-slate-500 dark:text-slate-400">
+            Loading HTML preview...
+          </div>
+        ) : error ? (
+          <div className="flex h-full items-center justify-center p-4 text-center text-sm text-rose-600 dark:text-rose-300">
+            Could not load HTML preview: {error}
+          </div>
+        ) : (
+          <iframe
+            key={reloadKey}
+            srcDoc={html}
+            title={title}
+            sandbox="allow-same-origin"
+            className="h-full w-full border-0 bg-white"
+          />
+        )}
+      </button>
+    </div>
+  )
+}
+
 function RunRow({
   run,
   onRemove,
   onRegenerate,
   onEditRegenerate,
   onSelectRunning,
+  onBackendRunUpdated,
   selected = false,
   highlight = false,
 }: {
@@ -265,6 +582,7 @@ function RunRow({
   onRegenerate?: (run: Run) => void
   onEditRegenerate?: (run: Run) => void
   onSelectRunning?: (run: Run) => void
+  onBackendRunUpdated?: (localRun: Run, backendRun: BackendRunDetail['run']) => void
   selected?: boolean
   highlight?: boolean
 }) {
@@ -284,8 +602,21 @@ function RunRow({
   const [preview, setPreview] = useState<string | null>(null)
   const [videoPreview, setVideoPreview] = useState(false)
   const [htmlPreview, setHtmlPreview] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [contentMatchOpen, setContentMatchOpen] = useState(false)
+  const [pptxPreviewOpen, setPptxPreviewOpen] = useState(false)
+  const [pptxPreviewLoading, setPptxPreviewLoading] = useState(false)
+  const [pptxPreviewError, setPptxPreviewError] = useState('')
+  const [pptxPreviewSlides, setPptxPreviewSlides] = useState<string[]>([])
   const [previewIndex, setPreviewIndex] = useState(0)
   const [copiedInput, setCopiedInput] = useState(false)
+  const [inputExpanded, setInputExpanded] = useState(false)
+  const [logsOpen, setLogsOpen] = useState(false)
+  const [logsLoading, setLogsLoading] = useState(false)
+  const [logsError, setLogsError] = useState('')
+  const [logLines, setLogLines] = useState<string[]>([])
+  const [matchLoading, setMatchLoading] = useState(false)
+  const [matchError, setMatchError] = useState('')
   const toast = useToast()
   const scrolled = useRef(false)
   const rowRef = useRef<HTMLDivElement | null>(null)
@@ -309,6 +640,14 @@ function RunRow({
   const screenshots = run.screenshotFiles ?? []
   const selectedScreenshot = screenshots[previewIndex]
   const selectedScreenshotUrl = selectedScreenshot ? api.screenshotUrl(selectedScreenshot) : null
+  const canLoadLogs = Boolean(run.operationId)
+  const match = contentMatchMetric(run)
+  const outputBadges = [
+    run.htmlFilename ? 'HTML' : null,
+    screenshots.length > 0 ? `${screenshots.length} shots` : null,
+    run.presentationFile ? 'PPTX' : null,
+    run.videoFile ? 'MP4' : null,
+  ].filter((value): value is string => Boolean(value))
 
   const copyInput = async (event: React.MouseEvent) => {
     event.stopPropagation()
@@ -337,6 +676,59 @@ function RunRow({
     const next = (previewIndex + direction + screenshots.length) % screenshots.length
     setPreviewIndex(next)
     setPreview(api.screenshotUrl(screenshots[next]))
+  }
+
+  const loadLogs = useCallback(async (silent = false) => {
+    if (!run.operationId) return
+    setLogsOpen(true)
+    if (!silent) setLogsLoading(true)
+    setLogsError('')
+    try {
+      const response = await api.logTail(run.operationId, 200)
+      setLogLines(response.lines ?? [])
+    } catch (e) {
+      setLogLines([])
+      setLogsError(e instanceof Error ? e.message : String(e))
+    } finally {
+      if (!silent) setLogsLoading(false)
+    }
+  }, [run.operationId])
+
+  const runMatcherForOldProcess = async () => {
+    const runId = run.operationId || run.id
+    setMatchLoading(true)
+    setMatchError('')
+    try {
+      const response = await api.runContentMatch(runId)
+      if (response.run) onBackendRunUpdated?.(run, response.run)
+      toast.push({ variant: 'success', message: 'Content matcher completed.' })
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e)
+      const message = raw === 'Failed to fetch'
+        ? 'Could not reach the backend. Check Settings > Backend URL, or restart the app so the frontend points to http://127.0.0.1:5055.'
+        : raw
+      setMatchError(message)
+      toast.push({ variant: 'error', title: 'Content matcher failed', message })
+    } finally {
+      setMatchLoading(false)
+    }
+  }
+
+  const openPptxPreview = async () => {
+    if (!run.presentationFile) return
+    setPptxPreviewOpen(true)
+    setPptxPreviewLoading(true)
+    setPptxPreviewError('')
+    try {
+      const response = await api.pptxPreview(run.presentationFile)
+      if (response.error) throw new Error(response.error)
+      setPptxPreviewSlides(response.slides ?? [])
+    } catch (e) {
+      setPptxPreviewSlides([])
+      setPptxPreviewError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPptxPreviewLoading(false)
+    }
   }
 
   return (
@@ -375,6 +767,18 @@ function RunRow({
           <p className="mt-1 truncate text-sm text-slate-600 dark:text-slate-300">
             {run.inputPreview || '(no input)'}
           </p>
+          {outputBadges.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {outputBadges.map((badge) => (
+                <span
+                  key={badge}
+                  className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300"
+                >
+                  {badge}
+                </span>
+              ))}
+            </div>
+          )}
           {run.status === 'running' && (
             <div className="mt-2 flex items-center gap-2 text-[11px] font-medium text-slate-500 dark:text-slate-400">
               <span className="min-w-0 flex-1 truncate">
@@ -414,17 +818,32 @@ function RunRow({
                   <span className="truncate text-xs font-medium text-slate-600 dark:text-slate-300">
                     {inputText.length.toLocaleString()} characters
                   </span>
-                  <button
-                    type="button"
-                    className="btn-ghost btn-sm"
-                    onClick={copyInput}
-                    disabled={!inputText}
-                  >
-                    {copiedInput ? <Check size={12} /> : <Copy size={12} />}
-                    {copiedInput ? 'Copied' : 'Copy all'}
-                  </button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      className="btn-ghost btn-sm"
+                      onClick={() => setInputExpanded((value) => !value)}
+                      disabled={!inputText}
+                    >
+                      {inputExpanded ? 'Collapse' : 'Expand'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost btn-sm"
+                      onClick={copyInput}
+                      disabled={!inputText}
+                    >
+                      {copiedInput ? <Check size={12} /> : <Copy size={12} />}
+                      {copiedInput ? 'Copied' : 'Copy all'}
+                    </button>
+                  </div>
                 </div>
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] text-slate-700 dark:text-slate-200">
+                <pre
+                  className={
+                    'overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-slate-200 ' +
+                    (inputExpanded ? 'max-h-80' : 'max-h-28')
+                  }
+                >
                   {inputText || '(empty)'}
                 </pre>
               </div>
@@ -480,87 +899,133 @@ function RunRow({
             </Section>
 
             <Section title="Output">
-              {run.status === 'error' && run.error && (
-                <p className="text-sm text-red-600 dark:text-red-300">{run.error}</p>
+              {match && (
+                <ContentMatchPanel match={match} onDetails={() => setContentMatchOpen(true)} />
               )}
-              {run.htmlFilename && (
-                <button
-                  type="button"
-                  onClick={() => setHtmlPreview(true)}
-                  className="block max-w-full truncate text-left text-xs text-brand-600 hover:underline dark:text-brand-300"
-                  title={run.htmlFilename}
-                >
-                  HTML · {run.htmlFilename}
-                </button>
+              {!match && run.status === 'success' && run.htmlFilename && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-400">
+                  <div className="min-w-0 truncate">Content match not checked yet.</div>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-white disabled:opacity-60 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/10"
+                    onClick={() => void runMatcherForOldProcess()}
+                    disabled={matchLoading}
+                  >
+                    {matchLoading ? 'Checking...' : 'Check'}
+                  </button>
+                  {matchError && <div className="basis-full text-rose-600 dark:text-rose-300">{matchError}</div>}
+                </div>
+              )}
+              {run.status === 'error' && run.error && (
+                <RunErrorPanel
+                  message={run.error}
+                  onRetry={canRegenerate ? () => onRegenerate?.(run) : undefined}
+                  onOpenLogs={canLoadLogs ? () => void loadLogs() : undefined}
+                />
               )}
               {run.videoFile && (
-                <a
-                  href={api.downloadUrl(run.videoFile)}
-                  className="block truncate text-xs text-brand-600 hover:underline dark:text-brand-300"
-                  title={run.videoFile}
-                >
-                  MP4 - {run.videoFile}
-                </a>
+                <OutputFileActions
+                  kind="video"
+                  label="MP4 video"
+                  filename={run.videoFile}
+                  onPreview={() => setVideoPreview(true)}
+                  openHref={api.downloadUrl(run.videoFile)}
+                  downloadHref={api.downloadUrl(run.videoFile)}
+                />
               )}
               {run.presentationFile && (
-                <a
-                  href={api.downloadUrl(run.presentationFile)}
-                  className="block truncate text-xs text-brand-600 hover:underline dark:text-brand-300"
-                  title={run.presentationFile}
-                >
-                  PPTX - {run.presentationFile}
-                </a>
+                <OutputFileActions
+                  kind="pptx"
+                  label="PowerPoint"
+                  filename={run.presentationFile}
+                  onPreview={() => void openPptxPreview()}
+                  openHref={api.downloadUrl(run.presentationFile)}
+                  downloadHref={api.downloadUrl(run.presentationFile)}
+                />
               )}
-              <KV
-                label="Screenshots"
-                value={`${run.screenshotFiles?.length ?? 0}`}
-              />
               {run.operationId && (
                 <KV label="Op ID" value={<code className="text-[10px]">{run.operationId}</code>} />
               )}
             </Section>
           </div>
 
-          {(run.videoFile || (hasOutputs && run.screenshotFiles && run.screenshotFiles.length > 0)) && (
+          {(run.htmlFilename || screenshots.length > 0) && (
             <div className="grid gap-3 lg:grid-cols-2">
-          {run.videoFile && (
-            <div className="rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <Film size={16} className="shrink-0 text-brand-500" />
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                      Video
+              {run.htmlFilename && (
+                <InlineHtmlPreview
+                  src={api.htmlUrl(run.htmlFilename)}
+                  title={run.htmlFilename}
+                  onOpen={() => setHtmlPreview(true)}
+                />
+              )}
+
+              {screenshots.length > 0 && (
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <ImageIcon size={16} className="shrink-0 text-brand-500" />
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                          Screenshots
+                        </div>
+                        <div className="truncate text-xs text-slate-600 dark:text-slate-300">
+                          {screenshots.length} captured
+                        </div>
+                      </div>
                     </div>
-                    <div className="truncate text-xs text-slate-600 dark:text-slate-300">
-                      {run.videoFile}
-                    </div>
+                    {selectedScreenshotUrl && (
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        onClick={() => setPreview(selectedScreenshotUrl)}
+                      >
+                        Preview
+                      </button>
+                    )}
+                  </div>
+                  {selectedScreenshotUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setPreview(selectedScreenshotUrl)}
+                      className="mb-3 block aspect-video w-full overflow-hidden rounded-md border border-slate-200 bg-white text-left dark:border-white/10 dark:bg-slate-950"
+                      title="Open screenshot preview"
+                    >
+                      <img
+                        src={selectedScreenshotUrl}
+                        alt={selectedScreenshot ?? 'Screenshot'}
+                        className="h-full w-full object-contain"
+                      />
+                    </button>
+                  )}
+                  <div className="grid grid-cols-6 gap-1">
+                    {screenshots.slice(0, 12).map((f, index) => {
+                      const url = api.screenshotUrl(f)
+                      return (
+                        <button
+                          key={f}
+                          type="button"
+                          onClick={() => openScreenshot(index)}
+                          className={
+                            index === previewIndex
+                              ? 'block aspect-video overflow-hidden rounded border border-brand-400 bg-brand-50 text-left ring-1 ring-brand-400 dark:border-brand-400 dark:bg-brand-500/10'
+                              : 'block aspect-video overflow-hidden rounded border border-slate-200 bg-slate-50 text-left dark:border-white/10 dark:bg-white/[0.03]'
+                          }
+                          title={`Preview ${f.split('/').pop() ?? f}`}
+                        >
+                          <img src={url} alt={f} loading="lazy" className="h-full w-full object-cover" />
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
-                <button type="button" className="btn-secondary btn-sm" onClick={() => setVideoPreview(true)}>
-                  Maximize
-                </button>
-              </div>
-              <button
-                type="button"
-                onClick={() => setVideoPreview(true)}
-                className="block aspect-video w-full overflow-hidden rounded-md bg-black"
-                title="Open video preview"
-              >
-                <video
-                  src={api.downloadUrl(run.videoFile)}
-                  preload="metadata"
-                  muted
-                  className="h-full w-full object-contain"
-                />
-              </button>
-              <a href={api.downloadUrl(run.videoFile)} className="btn-secondary btn-sm mt-2 w-full">
-                <Download size={12} /> Download MP4
-              </a>
+              )}
             </div>
           )}
 
-          {hasOutputs && run.screenshotFiles && run.screenshotFiles.length > 0 && (
+          {false && screenshots.length > 0 && (
+            <div className="grid gap-3 lg:grid-cols-2">
+
+          {hasOutputs && screenshots.length > 0 && (
             <div>
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
@@ -584,14 +1049,14 @@ function RunRow({
                   title="Open screenshot preview"
                 >
                   <img
-                    src={selectedScreenshotUrl}
+                    src={selectedScreenshotUrl!}
                     alt={selectedScreenshot ?? 'Screenshot'}
                     className="h-full w-full object-contain"
                   />
                 </button>
               )}
               <div className="grid grid-cols-6 gap-1">
-                {run.screenshotFiles.slice(0, 12).map((f, index) => {
+                {screenshots.slice(0, 12).map((f, index) => {
                   // `f` is already a path relative to OUTPUT_FOLDER
                   // (e.g. "5(1).png" or "batch 3/5(1).png"). Do NOT prepend
                   // screenshotFolder — that double-prefixed the path and
@@ -642,6 +1107,25 @@ function RunRow({
             />
           )}
 
+          {contentMatchOpen && match && (
+            <ContentMatchModal
+              match={match}
+              inputText={inputText}
+              htmlFilename={run.htmlFilename}
+              onClose={() => setContentMatchOpen(false)}
+            />
+          )}
+
+          {pptxPreviewOpen && run.presentationFile && (
+            <PptxPreviewModal
+              title={run.presentationFile.split(/[\\/]/).pop() ?? 'PowerPoint preview'}
+              slides={pptxPreviewSlides}
+              loading={pptxPreviewLoading}
+              error={pptxPreviewError}
+              onClose={() => setPptxPreviewOpen(false)}
+            />
+          )}
+
           {videoPreview && run.videoFile && (
             <AssetPreviewModal
               kind="video"
@@ -653,6 +1137,14 @@ function RunRow({
 
           {onRemove && (
             <div className="flex flex-wrap justify-end gap-2">
+              <button className="btn-secondary btn-sm" onClick={() => setDetailsOpen(true)}>
+                <ExternalLink size={12} /> Details
+              </button>
+              {canLoadLogs && (
+                <button className="btn-secondary btn-sm" onClick={() => void loadLogs()}>
+                  <ListOrdered size={12} /> {logsOpen ? 'Refresh logs' : 'Backend logs'}
+                </button>
+              )}
               {canRegenerate && (
                 <>
                   <button className="btn-secondary btn-sm" onClick={() => onEditRegenerate?.(run)}>
@@ -668,9 +1160,301 @@ function RunRow({
               </button>
             </div>
           )}
+
+          {logsOpen && (
+            <LiveLogModal
+              title={run.inputPreview || meta.label}
+              operationId={run.operationId ?? run.id}
+              running={run.status === 'running'}
+              loading={logsLoading}
+              error={logsError}
+              lines={logLines}
+              onRefresh={loadLogs}
+              onClose={() => setLogsOpen(false)}
+            />
+          )}
+
+          {detailsOpen && (
+            <RunDetailDrawer
+              run={run}
+              runtime={runtime}
+              canRegenerate={canRegenerate}
+              onClose={() => setDetailsOpen(false)}
+              onPreviewHtml={run.htmlFilename ? () => setHtmlPreview(true) : undefined}
+              onPreviewVideo={run.videoFile ? () => setVideoPreview(true) : undefined}
+              onPreviewPptx={run.presentationFile ? () => void openPptxPreview() : undefined}
+              onPreviewScreenshot={screenshots[0] ? () => openScreenshot(0) : undefined}
+              onOpenLogs={canLoadLogs ? () => void loadLogs() : undefined}
+              onEdit={canRegenerate ? () => onEditRegenerate?.(run) : undefined}
+              onRegenerate={canRegenerate ? () => onRegenerate?.(run) : undefined}
+            />
+          )}
         </div>
       )}
     </div>
+  )
+}
+
+function LiveLogModal({
+  title,
+  operationId,
+  running,
+  loading,
+  error,
+  lines,
+  onRefresh,
+  onClose,
+}: {
+  title: string
+  operationId: string
+  running: boolean
+  loading: boolean
+  error: string
+  lines: string[]
+  onRefresh: (silent?: boolean) => void
+  onClose: () => void
+}) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true)
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [onClose])
+
+  useEffect(() => {
+    if (!running) return undefined
+    const id = window.setInterval(() => onRefresh(true), 2500)
+    return () => window.clearInterval(id)
+  }, [onRefresh, running])
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Backend logs"
+        tabIndex={-1}
+        className="flex h-full max-h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-white/10 bg-slate-950 text-slate-100 shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-slate-900 px-4 py-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-400">
+              <span>Live backend logs</span>
+              {running && <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-emerald-200">Auto-refreshing</span>}
+            </div>
+            <div className="mt-1 truncate text-sm font-semibold text-white">{title}</div>
+            <div className="mt-0.5 truncate font-mono text-[11px] text-slate-400">{operationId}</div>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <button type="button" className="btn-secondary btn-sm" onClick={() => onRefresh(false)}>
+              <RefreshCw size={12} /> Refresh
+            </button>
+            <button type="button" className="btn-ghost btn-sm text-slate-200" onClick={onClose}>
+              <X size={14} /> Close
+            </button>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto bg-slate-950">
+          {loading ? (
+            <div className="flex items-center gap-2 px-4 py-5 text-sm text-slate-300">
+              <Loader2 size={16} className="animate-spin" /> Loading logs...
+            </div>
+          ) : error ? (
+            <div className="m-4 rounded-md border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-100">
+              {error}
+            </div>
+          ) : lines.length === 0 ? (
+            <div className="px-4 py-5 text-sm text-slate-400">No log lines found for this run.</div>
+          ) : (
+            <pre className="min-h-full whitespace-pre-wrap break-words px-4 py-4 font-mono text-[11px] leading-relaxed text-slate-200">
+              {lines.join('\n')}
+            </pre>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+function RunDetailDrawer({
+  run,
+  runtime,
+  canRegenerate,
+  onClose,
+  onPreviewHtml,
+  onPreviewVideo,
+  onPreviewPptx,
+  onPreviewScreenshot,
+  onOpenLogs,
+  onEdit,
+  onRegenerate,
+}: {
+  run: Run
+  runtime: number
+  canRegenerate: boolean
+  onClose: () => void
+  onPreviewHtml?: () => void
+  onPreviewVideo?: () => void
+  onPreviewPptx?: () => void
+  onPreviewScreenshot?: () => void
+  onOpenLogs?: () => void
+  onEdit?: () => void
+  onRegenerate?: () => void
+}) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true)
+  const firstScreenshot = run.screenshotFiles?.[0]
+  const firstScreenshotUrl = firstScreenshot ? api.screenshotUrl(firstScreenshot) : undefined
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [onClose])
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/70 backdrop-blur-sm">
+      <button type="button" className="absolute inset-0 cursor-default" aria-label="Close details" onClick={onClose} />
+      <aside
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Run details"
+        tabIndex={-1}
+        className="relative flex h-full w-full max-w-2xl flex-col overflow-hidden border-l border-slate-200 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-950"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-white/10">
+          <div className="min-w-0">
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Process details
+            </div>
+            <h2 className="mt-1 truncate font-display text-lg font-semibold text-slate-900 dark:text-slate-50">
+              {toolMeta(run.tool).label}
+            </h2>
+            <p className="mt-1 truncate text-sm text-slate-600 dark:text-slate-300">
+              {run.inputPreview || '(no input)'}
+            </p>
+          </div>
+          <button type="button" className="btn-ghost btn-sm" onClick={onClose}>
+            <X size={14} /> Close
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-4 overflow-auto p-5">
+          <Section title="Status">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge status={run.status} />
+              <span className="text-sm text-slate-600 dark:text-slate-300">{stageStatusLabel(run.stage)}</span>
+            </div>
+            <div className="mt-3 space-y-1">
+              <KV label="Started" value={new Date(run.startedAt).toLocaleString()} />
+              <KV label="Ended" value={run.endedAt ? new Date(run.endedAt).toLocaleString() : 'Still running'} />
+              <KV label="Duration" value={formatRuntime(runtime)} />
+              {run.progress != null && <KV label="Progress" value={`${Math.round(run.progress)}%`} />}
+              {run.operationId && <KV label="Operation ID" value={<code className="text-[10px]">{run.operationId}</code>} />}
+            </div>
+          </Section>
+
+          <Section title="Outputs">
+            {run.htmlFilename && (
+              <OutputFileActions
+                kind="html"
+                label="HTML"
+                filename={run.htmlFilename}
+                onPreview={onPreviewHtml}
+                openHref={api.htmlUrl(run.htmlFilename)}
+                downloadHref={api.htmlUrl(run.htmlFilename)}
+              />
+            )}
+            {firstScreenshot && firstScreenshotUrl && (
+              <OutputFileActions
+                kind="image"
+                label={`Screenshots (${run.screenshotFiles?.length ?? 0})`}
+                filename={firstScreenshot}
+                previewLabel="Preview first"
+                onPreview={onPreviewScreenshot}
+                openHref={firstScreenshotUrl}
+                downloadHref={firstScreenshotUrl}
+              />
+            )}
+            {run.presentationFile && (
+              <OutputFileActions
+                kind="pptx"
+                label="PowerPoint"
+                filename={run.presentationFile}
+                onPreview={onPreviewPptx}
+                openHref={api.downloadUrl(run.presentationFile)}
+                downloadHref={api.downloadUrl(run.presentationFile)}
+              />
+            )}
+            {run.videoFile && (
+              <OutputFileActions
+                kind="video"
+                label="MP4 video"
+                filename={run.videoFile}
+                onPreview={onPreviewVideo}
+                openHref={api.downloadUrl(run.videoFile)}
+                downloadHref={api.downloadUrl(run.videoFile)}
+              />
+            )}
+            {!run.htmlFilename && !firstScreenshot && !run.presentationFile && !run.videoFile && (
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-400">
+                No output files recorded yet.
+              </div>
+            )}
+          </Section>
+
+          <Section title="Input">
+            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-200">
+              {run.inputText || run.inputPreview || '(empty)'}
+            </pre>
+          </Section>
+
+          {run.settings && (
+            <Section title="Settings">
+              <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-200">
+                {JSON.stringify(run.settings, null, 2)}
+              </pre>
+            </Section>
+          )}
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-white/10">
+          {onOpenLogs && (
+            <button type="button" className="btn-secondary btn-sm" onClick={onOpenLogs}>
+              <ListOrdered size={12} /> Live logs
+            </button>
+          )}
+          {canRegenerate && onEdit && (
+            <button type="button" className="btn-secondary btn-sm" onClick={onEdit}>
+              <Pencil size={12} /> Edit
+            </button>
+          )}
+          {canRegenerate && onRegenerate && (
+            <button type="button" className="btn-primary btn-sm" onClick={onRegenerate}>
+              <RefreshCw size={12} /> Regenerate
+            </button>
+          )}
+        </div>
+      </aside>
+    </div>,
+    document.body,
   )
 }
 
@@ -751,6 +1535,325 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
+function ContentMatchPanel({
+  match,
+  onDetails,
+}: {
+  match: ContentMatchMetric
+  onDetails: () => void
+}) {
+  const coverage = typeof match.coverage_percent === 'number' ? match.coverage_percent : null
+  const review = coverage != null && coverage < 95
+  const missingCount = Array.isArray(match.missing_words) ? match.missing_words.length : 0
+  const missingSections = Array.isArray(match.missing_sections) ? match.missing_sections.length : 0
+  return (
+    <div
+      className={
+        'flex items-center justify-between gap-3 rounded-md border px-2.5 py-1.5 text-xs ' +
+        (review
+          ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100'
+          : 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-100')
+      }
+    >
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="font-medium">Content match</span>
+          <span className="rounded-full bg-current/10 px-1.5 py-0.5 text-[11px] tabular-nums">
+            {coverage == null ? '-' : `${coverage.toFixed(1)}%`}
+          </span>
+        </div>
+        <div className="mt-0.5 truncate text-[11px] opacity-85">
+          {match.matched_unique_words ?? 0}/{match.input_unique_words ?? 0} words found
+          {missingCount > 0 ? ` - ${missingCount} missing` : ''}
+          {missingSections > 0 ? ` - ${missingSections} lines need review` : ''}
+        </div>
+      </div>
+      <button
+        type="button"
+        className="shrink-0 rounded border border-current/20 px-2 py-1 text-[11px] font-medium hover:bg-white/40 dark:hover:bg-white/10"
+        onClick={onDetails}
+      >
+        Details
+      </button>
+    </div>
+  )
+}
+
+function stripHtmlForCompare(value: string): string {
+  return value
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function ContentMatchModal({
+  match,
+  inputText,
+  htmlFilename,
+  onClose,
+}: {
+  match: ContentMatchMetric
+  inputText: string
+  htmlFilename?: string
+  onClose: () => void
+}) {
+  const [htmlText, setHtmlText] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const coverage = typeof match.coverage_percent === 'number' ? match.coverage_percent : null
+  const sections = Array.isArray(match.missing_sections) ? match.missing_sections : []
+  const missing = Array.isArray(match.missing_words) ? match.missing_words : []
+
+  useEffect(() => {
+    let cancelled = false
+    if (!htmlFilename) return
+    setLoading(true)
+    setError('')
+    fetch(api.htmlUrl(htmlFilename))
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+        return res.text()
+      })
+      .then((text) => {
+        if (!cancelled) setHtmlText(stripHtmlForCompare(text))
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [htmlFilename])
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+      <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-950">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-white/10">
+          <div>
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Content Matcher
+            </div>
+            <h2 className="mt-1 font-display text-lg font-semibold text-slate-900 dark:text-slate-50">
+              Input vs Generated HTML
+            </h2>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Only user input words are compared. HTML tags, CSS, comments, and generated markup are ignored.
+            </p>
+          </div>
+          <button type="button" className="btn-ghost btn-sm" onClick={onClose}>
+            <X size={14} /> Close
+          </button>
+        </div>
+
+        <div className="grid gap-3 border-b border-slate-200 px-5 py-3 text-sm dark:border-white/10 md:grid-cols-4">
+          <KV label="Coverage" value={coverage == null ? '-' : `${coverage.toFixed(1)}%`} />
+          <KV label="Matched words" value={`${match.matched_unique_words ?? 0}/${match.input_unique_words ?? 0}`} />
+          <KV label="Missing words" value={`${match.missing_unique_words ?? 0}`} />
+          <KV label="Status" value={match.status ?? 'review'} />
+        </div>
+
+        <div className="grid min-h-0 flex-1 gap-4 overflow-auto p-5 lg:grid-cols-[1fr_1fr]">
+          <div className="min-h-0">
+            <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              User Input
+            </div>
+            <pre className="max-h-[55vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-800 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-100">
+              {inputText || '(no input text saved)'}
+            </pre>
+          </div>
+          <div className="min-h-0">
+            <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Generated HTML Text
+            </div>
+            <pre className="max-h-[55vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-800 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-100">
+              {loading ? 'Loading HTML...' : error ? `Could not load HTML: ${error}` : htmlText || '(HTML text unavailable)'}
+            </pre>
+          </div>
+        </div>
+
+        <div className="max-h-64 overflow-auto border-t border-slate-200 px-5 py-4 dark:border-white/10">
+          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Missing Lines / Sections
+          </div>
+          {sections.length === 0 ? (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-100">
+              No missing input lines were detected.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {sections.map((section, index) => (
+                <div key={`${section.line_number ?? index}-${index}`} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                  <div className="font-medium">
+                    Line {section.line_number ?? '-'} - {typeof section.coverage_percent === 'number' ? `${section.coverage_percent.toFixed(1)}% matched` : 'review'}
+                  </div>
+                  <div className="mt-1 whitespace-pre-wrap break-words text-xs">{section.text}</div>
+                  {Array.isArray(section.missing_words) && section.missing_words.length > 0 && (
+                    <div className="mt-1 text-xs opacity-85">Missing words: {section.missing_words.join(', ')}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {missing.length > 0 && (
+            <div className="mt-3 text-xs text-slate-600 dark:text-slate-300">
+              Missing word sample: {missing.join(', ')}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+function PptxPreviewModal({
+  title,
+  slides,
+  loading,
+  error,
+  onClose,
+}: {
+  title: string
+  slides: string[]
+  loading: boolean
+  error: string
+  onClose: () => void
+}) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true)
+
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = originalOverflow
+    }
+  }, [])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex h-dvh items-center justify-center overflow-hidden bg-slate-950/90 p-3 backdrop-blur-md sm:p-5"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="PowerPoint preview"
+        className="flex h-full w-full max-w-[1280px] flex-col overflow-hidden rounded-xl border border-white/10 bg-slate-950 shadow-2xl sm:max-h-[94dvh]"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-slate-900 px-5 py-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-400">
+              <span>PowerPoint Preview</span>
+              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-slate-200">
+                {loading ? 'Loading' : `${slides.length} slides`}
+              </span>
+            </div>
+            <h2 className="mt-1 truncate font-display text-lg font-semibold text-white">
+              {title}
+            </h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Converted to slide images and cached for fast re-open.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="inline-flex shrink-0 items-center gap-2 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-slate-100 transition hover:bg-white/10"
+            onClick={onClose}
+          >
+            <X size={14} /> Close
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-hidden bg-slate-950">
+          {loading ? (
+            <div className="m-4 flex min-h-96 items-center justify-center rounded-lg border border-white/10 bg-slate-900 text-sm text-slate-300">
+              <Loader2 size={16} className="mr-2 animate-spin" />
+              Converting PPTX to slide images...
+            </div>
+          ) : error ? (
+            <div className="m-4 rounded-lg border border-rose-400/30 bg-rose-500/10 p-5 text-sm text-rose-100">
+              <div className="font-medium">Could not preview this PowerPoint file.</div>
+              <div className="mt-1">{error}</div>
+            </div>
+          ) : slides.length === 0 ? (
+            <div className="m-4 rounded-lg border border-white/10 bg-slate-900 p-5 text-sm text-slate-300">
+              No preview slides were generated.
+            </div>
+          ) : (
+            <div className="grid h-full min-h-0 lg:grid-cols-[136px_1fr]">
+              <aside className="hidden min-h-0 overflow-auto border-r border-white/10 bg-slate-900/90 p-3 lg:block">
+                <div className="space-y-2">
+                  {slides.map((slide, index) => (
+                    <a
+                      key={slide}
+                      href={`#pptx-slide-${index + 1}`}
+                      className="block overflow-hidden rounded-md border border-white/10 bg-white/5 p-1 transition hover:border-brand-300/60 hover:bg-white/10"
+                    >
+                      <img
+                        src={api.pptxPreviewUrl(slide)}
+                        alt={`Slide ${index + 1} thumbnail`}
+                        loading="lazy"
+                        className="aspect-video w-full rounded-sm bg-white object-contain"
+                      />
+                      <div className="px-1 pt-1 text-center text-[11px] font-medium text-slate-300">
+                        {index + 1}
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </aside>
+              <div className="min-h-0 overflow-auto bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.18),_transparent_34%),linear-gradient(180deg,_#111827_0%,_#020617_100%)] p-4 sm:p-6">
+                <div className="mx-auto max-w-6xl space-y-6">
+                  {slides.map((slide, index) => (
+                    <figure
+                      key={slide}
+                      id={`pptx-slide-${index + 1}`}
+                      className="scroll-mt-6 overflow-hidden rounded-lg border border-white/10 bg-white shadow-2xl shadow-slate-950/60"
+                    >
+                      <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-medium text-slate-500">
+                        <span>Slide {index + 1}</span>
+                        <span>{index + 1} of {slides.length}</span>
+                      </div>
+                      <img
+                        src={api.pptxPreviewUrl(slide)}
+                        alt={`Slide ${index + 1}`}
+                        loading="lazy"
+                        className="w-full bg-white object-contain"
+                      />
+                    </figure>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
 function KV({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-3 text-xs">
@@ -771,6 +1874,7 @@ function LiveRunCard({
 }) {
   const hasLiveState = liveState.status === 'running'
   const source = trackedRun ?? (hasLiveState ? liveState : undefined)
+  const now = useNow(Boolean(source))
   if (!source) return null
   // The cancel button used to be gated on the SSE `liveState` matching the
   // tracked run's operationId. That hid the button whenever the user opened
@@ -783,7 +1887,6 @@ function LiveRunCard({
   const progress = trackedRun?.progress ?? liveState.progress ?? 0
   const stage = trackedRun?.stage ?? liveState.stage
   const message = trackedRun?.message ?? liveState.message
-  const now = useNow(Boolean(source))
   const trackedRemainingSeconds =
     trackedRun && typeof trackedRun.etaSeconds === 'number' && trackedRun.etaSeconds > 0
       ? Math.max(0, trackedRun.etaSeconds - ((trackedRun.endedAt ?? now) - trackedRun.startedAt) / 1000)
@@ -827,6 +1930,10 @@ function LiveRunCard({
         etaSeconds={etaSeconds}
         active
       />
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+        <span>Current step: {stageStatusLabel(stage)}</span>
+        <span>You can leave this page; the run stays visible here.</span>
+      </div>
     </div>
   )
 }
@@ -1109,12 +2216,12 @@ function ProcessEditModal({
             <label className="block">
               <span className="label">Model</span>
               <select className="select" value={settings.model_choice ?? 'default'} onChange={(e) => set('model_choice', e.target.value)}>
-                <option value="default">Default</option>
-                <option value="fast">Fast</option>
-                <option value="short">Short</option>
-                <option value="balanced">Balanced</option>
-                <option value="quality">Quality</option>
-                <option value="long">Long context</option>
+                <option value="default">Qwen 122B default</option>
+                <option value="fast">Fast - DeepSeek V4 Flash</option>
+                <option value="balanced">Balanced - GLM-5.1</option>
+                <option value="quality">Powerful - Nemotron 3 Super 120B</option>
+                <option value="long">Long input - DeepSeek V4 Pro</option>
+                <option value="short">Small / fastest - Llama 3.1 Nemotron Nano 8B</option>
               </select>
             </label>
             <label className="block">
@@ -1182,14 +2289,18 @@ export default function Processes() {
     updateQueued,
     enqueueText,
     enqueueHtml,
+    enqueueYoutube,
   } = useGenerationQueue()
   const [searchParams] = useSearchParams()
   const highlightOp = searchParams.get('op')
   const highlightQueue = searchParams.get('queue')
   const [cache, setCache] = useState<CacheStats | null>(null)
+  const [backendHistory, setBackendHistory] = useState<HistoryEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [filter, setFilter] = useState<'all' | RunTool>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'failed' | 'done' | 'cancelled'>('all')
+  const [processQuery, setProcessQuery] = useState('')
   const [editingProcess, setEditingProcess] = useState<EditableProcess | null>(null)
   const [cancelTarget, setCancelTarget] = useState<Run | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(() => readSelectedProcessId())
@@ -1216,8 +2327,12 @@ export default function Processes() {
     setLoading(true)
     setErr(null)
     try {
-      const c = await api.cacheStats()
+      const [c, history] = await Promise.all([
+        api.cacheStats(),
+        api.history().catch(() => [] as HistoryEntry[]),
+      ])
       setCache(c)
+      setBackendHistory(Array.isArray(history) ? history : [])
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
@@ -1423,8 +2538,35 @@ export default function Processes() {
     }
   }, [finish, update])
 
+  const matchesStatusFilter = useCallback(
+    (run: Run) => {
+      if (statusFilter === 'all') return true
+      if (statusFilter === 'failed') return run.status === 'error'
+      if (statusFilter === 'done') return run.status === 'success'
+      return run.status === statusFilter
+    },
+    [statusFilter],
+  )
+
   const runRows = useMemo(() => {
-    const filtered = filter === 'all' ? runs : runs.filter((r) => r.tool === filter)
+    const query = processQuery.trim().toLowerCase()
+    const byTool = filter === 'all' ? runs : runs.filter((r) => r.tool === filter)
+    return byTool
+      .filter(matchesStatusFilter)
+      .filter((r) => !query || processSearchText(r).includes(query))
+  }, [runs, filter, matchesStatusFilter, processQuery])
+
+  const applyBackendRunUpdate = useCallback((localRun: Run, backendRun: BackendRunDetail['run']) => {
+    update(localRun.id, {
+      ...trackedOutputsFromBackendRun(backendRun, localRun.operationId || localRun.id),
+      stage: backendRun.stage,
+      message: backendRun.message,
+      progress: backendRun.progress,
+    })
+  }, [update])
+
+  const remainingHistory = useMemo(() => {
+    const query = processQuery.trim().toLowerCase()
     // Dedupe history entries against the tracked runs. Match on any of
     // (operation_id, html_file, or input_preview + tight time window) —
     // the backend now emits operation_id on history entries (primary key)
@@ -1441,8 +2583,9 @@ export default function Processes() {
         endedAt: r.endedAt ?? r.startedAt,
       }))
       .filter((r) => r.preview)
-    const remainingHistory = ([] as HistoryEntry[])
+    return backendHistory
       .filter((h) => {
+        if (statusFilter !== 'all' && statusFilter !== 'done') return false
         if (h.operation_id && runSeenOpIds.has(h.operation_id)) return false
         if (h.html_file && runSeenHtml.has(h.html_file)) return false
         if (h.input_preview && h.timestamp) {
@@ -1471,11 +2614,10 @@ export default function Processes() {
         if (filter === 'screenshots-to-video') return t === 'screenshots-to-video'
         return false
       })
+      .filter((h) => !query || historySearchText(h).includes(query))
       .slice()
       .reverse()
-    void remainingHistory
-    return filtered
-  }, [runs, filter])
+  }, [backendHistory, filter, processQuery, runs, statusFilter])
 
   const clearCache = async () => {
     const ok = await confirmDialog({
@@ -1517,7 +2659,7 @@ export default function Processes() {
   const regenerateRun = (run: Run, override?: { text: string; settings: GenerateSettings }) => {
     const text = override?.text ?? run.inputText ?? run.inputPreview ?? ''
     const settings = toGenerateSettings(override?.settings ?? run.settings)
-    if (!text.trim()) {
+    if (!text.trim() && run.tool !== 'youtube-to-video') {
       toast.push({ variant: 'error', message: 'This process has no saved input to regenerate.' })
       return
     }
@@ -1525,6 +2667,14 @@ export default function Processes() {
       enqueueHtml(run.tool, text, settings)
     } else if (run.tool === 'text-to-video') {
       enqueueText(run.tool, text, settings)
+    } else if (run.tool === 'youtube-to-video') {
+      settings.youtube_url = (settings.youtube_url ?? firstUrl(text)).trim()
+      settings.youtube_timestamps = settings.youtube_timestamps ?? []
+      if (!settings.youtube_url) {
+        toast.push({ variant: 'error', message: 'This YouTube process has no saved URL to regenerate.' })
+        return
+      }
+      enqueueYoutube(run.tool, settings)
     } else if (run.tool === 'screenshots-to-video') {
       toast.push({ variant: 'error', message: 'Screenshots → Video processes need their original uploads, so regenerate is unavailable.' })
       return
@@ -1536,8 +2686,12 @@ export default function Processes() {
   }
 
   const editRegenerateRun = (run: Run) => {
-    const text = run.inputText ?? run.inputPreview ?? ''
-    if (!text.trim()) {
+    const sourceText = run.inputText ?? run.inputPreview ?? ''
+    const settings = toGenerateSettings(run.settings)
+    const text = run.tool === 'youtube-to-video'
+      ? youtubeTimestampText(settings, sourceText)
+      : sourceText
+    if (!sourceText.trim() && !text.trim()) {
       toast.push({ variant: 'error', message: 'This process has no saved input to edit.' })
       return
     }
@@ -1549,10 +2703,22 @@ export default function Processes() {
       toast.push({ variant: 'error', message: 'Screenshots → Video processes cannot be edited after the originals are gone.' })
       return
     }
+    if (run.tool === 'youtube-screenshots') {
+      toast.push({ variant: 'error', message: 'YouTube screenshot processes cannot be edited from this wizard yet.' })
+      return
+    }
+    if (run.tool === 'youtube-to-video') {
+      settings.youtube_url = (settings.youtube_url ?? firstUrl(sourceText)).trim()
+      settings.youtube_timestamps = settings.youtube_timestamps ?? []
+      if (!settings.youtube_url) {
+        toast.push({ variant: 'error', message: 'This YouTube process has no saved URL to edit.' })
+        return
+      }
+    }
     window.sessionStorage.setItem(PROCESS_EDIT_HANDOFF_KEY, JSON.stringify({
       tool: run.tool,
       text,
-      settings: toGenerateSettings(run.settings),
+      settings,
       replaceTargets: {
         runId: run.id,
         htmlFilename: run.htmlFilename,
@@ -1561,7 +2727,7 @@ export default function Processes() {
         videoFile: run.videoFile,
       },
     }))
-    nav(run.tool === 'html-to-video' ? '/workspace/html' : '/workspace/text')
+    nav(editWizardPath(run.tool))
   }
 
   const saveEditedProcess = (process: EditableProcess) => {
@@ -1598,6 +2764,7 @@ export default function Processes() {
       'image-to-video': 0,
       'screenshots-to-video': 0,
       'youtube-to-video': 0,
+      'youtube-screenshots': 0,
     }
     for (const r of runs) counts[r.tool] += 1
     return counts
@@ -1608,7 +2775,22 @@ export default function Processes() {
     { key: 'html-to-video', label: 'HTML' },
     { key: 'image-to-video', label: 'Image' },
     { key: 'screenshots-to-video', label: 'Screenshots' },
-    { key: 'youtube-to-video', label: 'YouTube' },
+    { key: 'youtube-to-video', label: 'YouTube video' },
+    { key: 'youtube-screenshots', label: 'YT shots' },
+  ]
+  const statusCounts = useMemo(() => ({
+    all: runs.length,
+    running: runs.filter((r) => r.status === 'running').length,
+    failed: runs.filter((r) => r.status === 'error').length,
+    done: runs.filter((r) => r.status === 'success').length,
+    cancelled: runs.filter((r) => r.status === 'cancelled').length,
+  }), [runs])
+  const statusFilters: Array<{ key: typeof statusFilter; label: string }> = [
+    { key: 'all', label: 'All statuses' },
+    { key: 'running', label: 'Running' },
+    { key: 'failed', label: 'Failed' },
+    { key: 'done', label: 'Done' },
+    { key: 'cancelled', label: 'Cancelled' },
   ]
 
   const totalRuntime = runs
@@ -1618,6 +2800,9 @@ export default function Processes() {
   const currentRun =
     runningRuns.find((r) => r.id === selectedRunId || r.operationId === selectedRunId) ??
     runningRuns[0]
+  const visibleProcessCount = runRows.length + remainingHistory.length
+  const totalProcessCount = runs.length + backendHistory.length
+  const hasActiveFilters = filter !== 'all' || statusFilter !== 'all' || processQuery.trim().length > 0
 
   const selectRunningRun = (run: Run) => {
     writeSelectedProcessId(run.id)
@@ -1717,54 +2902,110 @@ export default function Processes() {
         />
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-1.5">
-          {filters.map((f) => {
-            const count = filterCounts[f.key]
-            const active = filter === f.key
-            return (
+      <div className="glass !p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <label className="relative block min-w-0 flex-1">
+            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              className="input h-10 w-full pl-9"
+              value={processQuery}
+              onChange={(event) => setProcessQuery(event.target.value)}
+              placeholder="Search input, file, operation id, model, or subject"
+            />
+          </label>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700 dark:bg-white/10 dark:text-slate-200">
+              Showing {visibleProcessCount.toLocaleString()} of {totalProcessCount.toLocaleString()}
+            </span>
+            {hasActiveFilters && (
               <button
-                key={f.key}
                 type="button"
-                onClick={() => setFilter(f.key)}
-                className={
-                  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ' +
-                  (active
-                    ? 'border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-200'
-                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300')
-                }
-                aria-label={`${f.label} (${count})`}
+                className="btn-ghost btn-sm"
+                onClick={() => {
+                  setFilter('all')
+                  setStatusFilter('all')
+                  setProcessQuery('')
+                }}
               >
-                <span>{f.label}</span>
-                <span
-                  className={
-                    'inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] font-semibold tabular-nums ' +
-                    (active
-                      ? 'bg-brand-500/15 text-brand-700 dark:bg-brand-400/20 dark:text-brand-100'
-                      : 'bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300')
-                  }
-                >
-                  {count}
-                </span>
+                <X size={12} /> Reset
               </button>
-            )
-          })}
+            )}
+            {runs.length > 0 && (
+              <button
+                className="btn-ghost btn-sm"
+                onClick={async () => {
+                  const ok = await confirmDialog({
+                    title: 'Clear the local process log?',
+                    message: 'Only your browser-local list of runs is cleared. Backend history is not affected.',
+                    confirmLabel: 'Clear log',
+                  })
+                  if (ok) clear()
+                }}
+              >
+                <Trash2 size={12} /> Clear log
+              </button>
+            )}
+          </div>
         </div>
-        {runs.length > 0 && (
-          <button
-            className="btn-ghost text-xs"
-            onClick={async () => {
-              const ok = await confirmDialog({
-                title: 'Clear the local process log?',
-                message: 'Only your browser-local list of runs is cleared. Backend history is not affected.',
-                confirmLabel: 'Clear log',
-              })
-              if (ok) clear()
-            }}
-          >
-            <Trash2 size={12} /> Clear log
-          </button>
-        )}
+
+        <div className="mt-3 grid gap-3 xl:grid-cols-[1fr_auto]">
+          <div>
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Type
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {filters.map((f) => {
+                const count = filterCounts[f.key]
+                const active = filter === f.key
+                return (
+                  <button
+                    key={f.key}
+                    type="button"
+                    onClick={() => setFilter(f.key)}
+                    className={
+                      'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ' +
+                      (active
+                        ? 'border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-200'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300')
+                    }
+                    aria-label={`${f.label} (${count})`}
+                  >
+                    <span>{f.label}</span>
+                    <span className="tabular-nums text-[10px] opacity-80">{count}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Status
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {statusFilters.map((f) => {
+                const count = statusCounts[f.key]
+                const active = statusFilter === f.key
+                return (
+                  <button
+                    key={f.key}
+                    type="button"
+                    onClick={() => setStatusFilter(f.key)}
+                    className={
+                      'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ' +
+                      (active
+                        ? 'border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-200'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300')
+                    }
+                  >
+                    <span>{f.label}</span>
+                    <span className="tabular-nums text-[10px] opacity-80">{count}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </div>
       </div>
 
       {err && <div className="card text-sm text-red-600 dark:text-red-300">{err}</div>}
@@ -1831,7 +3072,7 @@ export default function Processes() {
         onReorderQueued={reorderQueued}
       />
 
-      {runRows.length === 0 && queue.length === 0 && liveState.status !== 'running' ? (
+      {runRows.length === 0 && remainingHistory.length === 0 && queue.length === 0 && liveState.status !== 'running' ? (
         <EmptyState
           icon={<Activity size={20} />}
           title="No runs yet"
@@ -1844,6 +3085,19 @@ export default function Processes() {
         />
       ) : (
         <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-50">Process timeline</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Recent tracked runs first, followed by backend history that is not already tracked locally.
+              </p>
+            </div>
+          </div>
+          {visibleProcessCount === 0 && (
+            <div className="glass text-sm text-slate-600 dark:text-slate-300">
+              No processes match the current search and filters.
+            </div>
+          )}
           {runRows.map((r) => (
             <RunRow
               key={r.id}
@@ -1852,6 +3106,7 @@ export default function Processes() {
               onRegenerate={regenerateRun}
               onEditRegenerate={editRegenerateRun}
               onSelectRunning={selectRunningRun}
+              onBackendRunUpdated={applyBackendRunUpdate}
               selected={
                 r.status === 'running' &&
                 !!currentRun &&
@@ -1867,6 +3122,12 @@ export default function Processes() {
                   r.status === 'running' &&
                   r === runRows.find((x) => x.status === 'running'))
               }
+            />
+          ))}
+          {remainingHistory.map((entry, index) => (
+            <HistoryRow
+              key={`${entry.operation_id ?? entry.html_file ?? entry.timestamp ?? index}`}
+              entry={entry}
             />
           ))}
         </div>

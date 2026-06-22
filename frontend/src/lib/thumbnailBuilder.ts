@@ -960,7 +960,7 @@ function detectTopic(text: string, prefix: string, num: string): string {
   const byUnit = text.match(
     new RegExp(`\\b${escapedPrefix}\\s*${escapedNum}\\s*[:\\-]?\\s*([^\\n|]{3,100})`, 'i'),
   )
-  const raw = byUnit?.[1] || text.match(/\b(?:unit|chapter)\s*[0-9]{1,3}\s*[:\-]?\s*([^\n|]{3,100})/i)?.[1] || ''
+  const raw = byUnit?.[1] || text.match(/\b(?:unit|chapter)\s*[0-9]{1,3}\s*[:-]?\s*([^\n|]{3,100})/i)?.[1] || ''
   return cleanupTopic(raw)
 }
 

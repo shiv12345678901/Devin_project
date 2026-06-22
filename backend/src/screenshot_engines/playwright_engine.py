@@ -128,7 +128,7 @@ def take_screenshot_playwright(
     overlap=20,            # Logical pixels of overlap between consecutive shots
     viewport_width=1920,   # Final output width in physical pixels
     viewport_height=1080,  # Final output height in physical pixels
-    max_screenshots=50,
+    max_screenshots=75,
     progress_callback=None, # Optional callback for SSE progress updates
     cancel_event=None       # Optional threading.Event to abort generation
 ):
