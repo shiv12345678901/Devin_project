@@ -50,7 +50,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: 'Activity',
     items: [
-      { to: '/processes', label: 'Processes', icon: Activity },
+      { to: '/processes', label: 'Runs', icon: Activity },
       { to: '/settings', label: 'Settings', icon: SettingsIcon },
     ],
   },
@@ -68,7 +68,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/workspace/youtube-screenshots': 'YouTube → Screenshots',
   '/library': 'Library',
   '/publish': 'YouTube Publish',
-  '/processes': 'Processes',
+  '/processes': 'Runs',
   '/settings': 'Settings',
 }
 
@@ -101,7 +101,7 @@ export default function Layout() {
 
   // Close the mobile drawer whenever the route changes. Deferring with a
   // 0ms timeout keeps `react-hooks/set-state-in-effect` happy (same pattern
-  // already used in Library / Processes for their initial fetch).
+  // already used in Library / Runs for their initial fetch).
   useEffect(() => {
     const t = setTimeout(() => setMobileOpen(false), 0)
     return () => clearTimeout(t)
@@ -221,7 +221,7 @@ function DocumentTitleSync() {
 /**
  * A5: app-wide banner shown when the backend is unreachable. Replaces the
  * tiny sidebar status pill that was easy to miss while scrolling a long
- * Library or Processes page.
+ * Library or Runs page.
  */
 function BackendOfflineBanner() {
   const status = useBackendStatus()
@@ -311,7 +311,7 @@ function SidebarNav({ collapsed = false }: { collapsed?: boolean }) {
   const { runs } = useRuns()
   const { queue } = useGenerationQueue()
   // A run is "live" if at least one tracked entry is still in the running
-  // state. Shown next to the Processes link so the user never loses sight
+  // state. Shown next to the Runs link so the user never loses sight
   // of an in-flight job when they navigate to Library / Settings / etc.
   // The queue contains pending-only items; the currently-executing run is
   // tracked in the runs store / live generation state.
@@ -443,8 +443,8 @@ function SidebarFooterWithProgress({ collapsed = false }: { collapsed?: boolean 
           <NavLink
             to="/processes"
             className="flex h-9 items-center justify-center transition-colors hover:bg-[rgb(var(--bg-muted))]"
-            title={`Current process — ${Math.round(progress)}% — ${message || formatSidebarStage(stage)}`}
-            aria-label={`Current process at ${Math.round(progress)}%`}
+            title={`Current run — ${Math.round(progress)}% — ${message || formatSidebarStage(stage)}`}
+            aria-label={`Current run at ${Math.round(progress)}%`}
           >
             <Loader2 size={14} className="animate-spin text-brand-500" />
           </NavLink>
@@ -478,12 +478,12 @@ function SidebarFooterWithProgress({ collapsed = false }: { collapsed?: boolean 
         <NavLink
           to="/processes"
           className="block px-4 py-3 transition-colors hover:bg-[rgb(var(--bg-muted))]"
-          title="Open current process"
+          title="Open current run"
         >
           <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px]">
             <span className="flex min-w-0 items-center gap-1.5 font-medium text-[rgb(var(--text-strong))]">
               <Loader2 size={12} className="shrink-0 animate-spin text-brand-500" />
-              <span className="truncate">Current process</span>
+              <span className="truncate">Current run</span>
             </span>
             <span className="shrink-0 tabular-nums text-faint">{Math.round(progress)}%</span>
           </div>

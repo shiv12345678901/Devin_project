@@ -156,26 +156,6 @@ export default function Settings() {
             to this browser.
           </p>
         </div>
-        <button
-          type="button"
-          className="btn-ghost"
-          onClick={async () => {
-            // G3: one-click reset wiped every preference (theme, brand color,
-            // backend URL, custom curriculum, …). Wrap with a confirm.
-            const ok = await confirm({
-              title: 'Reset all settings?',
-              message:
-                'This clears every preference saved in this browser — theme, brand color, backend URL, custom class/subject lists, and wizard defaults. It cannot be undone.',
-              confirmLabel: 'Reset',
-              variant: 'danger',
-            })
-            if (!ok) return
-            reset()
-            toast.push({ variant: 'success', message: 'Settings reset to defaults.' })
-          }}
-        >
-          <RotateCcw size={14} /> Reset to defaults
-        </button>
       </div>
 
       {/* ─── Appearance ─────────────────────────────────────────────────── */}
@@ -582,13 +562,43 @@ export default function Settings() {
         </div>
       </Section>
 
-      {/* ─── Data ───────────────────────────────────────────────────────── */}
-      <Section title="Data" icon={<Trash2 size={16} />}>
+      {/* Danger Zone */}
+      <Section title="Danger Zone" icon={<Trash2 size={16} />}>
         <div className="space-y-5">
+        <div className="rounded-md border border-rose-200 bg-rose-50/60 p-4 dark:border-rose-500/30 dark:bg-rose-500/10">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-slate-600 dark:text-slate-300">
+              <div className="font-medium text-slate-800 dark:text-slate-100">
+                Reset settings
+              </div>
+              <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Clears theme, brand color, backend URL, custom class/subject lists, and wizard defaults.
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn-danger"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: 'Reset all settings?',
+                  message:
+                    'This clears every preference saved in this browser - theme, brand color, backend URL, custom class/subject lists, and wizard defaults. It cannot be undone.',
+                  confirmLabel: 'Reset',
+                  variant: 'danger',
+                })
+                if (!ok) return
+                reset()
+                toast.push({ variant: 'success', message: 'Settings reset to defaults.' })
+              }}
+            >
+              <RotateCcw size={14} /> Reset to defaults
+            </button>
+          </div>
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-sm text-slate-600 dark:text-slate-300">
             <div className="font-medium text-slate-800 dark:text-slate-100">
-              Clear process history
+              Clear run history
             </div>
             <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
               Removes all {runs.length} local entries and clears backend saved
@@ -600,8 +610,8 @@ export default function Settings() {
             className="btn-danger"
             onClick={async () => {
               const ok = await confirm({
-                title: 'Clear all process history?',
-                message: 'This clears the local Processes log and backend saved history. Generated output files are not affected.',
+                title: 'Clear all run history?',
+                message: 'This clears the local Runs log and backend saved history. Generated output files are not affected.',
                 confirmLabel: 'Clear',
                 variant: 'danger',
               })
@@ -609,7 +619,7 @@ export default function Settings() {
               try {
                 await api.clearHistory()
                 clear()
-                toast.push({ variant: 'success', message: 'Process history cleared.' })
+                toast.push({ variant: 'success', message: 'Run history cleared.' })
               } catch (e) {
                 toast.push({
                   variant: 'error',

@@ -60,3 +60,49 @@ def test_missing_content_reason_detects_truncated_numbered_questions():
     assert reason is not None
     assert "8" in reason
     assert "10" in reason
+
+
+def test_append_missing_content_inserts_repair_before_footer(monkeypatch):
+    source = "\n".join(f"{i}. Question {i}\nAnswer {i}" for i in range(1, 4))
+    html = (
+        "<html><body><main>"
+        "<div class='question'>1. Question 1</div><div class='answer'>Answer 1</div>"
+        "<div class='question'>2. Question 2</div><div class='answer'>Answer 2</div>"
+        "</main><div class='footer'><h2>Subscribe to Educated Nepal</h2></div></body></html>"
+    )
+    monkeypatch.setattr(
+        ai_client,
+        "get_ai_response",
+        lambda *_args, **_kwargs: "<div class='question'>3. Question 3</div><div class='answer'>Answer 3</div>",
+    )
+
+    repaired, reason = ai_client.append_missing_content(source, html)
+
+    assert reason is not None
+    assert repaired.index("repaired-missing-content") < repaired.index("Subscribe to Educated Nepal")
+    assert "3. Question 3" in repaired
+
+
+def test_append_missing_content_strips_footer_from_repair_fragment(monkeypatch):
+    source = "\n".join(f"{i}. Question {i}\nAnswer {i}" for i in range(1, 4))
+    html = (
+        "<html><body>"
+        "<div class='question'>1. Question 1</div><div class='answer'>Answer 1</div>"
+        "<div class='question'>2. Question 2</div><div class='answer'>Answer 2</div>"
+        "<footer>Subscribe to Educated Nepal</footer></body></html>"
+    )
+    monkeypatch.setattr(
+        ai_client,
+        "get_ai_response",
+        lambda *_args, **_kwargs: (
+            "<div class='question'>3. Question 3</div>"
+            "<div class='answer'>Answer 3</div>"
+            "<footer>Subscribe to Educated Nepal</footer>"
+        ),
+    )
+
+    repaired, reason = ai_client.append_missing_content(source, html)
+
+    assert reason is not None
+    assert repaired.count("Subscribe to Educated Nepal") == 1
+    assert repaired.index("3. Question 3") < repaired.index("Subscribe to Educated Nepal")

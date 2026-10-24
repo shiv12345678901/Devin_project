@@ -164,6 +164,80 @@ def _tail_source_for_repair(input_text, html_content):
     return input_text[-6000:].strip()
 
 
+def _strip_fragment_shell(fragment):
+    """Keep repair output as body-only content, even if the model adds wrappers."""
+    fragment = clean_ai_response(fragment)
+    fragment = re.sub(r"(?is)<!doctype[^>]*>", "", fragment)
+    fragment = re.sub(r"(?is)</?(?:html|head|body)[^>]*>", "", fragment)
+    fragment = re.sub(r"(?is)<style.*?</style>|<script.*?</script>", "", fragment)
+    fragment = re.sub(r"(?is)<footer\b.*?</footer>", "", fragment)
+    fragment = re.sub(
+        r"(?is)<(?P<tag>[a-z][a-z0-9]*)\b[^>]*class=[\"'][^\"']*\bfooter\b[^\"']*[\"'][^>]*>.*?</(?P=tag)>",
+        "",
+        fragment,
+    )
+    return fragment.strip()
+
+
+def _footer_insert_index(html_content):
+    """Return a stable insertion point before the final footer/subscription block."""
+    candidates = []
+    for pattern in (
+        r"(?is)<footer\b",
+        r"(?is)<[a-z][a-z0-9]*\b[^>]*class=[\"'][^\"']*\bfooter\b[^\"']*[\"'][^>]*>",
+    ):
+        matches = list(re.finditer(pattern, html_content))
+        if matches:
+            candidates.append(matches[-1].start())
+
+    subscribe_idx = html_content.lower().rfind("subscribe to educated nepal")
+    if subscribe_idx >= 0:
+        block_idx = max(
+            html_content.rfind("<section", 0, subscribe_idx),
+            html_content.rfind("<div", 0, subscribe_idx),
+            html_content.rfind("<footer", 0, subscribe_idx),
+        )
+        candidates.append(block_idx if block_idx >= 0 else subscribe_idx)
+
+    if candidates:
+        return min(candidates)
+
+    lower = html_content.lower()
+    for marker in ("</main>", "</body>", "</html>"):
+        idx = lower.rfind(marker)
+        if idx >= 0:
+            return idx
+    return len(html_content)
+
+
+def _has_new_repair_content(html_content, fragment):
+    fragment_text = _plain_text(fragment).lower()
+    if len(fragment_text) < 20:
+        return False
+
+    html_numbers = _numbered_items(html_content)
+    fragment_numbers = _numbered_items(fragment)
+    if fragment_numbers:
+        return bool(fragment_numbers - html_numbers)
+
+    html_text = _plain_text(html_content).lower()
+    return fragment_text[:160] not in html_text
+
+
+def _insert_repair_fragment(html_content, fragment):
+    fragment = _strip_fragment_shell(fragment)
+    if not _has_new_repair_content(html_content, fragment):
+        return html_content
+
+    repaired = (
+        "\n<section class=\"content-card repaired-missing-content\">\n"
+        f"{fragment}\n"
+        "</section>\n"
+    )
+    insert_at = _footer_insert_index(html_content)
+    return html_content[:insert_at] + repaired + html_content[insert_at:]
+
+
 def append_missing_content(input_text, html_content, cancel_event=None, model_choice='default'):
     reason = missing_content_reason(input_text, html_content)
     if not reason:
@@ -194,16 +268,7 @@ def append_missing_content(input_text, html_content, cancel_event=None, model_ch
     if not fragment:
         return html_content, reason
 
-    marker = "\n<section class=\"content-card repaired-missing-content\">\n"
-    repaired = marker + clean_ai_response(fragment) + "\n</section>\n"
-    lower = html_content.lower()
-    body_idx = lower.rfind("</body>")
-    if body_idx >= 0:
-        return html_content[:body_idx] + repaired + html_content[body_idx:], reason
-    html_idx = lower.rfind("</html>")
-    if html_idx >= 0:
-        return html_content[:html_idx] + repaired + html_content[html_idx:], reason
-    return html_content + repaired, reason
+    return _insert_repair_fragment(html_content, fragment), reason
 
 
 def load_system_prompt():

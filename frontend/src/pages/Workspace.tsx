@@ -16,17 +16,17 @@ type ToolCard = {
 const CREATE_TOOLS: ToolCard[] = [
   {
     to: '/workspace/text',
-    title: 'Text -> Video',
+    title: 'Text to Video',
     tagline: 'Full wizard',
     description: 'Paste source text, set project metadata, tune AI and rendering, then start a tracked run.',
     icon: FileText,
     accent: 'brand',
     badges: ['AI required', 'PowerPoint required'],
-    highlights: ['Review before start', 'Logs and retry in Processes'],
+    highlights: ['Review before start', 'Logs and retry in Runs'],
   },
   {
     to: '/workspace/html',
-    title: 'HTML -> Video',
+    title: 'HTML to Video',
     tagline: 'Bring HTML',
     description: 'Paste or upload raw HTML and send it through the shared screenshot and export pipeline.',
     icon: Code2,
@@ -36,7 +36,7 @@ const CREATE_TOOLS: ToolCard[] = [
   },
   {
     to: '/workspace/image',
-    title: 'Image/PDF -> Screenshots',
+    title: 'Image/PDF to Screenshots',
     tagline: 'Vision extract',
     description: 'Upload a photo, screenshot, or PDF. Vision AI extracts the content and captures screenshots.',
     icon: ImageIcon,
@@ -46,7 +46,7 @@ const CREATE_TOOLS: ToolCard[] = [
   },
   {
     to: '/workspace/screenshots',
-    title: 'Screenshots -> Video',
+    title: 'Screenshots to Video',
     tagline: 'Export only',
     description: 'Upload screenshots you already have and run only the MP4 / PowerPoint export steps.',
     icon: Images,
@@ -56,7 +56,7 @@ const CREATE_TOOLS: ToolCard[] = [
   },
   {
     to: '/workspace/youtube',
-    title: 'YouTube -> Video',
+    title: 'YouTube to Video',
     tagline: 'Timestamp capture',
     description: 'Capture frames from a YouTube URL at specific timestamps, then export them as video.',
     icon: Video,
@@ -69,7 +69,7 @@ const CREATE_TOOLS: ToolCard[] = [
 const UTILITY_TOOLS: ToolCard[] = [
   {
     to: '/workspace/youtube-screenshots',
-    title: 'YouTube -> Screenshots',
+    title: 'YouTube to Screenshots',
     tagline: 'Direct capture',
     description: 'Capture YouTube frames into reusable screenshot folders without running video export.',
     icon: Camera,
@@ -175,7 +175,7 @@ export default function Workspace() {
         <div className="min-w-0 flex-1 text-[13.5px]">
           <div className="font-medium text-[rgb(var(--text-strong))]">How tools share state</div>
           <p className="mt-1 leading-relaxed text-muted">
-            Runs show queued, running, progress, logs, outputs, cancel, and retry controls in Processes. Outputs are grouped as bundles in Library.
+            Runs show queued, running, progress, logs, outputs, cancel, and retry controls in Runs. Outputs are grouped as bundles in Library.
           </p>
         </div>
       </aside>

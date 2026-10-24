@@ -207,19 +207,15 @@ export default function Home() {
             are available on Windows hosts.
           </p>
           <div className="mt-7 flex flex-wrap items-center gap-2">
-            <Link to="/workspace/text" className="btn-primary btn-lg">
-              Start a new run
+            <Link to="/workspace" className="btn-primary btn-lg">
+              Create a run
               <ArrowRight size={15} />
+            </Link>
+            <Link to="/processes" className="btn-secondary btn-lg">
+              <Activity size={15} /> View runs
             </Link>
             <Link to="/library" className="btn-secondary btn-lg">
               <Library size={15} /> Browse library
-            </Link>
-            <Link
-              to="/workspace"
-              className="btn-ghost btn-lg ml-1 text-muted hover:text-[rgb(var(--text-strong))]"
-            >
-              See all tools
-              <ArrowUpRight size={14} />
             </Link>
           </div>
           {preflightSummary && (
@@ -294,7 +290,7 @@ export default function Home() {
         <SectionHeader
           eyebrow="Overview"
           title="At a glance"
-          hint="Live counts from the local Processes log."
+          hint="Live counts from the local Runs log."
         />
         <div className="grid grid-cols-3 gap-3 lg:grid-cols-6">
           <StatCard label="Running"   value={stats.running} tone="sky" />

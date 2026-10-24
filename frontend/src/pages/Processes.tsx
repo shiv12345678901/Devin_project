@@ -103,14 +103,14 @@ function contentMatchMetric(run: Run): ContentMatchMetric | null {
 }
 
 const TOOL_META: Record<string, { label: string; icon: typeof FileText }> = {
-  'text-to-video': { label: 'Text → Video', icon: FileText },
-  'text-to-image': { label: 'Text → Video', icon: FileText },
-  'html-to-video': { label: 'HTML → Video', icon: Code2 },
-  'html-to-image': { label: 'HTML → Video', icon: Code2 },
-  'image-to-video': { label: 'Image → Screenshots', icon: ImageIcon },
-  'image-to-screenshots': { label: 'Image → Screenshots', icon: ImageIcon },
-  'screenshots-to-video': { label: 'Screenshots → Video', icon: ImageIcon },
-  'youtube-screenshots': { label: 'YouTube → Screenshots', icon: ImageIcon },
+  'text-to-video': { label: 'Text â†’ Video', icon: FileText },
+  'text-to-image': { label: 'Text â†’ Video', icon: FileText },
+  'html-to-video': { label: 'HTML â†’ Video', icon: Code2 },
+  'html-to-image': { label: 'HTML â†’ Video', icon: Code2 },
+  'image-to-video': { label: 'Image â†’ Screenshots', icon: ImageIcon },
+  'image-to-screenshots': { label: 'Image â†’ Screenshots', icon: ImageIcon },
+  'screenshots-to-video': { label: 'Screenshots â†’ Video', icon: ImageIcon },
+  'youtube-screenshots': { label: 'YouTube â†’ Screenshots', icon: ImageIcon },
   regenerate: { label: 'Regenerate', icon: Wand2 },
 }
 
@@ -267,7 +267,7 @@ function useNow(enabled: boolean, tickMs = 1000): number {
 }
 
 /**
- * D6: 5-segment stage strip — AI → Render → Screenshot → PPTX → MP4. Each
+ * D6: 5-segment stage strip â€” AI â†’ Render â†’ Screenshot â†’ PPTX â†’ MP4. Each
  * segment lights up as the run reaches that pipeline phase. Compact
  * enough to sit on the row above the progress bar.
  */
@@ -850,7 +850,7 @@ function RunRow({
               {run.inputFiles && run.inputFiles.length > 0 && (
                 <ul className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">
                   {run.inputFiles.map((f) => (
-                    <li key={f}>· {f}</li>
+                    <li key={f}>Â· {f}</li>
                   ))}
                 </ul>
               )}
@@ -860,7 +860,7 @@ function RunRow({
               <KV label="Started" value={new Date(run.startedAt).toLocaleString()} />
               <KV
                 label="Ended"
-                value={run.endedAt ? new Date(run.endedAt).toLocaleString() : '—'}
+                value={run.endedAt ? new Date(run.endedAt).toLocaleString() : 'â€”'}
               />
               {run.status === 'running' && run.message && (
                 <KV label="Current" value={run.message} />
@@ -886,16 +886,16 @@ function RunRow({
                   label="Project"
                   value={[run.settings?.class_name, run.settings?.subject, run.settings?.title]
                     .filter(Boolean)
-                    .join(' · ')}
+                    .join(' Â· ')}
                 />
               )}
               {run.settings && (
                 <KV
                   label="Viewport"
-                  value={`${run.settings.viewport_width ?? '—'}×${run.settings.viewport_height ?? '—'}`}
+                  value={`${run.settings.viewport_width ?? 'â€”'}Ã—${run.settings.viewport_height ?? 'â€”'}`}
                 />
               )}
-              {run.settings?.zoom != null && <KV label="Zoom" value={`${run.settings.zoom}×`} />}
+              {run.settings?.zoom != null && <KV label="Zoom" value={`${run.settings.zoom}Ã—`} />}
             </Section>
 
             <Section title="Output">
@@ -1059,7 +1059,7 @@ function RunRow({
                 {screenshots.slice(0, 12).map((f, index) => {
                   // `f` is already a path relative to OUTPUT_FOLDER
                   // (e.g. "5(1).png" or "batch 3/5(1).png"). Do NOT prepend
-                  // screenshotFolder — that double-prefixed the path and
+                  // screenshotFolder â€” that double-prefixed the path and
                   // silently fell back to a basename walk that could pick
                   // the wrong batch.
                   const url = api.screenshotUrl(f)
@@ -1342,7 +1342,7 @@ function RunDetailDrawer({
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-white/10">
           <div className="min-w-0">
             <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-              Process details
+              Run details
             </div>
             <h2 className="mt-1 truncate font-display text-lg font-semibold text-slate-900 dark:text-slate-50">
               {toolMeta(run.tool).label}
@@ -1491,7 +1491,7 @@ export function HistoryRow({ entry }: { entry: HistoryEntry }) {
           {entry.input_preview || '(no input recorded)'}
         </p>
         <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-          {entry.screenshot_count ?? 0} screenshots · {entry.html_file ?? '—'}
+          {entry.screenshot_count ?? 0} screenshots Â· {entry.html_file ?? 'â€”'}
         </p>
       </div>
       {entry.html_file && (
@@ -2447,7 +2447,7 @@ export default function Processes() {
                       applyBackendDetail(localRun, detail.run, detail.run.operation_id ?? operationId)
                     }
                   } catch {
-                    // ignore — fallback poll will cover it
+                    // ignore â€” fallback poll will cover it
                   }
                 })()
                 break
@@ -2457,7 +2457,7 @@ export default function Processes() {
           },
         })
         .catch(() => {
-          // Network drop / abort — let the fallback poll re-establish on next tick.
+          // Network drop / abort â€” let the fallback poll re-establish on next tick.
         })
         .finally(() => {
           sseHandlesRef.current.delete(operationId)
@@ -2568,7 +2568,7 @@ export default function Processes() {
   const remainingHistory = useMemo(() => {
     const query = processQuery.trim().toLowerCase()
     // Dedupe history entries against the tracked runs. Match on any of
-    // (operation_id, html_file, or input_preview + tight time window) —
+    // (operation_id, html_file, or input_preview + tight time window) â€”
     // the backend now emits operation_id on history entries (primary key)
     // but older entries only have html_file, and a very recently completed
     // run may briefly have neither populated on the tracked side. The
@@ -2642,7 +2642,7 @@ export default function Processes() {
 
   const queueEditorForItem = (item: QueueItem) => {
     if (item.kind === 'image' || item.kind === 'youtube') {
-      toast.push({ variant: 'info', message: 'This queued job cannot be edited from Processes. Open the wizard to submit a new one.' })
+      toast.push({ variant: 'info', message: 'This queued job cannot be edited from Runs. Open the wizard to submit a new one.' })
       return
     }
     setEditingProcess({
@@ -2676,13 +2676,13 @@ export default function Processes() {
       }
       enqueueYoutube(run.tool, settings)
     } else if (run.tool === 'screenshots-to-video') {
-      toast.push({ variant: 'error', message: 'Screenshots → Video processes need their original uploads, so regenerate is unavailable.' })
+      toast.push({ variant: 'error', message: 'Screenshots to Video runs need their original uploads, so regenerate is unavailable.' })
       return
     } else {
-      toast.push({ variant: 'error', message: 'Image processes cannot be regenerated after the original file is gone.' })
+      toast.push({ variant: 'error', message: 'Image runs cannot be regenerated after the original file is gone.' })
       return
     }
-    toast.push({ variant: 'success', message: 'Process queued for regeneration.' })
+    toast.push({ variant: 'success', message: 'Run queued for regeneration.' })
   }
 
   const editRegenerateRun = (run: Run) => {
@@ -2692,19 +2692,19 @@ export default function Processes() {
       ? youtubeTimestampText(settings, sourceText)
       : sourceText
     if (!sourceText.trim() && !text.trim()) {
-      toast.push({ variant: 'error', message: 'This process has no saved input to edit.' })
+      toast.push({ variant: 'error', message: 'This run has no saved input to edit.' })
       return
     }
     if (run.tool === 'image-to-video') {
-      toast.push({ variant: 'error', message: 'Image processes cannot be edited after the original file is gone.' })
+      toast.push({ variant: 'error', message: 'Image runs cannot be edited after the original file is gone.' })
       return
     }
     if (run.tool === 'screenshots-to-video') {
-      toast.push({ variant: 'error', message: 'Screenshots → Video processes cannot be edited after the originals are gone.' })
+      toast.push({ variant: 'error', message: 'Screenshots to Video runs cannot be edited after the originals are gone.' })
       return
     }
     if (run.tool === 'youtube-screenshots') {
-      toast.push({ variant: 'error', message: 'YouTube screenshot processes cannot be edited from this wizard yet.' })
+      toast.push({ variant: 'error', message: 'YouTube screenshot runs cannot be edited from this wizard yet.' })
       return
     }
     if (run.tool === 'youtube-to-video') {
@@ -2849,9 +2849,9 @@ export default function Processes() {
             <span className="h-1 w-1 rounded-full bg-brand-500" />
             Activity
           </div>
-          <h1 className="h-page mt-2">Processes</h1>
+          <h1 className="h-page mt-2">Runs</h1>
           <p className="mt-2 text-sm text-muted">
-            Every generation run, its input, how long it took, and the files it produced — all
+            Every generation run, its input, how long it took, and the files it produced â€” all
             in one place.
           </p>
         </div>
@@ -2873,7 +2873,7 @@ export default function Processes() {
         />
         <Stat
           label="Total runtime"
-          value={totalRuntime > 0 ? formatRuntime(totalRuntime) : '—'}
+          value={totalRuntime > 0 ? formatRuntime(totalRuntime) : 'â€”'}
         />
         <Stat
           label="Cache entries"
@@ -2882,7 +2882,7 @@ export default function Processes() {
               ? String(cache.total_entries)
               : typeof cache?.active_entries === 'number'
               ? String(cache.active_entries)
-              : '—'
+              : 'â€”'
           }
         />
       </div>
@@ -3029,7 +3029,7 @@ export default function Processes() {
         >
           {queueModeNotice ??
             (appSettings.concurrentPipelineRuns
-              ? 'Pending Text -> Video jobs can start in parallel; screenshot and PowerPoint stages still wait for their slots.'
+              ? 'Pending Text to Video jobs can start in parallel; screenshot and PowerPoint stages still wait for their slots.'
               : 'Pending jobs will run one at a time in the visible queue order.')}
         </Banner>
       )}
@@ -3051,7 +3051,7 @@ export default function Processes() {
           }
         >
           {queuePausedReason === 'in_flight'
-            ? 'The previous run was rejected because another run is already in progress on the backend. Resuming would just hit the same 409 — wait for the active run to finish, then resume.'
+            ? 'The previous run was rejected because another run is already in progress on the backend. Resuming would just hit the same 409 â€” wait for the active run to finish, then resume.'
             : queuePausedReason === 'duplicate'
             ? 'The previous run was rejected as a duplicate of a recent submission. Tweak the input or wait a few seconds before resuming.'
             : queuePausedReason === 'unknown'
@@ -3087,7 +3087,7 @@ export default function Processes() {
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-50">Process timeline</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-50">Run timeline</h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Recent tracked runs first, followed by backend history that is not already tracked locally.
               </p>
@@ -3095,7 +3095,7 @@ export default function Processes() {
           </div>
           {visibleProcessCount === 0 && (
             <div className="glass text-sm text-slate-600 dark:text-slate-300">
-              No processes match the current search and filters.
+              No runs match the current search and filters.
             </div>
           )}
           {runRows.map((r) => (
@@ -3116,7 +3116,7 @@ export default function Processes() {
                 (!!highlightOp &&
                   (r.operationId === highlightOp || r.id === highlightOp)) ||
                 // Highlight the newest running row when we landed via
-                // /processes?queue=… — the queue id is transient, so we key
+                // /processes?queue=â€¦ â€” the queue id is transient, so we key
                 // off status+recency instead of a direct match.
                 (!!highlightQueue &&
                   r.status === 'running' &&

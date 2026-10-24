@@ -950,7 +950,7 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
         </h1>
         <p className="mt-2 text-sm text-muted">
           Step through the wizard to configure the run. Nothing starts until you hit{' '}
-          <span className="font-medium">Start Process</span> on the last step.
+          <span className="font-medium">Start run</span> on the last step.
         </p>
       </div>
 
@@ -1819,13 +1819,18 @@ function ContentStep({
       />
 
       {!isHtml && !isYoutube && (
-        <Field label="AI Model">
-          <ModelChooser
-            value={settings.model_choice ?? 'default'}
-            onChange={(v) => onChange('model_choice', v)}
-            disabled={running}
-          />
-        </Field>
+        <AdvancedDisclosure
+          title="AI options"
+          description="Defaults work for most runs. Change these when you need a specific model or prompt style."
+        >
+          <Field label="AI Model">
+            <ModelChooser
+              value={settings.model_choice ?? 'default'}
+              onChange={(v) => onChange('model_choice', v)}
+              disabled={running}
+            />
+          </Field>
+        </AdvancedDisclosure>
       )}
 
       {isHtml && (
@@ -1891,13 +1896,16 @@ function ContentStep({
       </Field>
 
       {!isHtml && !isYoutube && (
-        <Field label="System prompt (optional)">
+        <AdvancedDisclosure
+          title="System prompt"
+          description="Optional. Use this only when the default teaching style needs a tighter instruction."
+        >
           <SystemPromptEditor
             value={settings.system_prompt ?? ''}
             onChange={(v) => onChange('system_prompt', v)}
             disabled={running}
           />
-        </Field>
+        </AdvancedDisclosure>
       )}
     </>
   )
@@ -4067,8 +4075,13 @@ function AdvancedStep({
     <>
       <StepHeader
         title="Advanced settings"
-        subtitle="Final checks. Hit Start Process when you're ready — preflight will run first."
+        subtitle="Final checks. Hit Start run when you're ready — preflight will run first."
       />
+      <AdvancedDisclosure
+        title="Advanced run controls"
+        description="Optional cache, HTML cleanup, PowerPoint, and timing controls."
+        defaultOpen
+      >
       <div className="space-y-2">
         <Toggle
           label="Use cache"
@@ -4108,11 +4121,12 @@ function AdvancedStep({
           </div>
         )}
       </div>
+      </AdvancedDisclosure>
 
       <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4 dark:border-white/10">
         {!running ? (
           <button type="button" className="btn-primary" onClick={onStart}>
-            <Play size={16} /> Start Process
+            <Play size={16} /> Start run
           </button>
         ) : (
           <button type="button" className="btn-danger" onClick={cancel}>
@@ -4121,7 +4135,7 @@ function AdvancedStep({
         )}
         {!canFinish && !running && (
           <span className="text-xs text-amber-600 dark:text-amber-400">
-            Fix the outstanding step errors — click Start Process to jump to the first one.
+            Fix the outstanding step errors — click Start run to jump to the first one.
           </span>
         )}
         {state.status === 'error' && !state.rejectedReason && (
@@ -4143,6 +4157,30 @@ function AdvancedStep({
 
 // ─── Small primitives ──────────────────────────────────────────────────────
 
+function AdvancedDisclosure({
+  title,
+  description,
+  children,
+  defaultOpen = false,
+}: {
+  title: string
+  description?: string
+  children: React.ReactNode
+  defaultOpen?: boolean
+}) {
+  return (
+    <details
+      className="rounded-lg border border-[rgb(var(--line))] bg-[rgb(var(--bg-muted))] p-3 open:bg-[rgb(var(--bg-surface))]"
+      open={defaultOpen}
+    >
+      <summary className="cursor-pointer select-none text-sm font-medium text-[rgb(var(--text-strong))]">
+        {title}
+      </summary>
+      {description && <p className="mt-1 text-xs leading-relaxed text-muted">{description}</p>}
+      <div className="mt-3 space-y-4">{children}</div>
+    </details>
+  )
+}
 function Field({
   label,
   children,

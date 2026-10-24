@@ -503,7 +503,16 @@ function PublishIndex({
   onRefresh: () => void
 }) {
   const [query, setQuery] = useState('')
-  const filtered = useMemo(() => {
+  const [classFilter, setClassFilter] = useState('All')
+  const classOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const video of videos) {
+      const className = video.class_name || 'Unsorted'
+      counts.set(className, (counts.get(className) ?? 0) + 1)
+    }
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+  }, [videos])
+  const searchFiltered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return videos
     return videos.filter((video) =>
@@ -513,6 +522,10 @@ function PublishIndex({
         .includes(q),
     )
   }, [query, videos])
+  const filtered = useMemo(() => {
+    if (classFilter === 'All') return searchFiltered
+    return searchFiltered.filter((video) => (video.class_name || 'Unsorted') === classFilter)
+  }, [classFilter, searchFiltered])
   const groups = useMemo(() => groupVideos(filtered), [filtered])
 
   return (
@@ -537,6 +550,33 @@ function PublishIndex({
       </div>
 
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-[rgb(var(--bg-surface))] p-3 dark:border-white/10">
+        <div className="flex w-full flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+              classFilter === 'All'
+                ? 'border-brand-300 bg-brand-50 text-brand-700 dark:border-brand-500/50 dark:bg-brand-500/10 dark:text-brand-200'
+                : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-brand-200 hover:text-brand-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300 dark:hover:border-brand-500/40'
+            }`}
+            onClick={() => setClassFilter('All')}
+          >
+            All <span className="ml-1 text-[10px] opacity-70">{videos.length}</span>
+          </button>
+          {classOptions.map(([className, count]) => (
+            <button
+              key={className}
+              type="button"
+              className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                classFilter === className
+                  ? 'border-brand-300 bg-brand-50 text-brand-700 dark:border-brand-500/50 dark:bg-brand-500/10 dark:text-brand-200'
+                  : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-brand-200 hover:text-brand-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300 dark:hover:border-brand-500/40'
+              }`}
+              onClick={() => setClassFilter(className)}
+            >
+              {className} <span className="ml-1 text-[10px] opacity-70">{count}</span>
+            </button>
+          ))}
+        </div>
         <div className="relative min-w-[240px] flex-1">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint" />
           <input

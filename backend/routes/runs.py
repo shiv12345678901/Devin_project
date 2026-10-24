@@ -1025,6 +1025,7 @@ def start_text_to_video():
                 ctx.fail("Failed to generate HTML", progress=10)
                 return
             ctx.progress("ai_verify", 29, "Checking HTML completeness...")
+            before_repair_match = match_input_to_html(text, html_content)
             repaired_html, missing_reason = append_missing_content(
                 text,
                 html_content,
@@ -1039,7 +1040,10 @@ def start_text_to_video():
             ctx.metrics({
                 "ai_seconds": round(time.time() - ai_started, 2),
                 "html_characters": len(html_content),
+                "content_match_before_repair": before_repair_match,
                 "content_match": content_match,
+                "repair_applied": bool(missing_reason),
+                "repair_reason": missing_reason,
             })
 
             if beautify_html:
