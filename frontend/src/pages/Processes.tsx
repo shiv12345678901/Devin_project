@@ -493,8 +493,14 @@ function InlineHtmlPreview({
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError('')
+    // Defer the loading/error flips past the effect commit (React 19's
+    // stricter no-setState-in-effect rule; deferred-setState pattern
+    // used elsewhere in the codebase).
+    const deferred = window.setTimeout(() => {
+      if (cancelled) return
+      setLoading(true)
+      setError('')
+    }, 0)
     fetch(src, { cache: 'no-store' })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -513,6 +519,7 @@ function InlineHtmlPreview({
       })
     return () => {
       cancelled = true
+      window.clearTimeout(deferred)
     }
   }, [reloadKey, src])
 
@@ -1613,8 +1620,13 @@ function ContentMatchModal({
   useEffect(() => {
     let cancelled = false
     if (!htmlFilename) return
-    setLoading(true)
-    setError('')
+    // Defer the loading/error flips past the effect commit (React 19's
+    // stricter no-setState-in-effect rule; deferred-setState pattern).
+    const deferred = window.setTimeout(() => {
+      if (cancelled) return
+      setLoading(true)
+      setError('')
+    }, 0)
     fetch(api.htmlUrl(htmlFilename))
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
@@ -1631,6 +1643,7 @@ function ContentMatchModal({
       })
     return () => {
       cancelled = true
+      window.clearTimeout(deferred)
     }
   }, [htmlFilename])
 

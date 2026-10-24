@@ -64,8 +64,15 @@ export default function AssetPreviewModal({
   useEffect(() => {
     if (kind !== 'html') return undefined
     let cancelled = false
-    setHtmlLoading(true)
-    setHtmlError('')
+    // Defer the loading/error flips past the effect commit so React 19's
+    // stricter "no setState in effect body" rule (react-hooks/
+    // set-state-in-effect) is satisfied — same deferred-setState pattern
+    // used in Layout.tsx for the mobile-drawer close.
+    const deferred = window.setTimeout(() => {
+      if (cancelled) return
+      setHtmlLoading(true)
+      setHtmlError('')
+    }, 0)
     fetch(src, { cache: 'no-store' })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -89,6 +96,7 @@ export default function AssetPreviewModal({
       })
     return () => {
       cancelled = true
+      window.clearTimeout(deferred)
     }
   }, [kind, reloadKey, src])
 

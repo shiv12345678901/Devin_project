@@ -2,7 +2,13 @@
   "name": "textbro-frontend",
   "private": true,
   "version": "0.0.0",
+  "description": "TextBro — Text to Video Studio frontend. React + Vite + TypeScript + Tailwind.",
   "type": "module",
+  "license": "UNLICENSED",
+  "author": "TextBro",
+  "engines": {
+    "node": ">=20.19"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -11,7 +17,7 @@
   },
   "dependencies": {
     "clsx": "^2.1.1",
-    "lucide-react": "^1.9.0",
+    "lucide-react": "^1.21.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-router-dom": "^7.14.2"
