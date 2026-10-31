@@ -108,9 +108,7 @@ class VideoStudio:
 
         MoviePy-only optional keys:
             ``voiceover_files``     – ``list[Optional[str]]`` (one per slide)
-            ``narration_audio``     – single full-length narration track
-            ``background_music``    – music file mixed in at 10 % volume
-            ``logo_path``           – watermark, 50 % opacity, bottom-right
+            ``intro_video_path`` / ``outro_video_path`` – video segments
 
         Returns:
             ``{'presentation_path': str | None, 'video_path': str, 'warning': str | None}``
@@ -260,22 +258,25 @@ class VideoStudio:
         return transition_type, max(0.0, duration)
 
     def _can_build_ffmpeg_transitions(self, cfg: dict) -> bool:
-        """Return whether a still-image timeline can use FFmpeg xfade.
+        """Return whether a still-image timeline can use FFmpeg natively.
 
-        This path deliberately handles still images only. Audio, logos, and
-        video intro/outro clips remain on the MoviePy path until they are
-        migrated to an equivalent FFmpeg filter graph.
+        Full-track narration, looping background music, and a watermark are
+        handled inside FFmpeg. Per-slide voiceovers and video intro/outro
+        clips remain on the MoviePy path because they need separate timeline
+        handling.
         """
         if not shutil.which("ffmpeg"):
             return False
         transition_type, transition_duration = self._transition_settings(cfg)
-        if transition_type == "none" or transition_duration <= 0:
+        if transition_type != "none" and transition_duration <= 0:
             return False
         image_files = list(cfg.get("image_files") or [])
         if len(image_files) < 2 or any(not Path(p).is_file() for p in image_files):
             return False
-        if any(cfg.get(key) for key in ("narration_audio", "background_music", "logo_path")):
-            return False
+        for key in ("narration_audio", "background_music", "logo_path"):
+            path = cfg.get(key)
+            if path and not Path(path).is_file():
+                return False
         if any(p for p in list(cfg.get("voiceover_files") or []) if p):
             return False
         if cfg.get("intro_video_path") or cfg.get("outro_video_path"):
@@ -283,11 +284,11 @@ class VideoStudio:
         return True
 
     def _build_with_ffmpeg_transitions(self, cfg: dict) -> dict:
-        """Encode a 4K still-image timeline with FFmpeg xfade transitions.
+        """Encode a 4K still-image timeline and media layers with FFmpeg.
 
-        Unlike MoviePy, all frame generation and compositing stays inside the
-        FFmpeg process. This is materially lighter on a small Linux VM and
-        leaves the Windows PowerPoint path untouched.
+        Unlike MoviePy, frame generation, transitions, audio mixing, and
+        watermark compositing stay inside FFmpeg. This is materially lighter
+        on a small Linux VM and leaves the Windows PowerPoint path untouched.
         """
         image_files = self._sort_image_files_like_powerpoint(
             list(cfg.get("image_files") or [])
@@ -334,18 +335,33 @@ class VideoStudio:
 
         width, height = int(resolution[0]), int(resolution[1])
         total_duration = sum(duration for _path, duration in timeline)
-        total_duration -= transition_duration * (len(timeline) - 1)
+        if transition_type != "none":
+            total_duration -= transition_duration * (len(timeline) - 1)
 
         transition_map = {
             "fade": "fade",
             "wipe": "wipeleft",
             "push": "slideleft",
         }
-        xfade_name = transition_map[transition_type]
+        xfade_name = transition_map.get(transition_type)
+        transition_label = xfade_name or "cut"
 
         cmd: List[str] = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
         for path, duration in timeline:
             cmd.extend(["-loop", "1", "-framerate", str(fps), "-t", str(duration), "-i", path])
+
+        audio_inputs: dict[str, int] = {}
+        if cfg.get("narration_audio"):
+            audio_inputs["narration_audio"] = len(timeline)
+            cmd.extend(["-i", str(cfg["narration_audio"])])
+        if cfg.get("background_music"):
+            audio_inputs["background_music"] = len(timeline) + len(audio_inputs)
+            cmd.extend(["-stream_loop", "-1", "-i", str(cfg["background_music"])])
+
+        logo_index: int | None = None
+        if cfg.get("logo_path"):
+            logo_index = len(timeline) + len(audio_inputs)
+            cmd.extend(["-loop", "1", "-i", str(cfg["logo_path"])])
 
         filters: List[str] = []
         for index, (_path, duration) in enumerate(timeline):
@@ -357,25 +373,72 @@ class VideoStudio:
             )
 
         current_label = "v0"
-        accumulated_duration = timeline[0][1]
-        for index in range(1, len(timeline)):
-            offset = max(0.0, accumulated_duration - transition_duration)
-            next_label = f"x{index}"
+        if transition_type == "none":
+            concat_inputs = "".join(f"[v{index}]" for index in range(len(timeline)))
             filters.append(
-                f"[{current_label}][v{index}]xfade=transition={xfade_name}:"
-                f"duration={transition_duration:.6f}:offset={offset:.6f}[{next_label}]"
+                f"{concat_inputs}concat=n={len(timeline)}:v=1:a=0[vout]"
             )
-            current_label = next_label
-            accumulated_duration += timeline[index][1] - transition_duration
+            current_label = "vout"
+        else:
+            accumulated_duration = timeline[0][1]
+            for index in range(1, len(timeline)):
+                offset = max(0.0, accumulated_duration - transition_duration)
+                next_label = f"x{index}"
+                filters.append(
+                    f"[{current_label}][v{index}]xfade=transition={xfade_name}:"
+                    f"duration={transition_duration:.6f}:offset={offset:.6f}[{next_label}]"
+                )
+                current_label = next_label
+                accumulated_duration += timeline[index][1] - transition_duration
 
-        silence_input = len(timeline)
+        if logo_index is not None:
+            filters.extend([
+                f"[{logo_index}:v]format=rgba,scale=iw*0.12:-1,"
+                "colorchannelmixer=aa=0.5[logo]",
+                f"[{current_label}][logo]overlay=x=W-w-32:y=H-h-32:"
+                "eof_action=repeat:format=auto[vfinal]",
+            ])
+            current_label = "vfinal"
+
+        audio_labels: List[str] = []
+        if "narration_audio" in audio_inputs:
+            index = audio_inputs["narration_audio"]
+            filters.append(
+                f"[{index}:a]aresample=48000,apad,atrim=duration={total_duration:.6f},"
+                "asetpts=PTS-STARTPTS[narration]"
+            )
+            audio_labels.append("narration")
+        if "background_music" in audio_inputs:
+            index = audio_inputs["background_music"]
+            filters.append(
+                f"[{index}:a]aresample=48000,volume=0.1,"
+                f"atrim=duration={total_duration:.6f},asetpts=PTS-STARTPTS[music]"
+            )
+            audio_labels.append("music")
+
+        if len(audio_labels) == 2:
+            filters.append(
+                f"[{audio_labels[0]}][{audio_labels[1]}]amix=inputs=2:"
+                f"duration=longest:dropout_transition=0,atrim=duration={total_duration:.6f}[aout]"
+            )
+        elif len(audio_labels) == 1:
+            filters.append(f"[{audio_labels[0]}]anull[aout]")
+        else:
+            silence_input = len(timeline) + len(audio_inputs) + (1 if logo_index is not None else 0)
+            cmd.extend([
+                "-f", "lavfi",
+                "-t", f"{total_duration:.6f}",
+                "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+            ])
+            filters.append(
+                f"[{silence_input}:a]atrim=duration={total_duration:.6f},"
+                "asetpts=PTS-STARTPTS[aout]"
+            )
+
         cmd.extend([
-            "-f", "lavfi",
-            "-t", f"{total_duration:.6f}",
-            "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
             "-filter_complex", ";".join(filters),
             "-map", f"[{current_label}]",
-            "-map", f"{silence_input}:a:0",
+            "-map", "[aout]",
             "-t", f"{total_duration:.6f}",
             "-c:v", encode_codec,
             "-preset", encode_preset,
@@ -397,7 +460,7 @@ class VideoStudio:
                     "stage": "ffmpeg",
                     "progress": 90,
                     "message": (
-                        f"Encoding {resolution_label} MP4 with FFmpeg ({xfade_name}, "
+                        f"Encoding {resolution_label} MP4 with FFmpeg ({transition_label}, "
                         f"{fps} fps, crf={encode_crf}, threads={thread_count})..."
                     ),
                 })
