@@ -97,6 +97,8 @@ class VideoStudio:
             ``quality``             – 1–5 (Windows) / 0–100 (MoviePy)
             ``intro_thumbnail_path`` / ``intro_thumbnail_duration``
             ``outro_thumbnail_path`` / ``outro_thumbnail_duration``
+            ``transition_type``  – ``fade``, ``wipe``, ``push``, or ``none``
+            ``transition_duration`` – seconds for still-image transitions
             ``progress_callback``   – ``fn(payload: dict)``
             ``cancel_event``        – threading.Event for cooperative cancel
 
@@ -117,6 +119,8 @@ class VideoStudio:
             return self._build_with_powerpoint(config_data)
         if self._can_build_simple_with_ffmpeg(config_data):
             return self._build_simple_with_ffmpeg(config_data)
+        if self._can_build_ffmpeg_transitions(config_data):
+            return self._build_with_ffmpeg_transitions(config_data)
         return self._build_with_moviepy(config_data)
 
     # ──────────────────────────────────────────────────────────────────
@@ -195,6 +199,10 @@ class VideoStudio:
         if not shutil.which("ffmpeg"):
             return False
 
+        transition_type, _transition_duration = self._transition_settings(cfg)
+        if transition_type != "none":
+            return False
+
         image_files = list(cfg.get("image_files") or [])
         if not image_files or any(not Path(p).is_file() for p in image_files):
             return False
@@ -213,6 +221,225 @@ class VideoStudio:
             return False
 
         return True
+
+    def _transition_settings(self, cfg: dict) -> tuple[str, float]:
+        """Resolve Linux still-image transition settings.
+
+        The PowerPoint path owns its own transition implementation. These
+        settings are intentionally used only by the Linux FFmpeg/MoviePy
+        paths so the Windows export behavior remains unchanged.
+        """
+        transition_type = cfg.get("transition_type")
+        transition_duration = cfg.get("transition_duration")
+        if transition_type is None or transition_duration is None:
+            try:
+                import config  # type: ignore
+
+                if transition_type is None:
+                    transition_type = getattr(config, "DEFAULT_TRANSITION_TYPE", "fade")
+                if transition_duration is None:
+                    transition_duration = getattr(config, "DEFAULT_TRANSITION_DURATION", 0.5)
+            except Exception:
+                transition_type = transition_type or "fade"
+                transition_duration = transition_duration or 0.5
+
+        transition_type = str(transition_type or "fade").strip().lower()
+        aliases = {
+            "crossfade": "fade",
+            "slide": "push",
+            "none": "none",
+            "cut": "none",
+        }
+        transition_type = aliases.get(transition_type, transition_type)
+        if transition_type not in {"fade", "wipe", "push", "none"}:
+            transition_type = "fade"
+        try:
+            duration = float(transition_duration)
+        except (TypeError, ValueError):
+            duration = 0.5
+        return transition_type, max(0.0, duration)
+
+    def _can_build_ffmpeg_transitions(self, cfg: dict) -> bool:
+        """Return whether a still-image timeline can use FFmpeg xfade.
+
+        This path deliberately handles still images only. Audio, logos, and
+        video intro/outro clips remain on the MoviePy path until they are
+        migrated to an equivalent FFmpeg filter graph.
+        """
+        if not shutil.which("ffmpeg"):
+            return False
+        transition_type, transition_duration = self._transition_settings(cfg)
+        if transition_type == "none" or transition_duration <= 0:
+            return False
+        image_files = list(cfg.get("image_files") or [])
+        if len(image_files) < 2 or any(not Path(p).is_file() for p in image_files):
+            return False
+        if any(cfg.get(key) for key in ("narration_audio", "background_music", "logo_path")):
+            return False
+        if any(p for p in list(cfg.get("voiceover_files") or []) if p):
+            return False
+        if cfg.get("intro_video_path") or cfg.get("outro_video_path"):
+            return False
+        return True
+
+    def _build_with_ffmpeg_transitions(self, cfg: dict) -> dict:
+        """Encode a 4K still-image timeline with FFmpeg xfade transitions.
+
+        Unlike MoviePy, all frame generation and compositing stays inside the
+        FFmpeg process. This is materially lighter on a small Linux VM and
+        leaves the Windows PowerPoint path untouched.
+        """
+        image_files = self._sort_image_files_like_powerpoint(
+            list(cfg.get("image_files") or [])
+        )
+        if len(image_files) < 2:
+            raise VideoEngineError("FFmpeg transition engine requires at least two image files")
+
+        output_video_path: str = cfg["output_video_path"]
+        Path(output_video_path).parent.mkdir(parents=True, exist_ok=True)
+        resolution = tuple(cfg.get("resolution") or _DEFAULT_RESOLUTION)
+        fps = int(cfg.get("fps") or _DEFAULT_FPS)
+        slide_duration = float(cfg.get("slide_duration", 5.0))
+        transition_type, transition_duration = self._transition_settings(cfg)
+        if slide_duration <= transition_duration:
+            raise VideoEngineError(
+                "Transition duration must be shorter than the slide duration"
+            )
+
+        encode_preset = str(cfg.get("encode_preset") or _DEFAULT_PRESET)
+        encode_codec = str(cfg.get("encode_codec") or _DEFAULT_CODEC)
+        encode_crf = self._quality_to_crf(cfg)
+        thread_count = int(
+            cfg.get("threads")
+            or max(1, min((os.cpu_count() or 4), 16))
+        )
+        progress_callback: Optional[Callable[[dict], None]] = cfg.get("progress_callback")
+        cancel_event = cfg.get("cancel_event")
+
+        timeline: List[tuple[str, float]] = []
+        intro_thumb = cfg.get("intro_thumbnail_path")
+        if intro_thumb and Path(intro_thumb).is_file():
+            timeline.append(
+                (str(intro_thumb), float(cfg.get("intro_thumbnail_duration", 5.0)))
+            )
+        timeline.extend((str(path), slide_duration) for path in image_files)
+        outro_thumb = cfg.get("outro_thumbnail_path")
+        if outro_thumb and Path(outro_thumb).is_file():
+            timeline.append(
+                (str(outro_thumb), float(cfg.get("outro_thumbnail_duration", 5.0)))
+            )
+
+        if len(timeline) < 2:
+            return self._build_simple_with_ffmpeg({**cfg, "transition_type": "none"})
+
+        width, height = int(resolution[0]), int(resolution[1])
+        total_duration = sum(duration for _path, duration in timeline)
+        total_duration -= transition_duration * (len(timeline) - 1)
+
+        transition_map = {
+            "fade": "fade",
+            "wipe": "wipeleft",
+            "push": "slideleft",
+        }
+        xfade_name = transition_map[transition_type]
+
+        cmd: List[str] = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+        for path, duration in timeline:
+            cmd.extend(["-loop", "1", "-framerate", str(fps), "-t", str(duration), "-i", path])
+
+        filters: List[str] = []
+        for index, (_path, duration) in enumerate(timeline):
+            filters.append(
+                f"[{index}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
+                f"fps={fps},format=yuv420p,trim=duration={duration:.6f},"
+                f"setpts=PTS-STARTPTS[v{index}]"
+            )
+
+        current_label = "v0"
+        accumulated_duration = timeline[0][1]
+        for index in range(1, len(timeline)):
+            offset = max(0.0, accumulated_duration - transition_duration)
+            next_label = f"x{index}"
+            filters.append(
+                f"[{current_label}][v{index}]xfade=transition={xfade_name}:"
+                f"duration={transition_duration:.6f}:offset={offset:.6f}[{next_label}]"
+            )
+            current_label = next_label
+            accumulated_duration += timeline[index][1] - transition_duration
+
+        silence_input = len(timeline)
+        cmd.extend([
+            "-f", "lavfi",
+            "-t", f"{total_duration:.6f}",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-filter_complex", ";".join(filters),
+            "-map", f"[{current_label}]",
+            "-map", f"{silence_input}:a:0",
+            "-t", f"{total_duration:.6f}",
+            "-c:v", encode_codec,
+            "-preset", encode_preset,
+            "-crf", str(encode_crf),
+            "-threads", str(thread_count),
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-ar", "48000",
+            "-ac", "2",
+            "-movflags", "+faststart",
+            "-shortest",
+            output_video_path,
+        ])
+
+        if progress_callback:
+            try:
+                resolution_label = f"{width}x{height}"
+                progress_callback({
+                    "stage": "ffmpeg",
+                    "progress": 90,
+                    "message": (
+                        f"Encoding {resolution_label} MP4 with FFmpeg ({xfade_name}, "
+                        f"{fps} fps, crf={encode_crf}, threads={thread_count})..."
+                    ),
+                })
+            except Exception:
+                logger.exception("progress_callback raised")
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            while proc.poll() is None:
+                if cancel_event is not None and cancel_event.is_set():
+                    proc.terminate()
+                    raise VideoEngineError("Cancelled by user")
+                try:
+                    proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+        stdout, stderr = proc.communicate()
+        if proc.returncode:
+            detail = (stderr or stdout or "ffmpeg transition export failed").strip()
+            raise VideoEngineError(f"ffmpeg transition export failed: {detail}")
+
+        if progress_callback:
+            try:
+                progress_callback({"stage": "ffmpeg", "progress": 99, "message": "MP4 written to disk."})
+            except Exception:
+                logger.exception("progress_callback raised")
+
+        return {
+            "presentation_path": None,
+            "video_path": output_video_path,
+            "warning": None,
+            "engine": "ffmpeg-transitions",
+        }
 
     def _build_simple_with_ffmpeg(self, cfg: dict) -> dict:
         image_files: List[str] = self._sort_image_files_like_powerpoint(
