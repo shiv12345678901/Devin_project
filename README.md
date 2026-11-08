@@ -39,10 +39,11 @@ Devin_project/
 - **Python** 3.10+ (3.11 recommended)
 - **Node.js** 20.19+ or 22.13+
 - **Playwright's Chromium** (installed via `playwright install chromium`)
+- **FFmpeg + ffprobe** for MP4 export on Linux/macOS
 - An API key for an OpenAI-compatible LLM endpoint (Groq, Together, OpenAI,
   a local `llama.cpp` server, etc.) — the backend uses chat completions.
-- **Optional (Windows only)** Microsoft PowerPoint, for the
-  screenshot → video pipeline.
+- **Optional (Windows only)** Microsoft PowerPoint, for PowerPoint-driven
+  PPTX/MP4 export. Linux/macOS use the FFmpeg engine instead.
 
 ## First-time setup
 
@@ -55,28 +56,26 @@ cd Devin_project
 ### Backend
 
 ```bash
-cd backend
-
 # (Optional but recommended) create a virtualenv
-python -m venv .venv
-# Windows:     .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
+python -m venv backend/.venv
+# Windows:     backend\.venv\Scripts\activate
+# macOS/Linux: source backend/.venv/bin/activate
 
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 playwright install chromium
 
-# Fill in your API credentials
-cp config/config.example.py config/config.py
-# Edit config/config.py:
-#   API_KEY   = "sk-..."                 # your LLM API key
-#   API_URL   = "https://api.groq.com/openai/v1"   # or wherever
-#   MODEL     = "llama-3.1-70b-versatile"
+# Debian/Ubuntu only — required for Linux MP4 export
+sudo apt-get update && sudo apt-get install -y ffmpeg
+
+# Fill in your API credentials (repo .env or service environment)
+API_KEY="sk-..."
+API_URL="https://api.groq.com/openai/v1"
 ```
 
 ### Frontend
 
 ```bash
-cd ../frontend
+cd frontend
 npm install
 ```
 
@@ -88,7 +87,7 @@ You have two options.
 
 ```bash
 # Terminal 1
-cd backend && python start.py         # http://localhost:5000
+python -m backend.start               # http://localhost:5000
 
 # Terminal 2
 cd frontend && npm run dev            # http://localhost:5173
@@ -101,7 +100,7 @@ the Flask backend so CORS isn't an issue. Changes to React are hot-reloaded.
 
 ```bash
 cd frontend && npm run build          # produces frontend/dist/
-cd ../backend && python start.py      # http://localhost:5000
+cd .. && python -m backend.start      # http://localhost:5000
 ```
 
 Now Flask serves the UI and the API from one port, so this is also the
@@ -111,7 +110,7 @@ setup you'd use when pointing a tunnel (ngrok, Cloudflare Tunnel) at it.
 
 | Frontend page     | Backend endpoint                    | Notes                               |
 | ----------------- | ----------------------------------- | ----------------------------------- |
-| Text → Video      | `POST /generate-sse`                | SSE progress, cancel via `/cancel/<op>` |
+| Text → Video      | `POST /runs/text-to-video`          | Persisted run + `/runs/<id>/events` SSE |
 | HTML → Video      | `POST /generate-html`, `/beautify`, `/minify` | Synchronous                 |
 | Image/PDF → Video | `POST /image-to-screenshots-sse`    | SSE progress, OCR + AI + screenshots |
 | Resources         | `GET /list`, `/history`, `/cache/stats`, `DELETE /delete/<type>/<name>`, `POST /cache/clear` | — |
@@ -125,8 +124,8 @@ state machine in
 
 ## Configuration reference
 
-Key values in `backend/config/config.py` (see
-`backend/config/config.example.py` for the full list):
+Settings are typed and immutable at runtime. Configure them with environment
+variables or a repo-level `.env`.
 
 | Setting                        | What it controls                             |
 | ------------------------------ | -------------------------------------------- |
@@ -153,21 +152,24 @@ Key values in `backend/config/config.py` (see
 
 | Command               | Description                                          |
 | --------------------- | ---------------------------------------------------- |
-| `python start.py`     | Launch the Flask app with env checks                 |
-| `python app.py`       | Launch the Flask app directly (skip env checks)      |
+| `python -m backend.start` | Launch with dependency and environment checks    |
+| `python -m backend`       | Launch the packaged Flask app directly            |
 
 ## Troubleshooting
 
-- **`Configuration file not found`** when starting the backend — you didn't
-  copy `config/config.example.py` to `config/config.py`.
+- **`API_KEY is missing`** when starting the backend — set it in `.env` or
+  the service environment.
 - **Generation returns 500 / `Failed to get AI response`** — the API key or
-  base URL in `config.py` is wrong, or the model isn't available from that
+  base URL in `.env` is wrong, or the model isn't available from that
   endpoint.
 - **Screenshots are blank** — run `playwright install chromium` again.
 - **`/assets/...` 404 on Option B** — rebuild the frontend after code
   changes (`cd frontend && npm run build`).
-- **Video export fails on macOS/Linux** — the PowerPoint exporter is
-  Windows-only. Screenshots still work on all platforms.
+- **Video export fails on macOS/Linux** — verify both `ffmpeg -version` and
+  `ffprobe -version`. Static slides use sparse VFR encoding; transitions,
+  voiceovers, intro/outro clips, music, and watermarks are composed directly
+  by FFmpeg. For 4K on a 4-vCPU/8-GiB VM, run one export at a time and keep
+  several GiB of disk space free for temporary segments.
 
 ## Credits
 

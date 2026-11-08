@@ -1,23 +1,16 @@
 """AI API client for processing text input."""
 import os
 import re
-import sys
 import threading
 import httpx  # type: ignore
 from openai import OpenAI  # type: ignore
 
-# Add config to path
-config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config')
-sys.path.insert(0, config_path)
+from ..settings import settings
+from ..utils.cache_manager import CacheManager
+from ..utils.retry_handler import retry_with_backoff
 
-from config import API_URL, MODELS_CONFIG  # type: ignore
-
-# Add utils to path
-utils_path = os.path.join(os.path.dirname(__file__), '..', 'utils')
-sys.path.insert(0, utils_path)
-
-from cache_manager import CacheManager  # type: ignore
-from retry_handler import retry_with_backoff  # type: ignore
+API_URL = settings.api_url
+MODELS_CONFIG = settings.models
 
 # Initialize cache manager
 cache = CacheManager()
@@ -68,7 +61,7 @@ def make_openai_client(model_config):
     if resolved_key in placeholder_keys:
         raise RuntimeError(
             "AI is not configured: API_KEY is missing or a placeholder. "
-            "Edit backend/config/config.py (or set the API_KEY env var) "
+            "Set API_KEY in .env or the service environment "
             "with a real key and restart the backend."
         )
 
@@ -468,7 +461,7 @@ def _get_ai_response_legacy_unused(input_text, use_cache=True, cancel_event=None
         if resolved_key in placeholder_keys:
             raise RuntimeError(
                 "AI is not configured: API_KEY is missing or a placeholder. "
-                "Edit backend/config/config.py (or set the API_KEY env var) "
+                "Set API_KEY in .env or the service environment "
                 "with a real key and restart the backend."
             )
 

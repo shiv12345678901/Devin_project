@@ -12,18 +12,18 @@ from queue import Empty, Queue
 
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
-from core.ai_client import (
+from backend.src.core.ai_client import (
     CancelledError,
     append_missing_content,
     get_ai_response,
     register_operation,
     unregister_operation,
 )
-from core.job_queue import cancel_job, enqueue, get_queue_snapshot
-from core.pipeline_scheduler import ai_slot, export_slot, screenshot_slot
-from core.powerpoint.controller import ExportError, PowerPointController, PowerPointNotFoundError, TemplateError
-from video_engine import MovieEngineUnavailableError, VideoStudio
-from core.run_manager import (
+from backend.src.core.job_queue import cancel_job, enqueue, get_queue_snapshot
+from backend.src.core.pipeline_scheduler import ai_slot, export_slot, screenshot_slot
+from backend.src.core.powerpoint.controller import ExportError, PowerPointController, PowerPointNotFoundError, TemplateError
+from backend.src.video_engine import MovieEngineUnavailableError, VideoStudio
+from backend.src.core.run_manager import (
     create_run,
     find_active_run_by_fingerprint,
     find_recent_run_by_fingerprint,
@@ -31,8 +31,8 @@ from core.run_manager import (
     list_runs,
     update_metrics,
 )
-from core.workflow_runner import WorkflowContext, subscribe_run, unsubscribe_run
-from routes.helpers import (
+from backend.src.core.workflow_runner import WorkflowContext, subscribe_run, unsubscribe_run
+from backend.routes.helpers import (
     OUTPUT_FOLDER,
     build_ai_input_text,
     get_next_batch_id,
@@ -41,8 +41,10 @@ from routes.helpers import (
     take_screenshots,
     youtube_video_stem,
 )
-from utils.content_matcher import match_input_to_html
-from utils.eta_tracker import eta_tracker
+from backend.src.utils.content_matcher import match_input_to_html
+from backend.src.utils.eta_tracker import eta_tracker
+from backend.src.settings import settings as app_settings
+from backend.src.storage.database import database
 
 
 runs_bp = Blueprint("runs", __name__)
@@ -58,10 +60,13 @@ def _emit(evt: dict) -> str:
 def _read_pending_client_queue() -> list[dict]:
     with _PENDING_CLIENT_QUEUE_LOCK:
         try:
-            if not PENDING_CLIENT_QUEUE_FILE.exists():
-                return []
-            with PENDING_CLIENT_QUEUE_FILE.open("r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = database.get_state("pending_client_queue")
+            if data is None and not database.migration_applied("legacy_pending_queue_json_v1"):
+                if PENDING_CLIENT_QUEUE_FILE.exists():
+                    with PENDING_CLIENT_QUEUE_FILE.open("r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    database.set_state("pending_client_queue", data)
+                database.mark_migration("legacy_pending_queue_json_v1")
             return data if isinstance(data, list) else []
         except Exception:
             return []
@@ -69,11 +74,7 @@ def _read_pending_client_queue() -> list[dict]:
 
 def _write_pending_client_queue(items: list[dict]) -> None:
     with _PENDING_CLIENT_QUEUE_LOCK:
-        PENDING_CLIENT_QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = PENDING_CLIENT_QUEUE_FILE.with_suffix(".json.tmp")
-        with tmp_path.open("w", encoding="utf-8") as f:
-            json.dump(items, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, PENDING_CLIENT_QUEUE_FILE)
+        database.set_state("pending_client_queue", items)
 
 
 def _clean_pending_client_queue_item(item) -> dict | None:
@@ -149,16 +150,9 @@ def _canonical_output_path(folder: str, project_info: dict, output_name: str, in
 
 
 def _canonical_powerpoint_paths(project_info: dict, output_name: str, input_text: str) -> tuple[str, str]:
-    import sys
-
-    config_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config"))
-    if config_dir not in sys.path:
-        sys.path.insert(0, config_dir)
-    from config import POWERPOINT_OUTPUT_FOLDER, POWERPOINT_VIDEO_FOLDER  # type: ignore
-
     return (
-        _canonical_output_path(POWERPOINT_OUTPUT_FOLDER, project_info, output_name, input_text, ".pptx"),
-        _canonical_output_path(POWERPOINT_VIDEO_FOLDER, project_info, output_name, input_text, ".mp4"),
+        _canonical_output_path(app_settings.powerpoint_output_folder, project_info, output_name, input_text, ".pptx"),
+        _canonical_output_path(app_settings.powerpoint_video_folder, project_info, output_name, input_text, ".mp4"),
     )
 
 
@@ -227,6 +221,32 @@ def _thumbnail_path(filename: str | None) -> str | None:
     except ValueError:
         return None
     return str(candidate) if candidate.is_file() else None
+
+
+def _media_settings(source) -> dict:
+    """Normalize optional Linux FFmpeg media layers from JSON or form data."""
+    result = {}
+    for key in (
+        "intro_video_path",
+        "outro_video_path",
+        "narration_audio",
+        "background_music",
+        "logo_path",
+    ):
+        value = str(source.get(key) or "").strip()
+        if value:
+            result[key] = value
+
+    raw_voiceovers = source.get("voiceover_files")
+    if isinstance(raw_voiceovers, str):
+        try:
+            parsed = json.loads(raw_voiceovers)
+        except json.JSONDecodeError:
+            parsed = [item.strip() or None for item in raw_voiceovers.split(",")]
+        raw_voiceovers = parsed
+    if isinstance(raw_voiceovers, list):
+        result["voiceover_files"] = [str(item).strip() if item else None for item in raw_voiceovers]
+    return result
 
 
 def _cancel_after_stage_requested(run_id: str, stage: str) -> bool:
@@ -314,7 +334,7 @@ def _delete_outputs_on_cancel_requested(run_id: str) -> bool:
     return isinstance(settings, dict) and _bool_value(settings.get("delete_outputs_on_cancel"), False)
 
 
-def _run_powerpoint_export(
+def _run_media_export(
     ctx,
     *,
     output_format: str,
@@ -336,9 +356,10 @@ def _run_powerpoint_export(
     outro_thumbnail_filename: str,
     outro_thumbnail_enabled: bool,
     outro_thumbnail_duration: float,
+    media_settings: dict | None = None,
     starting_progress: int = 88,
 ) -> tuple[str | None, str | None]:
-    """Run the shared PowerPoint export half of the pipeline.
+    """Run the shared PowerPoint/FFmpeg export half of the pipeline.
 
     Both ``text-to-video`` and ``screenshots-to-video`` need exactly the
     same MP4/PPTX export step (canonical filename, slot scheduling, intro
@@ -348,15 +369,9 @@ def _run_powerpoint_export(
     if output_format not in {"pptx", "video"}:
         return None, None
 
-    import sys
-    config_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config"))
-    if config_dir not in sys.path:
-        sys.path.insert(0, config_dir)
-    from config import (  # type: ignore
-        POWERPOINT_OUTPUT_FOLDER,
-        POWERPOINT_TEMPLATE_PATH,
-        POWERPOINT_VIDEO_FOLDER,
-    )
+    POWERPOINT_OUTPUT_FOLDER = app_settings.powerpoint_output_folder
+    POWERPOINT_TEMPLATE_PATH = app_settings.powerpoint_template_path
+    POWERPOINT_VIDEO_FOLDER = app_settings.powerpoint_video_folder
 
     presentation_file: str | None = None
     video_file: str | None = None
@@ -454,7 +469,7 @@ def _run_powerpoint_export(
                     raise RuntimeError("PowerPoint did not produce an MP4 file")
                 return presentation_file, video_file
 
-            ctx.progress("powerpoint", 90, "Building presentation and exporting MP4...")
+            ctx.progress("ffmpeg_prepare", 90, "Preparing FFmpeg media timeline...")
             try:
                 result = studio.build_video(
                     {
@@ -470,6 +485,7 @@ def _run_powerpoint_export(
                         "intro_thumbnail_duration": intro_thumbnail_duration,
                         "outro_thumbnail_path": outro_thumbnail_path,
                         "outro_thumbnail_duration": outro_thumbnail_duration,
+                        **(media_settings or {}),
                         "progress_callback": _ppt_progress,
                         "cancel_event": ctx.cancel_event,
                     }
@@ -850,6 +866,7 @@ def start_text_to_video():
         "fps": fps,
         "quality": quality,
         "concurrent_pipeline_runs": concurrent_pipeline_runs,
+        "media": _media_settings(data),
     }
     input_fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -1048,7 +1065,7 @@ def start_text_to_video():
 
             if beautify_html:
                 try:
-                    from utils.html_beautifier import HTMLBeautifier
+                    from backend.src.utils.html_beautifier import HTMLBeautifier
 
                     html_content = HTMLBeautifier().beautify(html_content)
                 except Exception:
@@ -1133,7 +1150,7 @@ def start_text_to_video():
                 return
 
             if output_format in {"pptx", "video"}:
-                presentation_file, video_file = _run_powerpoint_export(
+                presentation_file, video_file = _run_media_export(
                     ctx,
                     output_format=output_format,
                     screenshot_files=screenshot_files,
@@ -1154,6 +1171,7 @@ def start_text_to_video():
                     outro_thumbnail_filename=outro_thumbnail_filename,
                     outro_thumbnail_enabled=outro_thumbnail_enabled,
                     outro_thumbnail_duration=outro_thumbnail_duration,
+                    media_settings=_media_settings(data),
                 )
                 export_outputs = {
                     "html_filename": html_filename,
@@ -1326,6 +1344,7 @@ def start_youtube_to_video():
         "intro_thumbnail_filename": intro_thumbnail_filename,
         "outro_thumbnail_enabled": outro_thumbnail_enabled,
         "outro_thumbnail_filename": outro_thumbnail_filename,
+        "media": _media_settings(data),
     }
     input_fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -1369,6 +1388,7 @@ def start_youtube_to_video():
         "outro_thumbnail_filename": outro_thumbnail_filename,
         "outro_thumbnail_duration_sec": outro_thumbnail_duration,
         "concurrent_pipeline_runs": concurrent_pipeline_runs,
+        "media": _media_settings(data),
         "input_fingerprint": input_fingerprint,
         "estimated_total_seconds": estimated_total_seconds,
     }
@@ -1390,7 +1410,7 @@ def start_youtube_to_video():
         presentation_file: str | None = None
         video_file: str | None = None
         try:
-            from routes.youtube_screenshots import capture_youtube_screenshots_to_batch
+            from backend.routes.youtube_screenshots import capture_youtube_screenshots_to_batch
 
             def progress(stage: str, pct: float, message: str, extra: dict | None = None) -> None:
                 ctx.progress(stage, pct, message, data=extra)
@@ -1432,7 +1452,7 @@ def start_youtube_to_video():
                 ctx.complete("Successfully captured YouTube screenshot(s)", outputs=outputs, metrics={"screenshot_count": len(screenshot_abs)})
                 return
 
-            presentation_file, video_file = _run_powerpoint_export(
+            presentation_file, video_file = _run_media_export(
                 ctx,
                 output_format=output_format,
                 screenshot_files=screenshot_abs,
@@ -1453,6 +1473,7 @@ def start_youtube_to_video():
                 outro_thumbnail_filename=outro_thumbnail_filename,
                 outro_thumbnail_enabled=outro_thumbnail_enabled,
                 outro_thumbnail_duration=outro_thumbnail_duration,
+                media_settings=_media_settings(data),
                 starting_progress=55,
             )
             outputs = {
@@ -1623,6 +1644,7 @@ def start_html_to_video():
         "fps": fps,
         "quality": quality,
         "concurrent_pipeline_runs": concurrent_pipeline_runs,
+        "media": _media_settings(data),
     }
     input_fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -1652,6 +1674,7 @@ def start_html_to_video():
         "output_name": output_name,
         "input_fingerprint": input_fingerprint,
         "estimated_total_seconds": estimated_total_seconds,
+        **_media_settings(data),
     })
     run = create_run(
         tool="html-to-video",
@@ -1788,7 +1811,7 @@ def start_html_to_video():
                 return
 
             if output_format in {"pptx", "video"}:
-                presentation_file, video_file = _run_powerpoint_export(
+                presentation_file, video_file = _run_media_export(
                     ctx,
                     output_format=output_format,
                     screenshot_files=screenshot_files,
@@ -1809,6 +1832,7 @@ def start_html_to_video():
                     outro_thumbnail_filename=outro_thumbnail_filename,
                     outro_thumbnail_enabled=outro_thumbnail_enabled,
                     outro_thumbnail_duration=outro_thumbnail_duration,
+                    media_settings=_media_settings(data),
                 )
                 export_outputs = {
                     "html_filename": html_filename,
@@ -2107,6 +2131,7 @@ def start_screenshots_to_video():
         "auto_timing_screenshot_slides": auto_timing_screenshot_slides,
         "fixed_seconds_per_screenshot_slide": fixed_seconds_per_screenshot_slide,
         "concurrent_pipeline_runs": concurrent_pipeline_runs,
+        "media": _media_settings(data),
     }
     input_fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -2147,6 +2172,7 @@ def start_screenshots_to_video():
         "concurrent_pipeline_runs": concurrent_pipeline_runs,
         "input_fingerprint": input_fingerprint,
         "estimated_total_seconds": estimated_total_seconds,
+        **_media_settings(data),
     }
     run = create_run(
         tool="screenshots-to-video",
@@ -2185,7 +2211,7 @@ def start_screenshots_to_video():
             ctx.metrics({"screenshot_count": len(screenshot_abs)})
             ctx.check_cancelled()
 
-            presentation_file, video_file = _run_powerpoint_export(
+            presentation_file, video_file = _run_media_export(
                 ctx,
                 output_format=output_format,
                 screenshot_files=screenshot_abs,
@@ -2208,6 +2234,7 @@ def start_screenshots_to_video():
                 outro_thumbnail_filename=outro_thumbnail_filename,
                 outro_thumbnail_enabled=outro_thumbnail_enabled,
                 outro_thumbnail_duration=outro_thumbnail_duration,
+                media_settings=_media_settings(data),
                 starting_progress=20,
             )
             export_outputs = {

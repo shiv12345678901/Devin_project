@@ -6,7 +6,7 @@ import threading
 from contextlib import contextmanager
 from typing import Iterator
 
-from core.workflow_runner import WorkflowContext
+from .workflow_runner import WorkflowContext
 
 
 def _int_env(name: str, default: int) -> int:

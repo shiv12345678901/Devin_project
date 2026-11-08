@@ -3,6 +3,8 @@ import os
 import threading
 from typing import TypedDict, Dict, List, Optional, cast
 
+from ..storage.database import database
+
 class ModelSpeed(TypedDict):
     chars_per_second: float
     samples: int
@@ -126,17 +128,25 @@ class ETATracker:
             self._save_process_data()
         
     def _load_data(self) -> ETAData:
-        """Load historical timing data from disk, or initialize defaults."""
-        if os.path.exists(self.storage_path):
+        """Load historical timing data from SQLite, importing JSON once."""
+        stored = database.get_state("eta_tracker")
+        if isinstance(stored, dict):
+            if "verification" not in stored:
+                stored["verification"] = {"average_seconds": 15.0, "samples": 0}
+            return cast(ETAData, stored)
+        if not database.migration_applied("legacy_eta_json_v1") and os.path.exists(self.storage_path):
             try:
                 with open(self.storage_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     # Migrating old data if necessary
                     if "verification" not in data:
                         data["verification"] = {"average_seconds": 15.0, "samples": 0}
+                    database.set_state("eta_tracker", data)
+                    database.mark_migration("legacy_eta_json_v1")
                     return cast(ETAData, data)
             except Exception as e:
                 print(f"⚠️ Error loading ETA data: {e}")
+        database.mark_migration("legacy_eta_json_v1")
                 
         # Defaults if no file exists
         return cast(ETAData, {
@@ -154,49 +164,51 @@ class ETATracker:
 
     def _load_process_data(self) -> ProcessEstimateData:
         """Load successful process timing data used for user-facing ETAs."""
-        if os.path.exists(self.process_storage_path):
+        stored = database.get_state("process_eta_tracker")
+        if isinstance(stored, dict):
+            data = stored
+        elif not database.migration_applied("legacy_process_eta_json_v1") and os.path.exists(self.process_storage_path):
             try:
                 with open(self.process_storage_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                data.setdefault("min_samples", 10)
-                data.setdefault("models", {})
-                # Backfill the new resolution/concurrent fields onto pre-
-                # existing samples — per the user's request, runs without
-                # an explicit resolution count as 1080p (the modal default
-                # and what the existing data was almost certainly captured
-                # at).
-                migrated = False
-                for model_data in data["models"].values():
-                    for run in model_data.get("runs", []) or []:
-                        if "resolution" not in run:
-                            run["resolution"] = DEFAULT_RESOLUTION
-                            migrated = True
-                        if "concurrent" not in run:
-                            run["concurrent"] = False
-                            migrated = True
-                self._migrated_on_load = migrated
-                return cast(ProcessEstimateData, data)
             except Exception as e:
                 print(f"Warning: Error loading process ETA data: {e}")
+                data = None
+        else:
+            data = None
+
+        database.mark_migration("legacy_process_eta_json_v1")
+        if isinstance(data, dict):
+            data.setdefault("min_samples", 10)
+            data.setdefault("models", {})
+            migrated = False
+            for model_data in data["models"].values():
+                for run in model_data.get("runs", []) or []:
+                    if "resolution" not in run:
+                        run["resolution"] = DEFAULT_RESOLUTION
+                        migrated = True
+                    if "concurrent" not in run:
+                        run["concurrent"] = False
+                        migrated = True
+            self._migrated_on_load = migrated
+            if stored is None:
+                database.set_state("process_eta_tracker", data)
+            return cast(ProcessEstimateData, data)
 
         self._migrated_on_load = False
         return cast(ProcessEstimateData, {"min_samples": 10, "models": {}})
         
     def _save_data(self):
-        """Save the current timing data to disk."""
+        """Save the current timing data to SQLite."""
         try:
-            os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
-            with open(self.storage_path, 'w', encoding='utf-8') as f:
-                json.dump(self.data, f, indent=4)
+            database.set_state("eta_tracker", self.data)
         except Exception as e:
             print(f"⚠️ Error saving ETA data: {e}")
             
     def _save_process_data(self):
-        """Save process ETA samples to disk."""
+        """Save process ETA samples to SQLite."""
         try:
-            os.makedirs(os.path.dirname(self.process_storage_path), exist_ok=True)
-            with open(self.process_storage_path, 'w', encoding='utf-8') as f:
-                json.dump(self.process_data, f, indent=4)
+            database.set_state("process_eta_tracker", self.process_data)
         except Exception as e:
             print(f"Warning: Error saving process ETA data: {e}")
 

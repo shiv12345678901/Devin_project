@@ -33,17 +33,11 @@ def check_dependencies():
     return True
 
 def check_config():
-    """Check if configuration file exists (relative to this script)."""
-    backend_dir = os.path.abspath(os.path.dirname(__file__))
-    config_path = os.path.join(backend_dir, 'config', 'config.py')
-
-    if not os.path.exists(config_path):
-        print("❌ Configuration file not found!")
-        print("\n💡 Steps to fix (from the repo root):")
-        print("   1. cp backend/config/config.example.py backend/config/config.py")
-        print("   2. Edit backend/config/config.py and add your API credentials")
+    """Validate the typed environment settings without requiring config.py."""
+    from .src.settings import settings
+    if settings.api_key.strip() in {'', 'your-api-key-here', 'REPLACE_ME'}:
+        print("❌ API_KEY is missing. Set it in the environment or repo .env file.")
         return False
-
     return True
 
 def check_playwright():
@@ -65,7 +59,7 @@ def check_playwright():
 
 def create_folders():
     """Create necessary output folders (relative to this script)."""
-    backend_dir = os.path.abspath(os.path.dirname(__file__))
+    project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     folders = [
         'output/screenshots',
         'output/html',
@@ -74,7 +68,7 @@ def create_folders():
     ]
 
     for folder in folders:
-        os.makedirs(os.path.join(backend_dir, folder), exist_ok=True)
+        os.makedirs(os.path.join(project_dir, folder), exist_ok=True)
 
     print("✅ Output folders ready")
 
@@ -110,11 +104,8 @@ def main():
     print("=" * 60)
     print()
     
-    # Ensure we run from the backend/ directory so relative paths resolve
-    os.chdir(os.path.abspath(os.path.dirname(__file__)))
-
     # Import and run the app
-    from app import app, _env_bool
+    from .app import app, _env_bool
     host = os.environ.get('FLASK_HOST') or os.environ.get('HOST', '127.0.0.1')
     port = int(os.environ.get('PORT', '5000'))
     debug = _env_bool('FLASK_DEBUG', False) or _env_bool('DEBUG', False)

@@ -7,9 +7,9 @@ import uuid
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
-from core.ai_client import get_ai_response, register_operation, unregister_operation, CancelledError
-from utils.run_guard import begin_run, end_run, RunRejected
-from routes.helpers import (
+from backend.src.core.ai_client import get_ai_response, register_operation, unregister_operation, CancelledError
+from backend.src.utils.run_guard import begin_run, end_run, RunRejected
+from backend.routes.helpers import (
     OUTPUT_FOLDER, HTML_FOLDER,
     get_next_batch_id,
     take_screenshots, save_html, log_generation,
@@ -61,7 +61,7 @@ def extract_from_image():
         else:
             image_paths_to_process = [temp_path]
 
-        from core.vision_client import extract_text_from_multiple_images
+        from backend.src.core.vision_client import extract_text_from_multiple_images
         result = extract_text_from_multiple_images(image_paths_to_process, instructions)
 
         # Cleanup
@@ -178,7 +178,7 @@ def image_to_screenshots_sse():
 
                 try:
                     if is_pdf and len(image_paths_to_process) > 1:
-                        from core.vision_client import extract_text_from_image
+                        from backend.src.core.vision_client import extract_text_from_image
                         all_pages_text = []
                         total_pages = len(image_paths_to_process)
                         for i, img_path in enumerate(image_paths_to_process):
@@ -196,7 +196,7 @@ def image_to_screenshots_sse():
                         else:
                             extraction_result = None
                     else:
-                        from core.vision_client import extract_text_from_multiple_images
+                        from backend.src.core.vision_client import extract_text_from_multiple_images
                         extraction_result = extract_text_from_multiple_images(image_paths_to_process, instructions)
                 except Exception as vision_err:
                     extraction_result = None

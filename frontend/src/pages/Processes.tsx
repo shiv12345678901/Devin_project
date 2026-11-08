@@ -103,14 +103,14 @@ function contentMatchMetric(run: Run): ContentMatchMetric | null {
 }
 
 const TOOL_META: Record<string, { label: string; icon: typeof FileText }> = {
-  'text-to-video': { label: 'Text â†’ Video', icon: FileText },
-  'text-to-image': { label: 'Text â†’ Video', icon: FileText },
-  'html-to-video': { label: 'HTML â†’ Video', icon: Code2 },
-  'html-to-image': { label: 'HTML â†’ Video', icon: Code2 },
-  'image-to-video': { label: 'Image â†’ Screenshots', icon: ImageIcon },
-  'image-to-screenshots': { label: 'Image â†’ Screenshots', icon: ImageIcon },
-  'screenshots-to-video': { label: 'Screenshots â†’ Video', icon: ImageIcon },
-  'youtube-screenshots': { label: 'YouTube â†’ Screenshots', icon: ImageIcon },
+  'text-to-video': { label: 'Text → Video', icon: FileText },
+  'text-to-image': { label: 'Text → Video', icon: FileText },
+  'html-to-video': { label: 'HTML → Video', icon: Code2 },
+  'html-to-image': { label: 'HTML → Video', icon: Code2 },
+  'image-to-video': { label: 'Image → Screenshots', icon: ImageIcon },
+  'image-to-screenshots': { label: 'Image → Screenshots', icon: ImageIcon },
+  'screenshots-to-video': { label: 'Screenshots → Video', icon: ImageIcon },
+  'youtube-screenshots': { label: 'YouTube → Screenshots', icon: ImageIcon },
   regenerate: { label: 'Regenerate', icon: Wand2 },
 }
 
@@ -127,7 +127,7 @@ const STAGE_STATUS_LABELS: Record<string, string> = {
   screenshot_waiting: 'Waiting for screenshot slot',
   screenshot: 'Capturing screenshots',
   screenshots_done: 'Screenshots ready',
-  export_waiting: 'Waiting for PowerPoint export',
+  export_waiting: 'Waiting for export slot',
   powerpoint_cleanup: 'Closing PowerPoint',
   powerpoint_resume: 'Exporting from saved PPTX',
   powerpoint: 'Building PowerPoint export',
@@ -267,7 +267,7 @@ function useNow(enabled: boolean, tickMs = 1000): number {
 }
 
 /**
- * D6: 5-segment stage strip â€” AI â†’ Render â†’ Screenshot â†’ PPTX â†’ MP4. Each
+ * D6: 5-segment stage strip — AI → Render → Screenshot → PPTX → MP4. Each
  * segment lights up as the run reaches that pipeline phase. Compact
  * enough to sit on the row above the progress bar.
  */
@@ -348,17 +348,11 @@ function StageStrip({
 
 type OutputFileKind = 'html' | 'image' | 'pptx' | 'video'
 
-function outputIcon(kind: OutputFileKind) {
-  switch (kind) {
-    case 'html':
-      return FileText
-    case 'image':
-      return ImageIcon
-    case 'pptx':
-      return Database
-    case 'video':
-      return Film
-  }
+const OUTPUT_ICONS: Record<OutputFileKind, typeof FileText> = {
+  html: FileText,
+  image: ImageIcon,
+  pptx: Database,
+  video: Film,
 }
 
 function OutputFileActions({
@@ -378,7 +372,7 @@ function OutputFileActions({
   openHref?: string
   downloadHref?: string
 }) {
-  const Icon = outputIcon(kind)
+  const Icon = OUTPUT_ICONS[kind]
   const toast = useToast()
   const [moreOpen, setMoreOpen] = useState(false)
 
@@ -633,11 +627,6 @@ function RunRow({
       scrolled.current = true
     }
   }, [highlight])
-  const hasOutputs =
-    (run.screenshotFiles?.length ?? 0) > 0 ||
-    !!run.htmlFilename ||
-    !!run.presentationFile ||
-    !!run.videoFile
   const inputText = run.inputText || run.inputPreview || ''
   const canRegenerate =
     run.status !== 'running' &&
@@ -857,7 +846,7 @@ function RunRow({
               {run.inputFiles && run.inputFiles.length > 0 && (
                 <ul className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">
                   {run.inputFiles.map((f) => (
-                    <li key={f}>Â· {f}</li>
+                    <li key={f}>· {f}</li>
                   ))}
                 </ul>
               )}
@@ -867,7 +856,7 @@ function RunRow({
               <KV label="Started" value={new Date(run.startedAt).toLocaleString()} />
               <KV
                 label="Ended"
-                value={run.endedAt ? new Date(run.endedAt).toLocaleString() : 'â€”'}
+                value={run.endedAt ? new Date(run.endedAt).toLocaleString() : '—'}
               />
               {run.status === 'running' && run.message && (
                 <KV label="Current" value={run.message} />
@@ -893,16 +882,16 @@ function RunRow({
                   label="Project"
                   value={[run.settings?.class_name, run.settings?.subject, run.settings?.title]
                     .filter(Boolean)
-                    .join(' Â· ')}
+                    .join(' · ')}
                 />
               )}
               {run.settings && (
                 <KV
                   label="Viewport"
-                  value={`${run.settings.viewport_width ?? 'â€”'}Ã—${run.settings.viewport_height ?? 'â€”'}`}
+                  value={`${run.settings.viewport_width ?? '—'}×${run.settings.viewport_height ?? '—'}`}
                 />
               )}
-              {run.settings?.zoom != null && <KV label="Zoom" value={`${run.settings.zoom}Ã—`} />}
+              {run.settings?.zoom != null && <KV label="Zoom" value={`${run.settings.zoom}×`} />}
             </Section>
 
             <Section title="Output">
@@ -1026,69 +1015,6 @@ function RunRow({
                   </div>
                 </div>
               )}
-            </div>
-          )}
-
-          {false && screenshots.length > 0 && (
-            <div className="grid gap-3 lg:grid-cols-2">
-
-          {hasOutputs && screenshots.length > 0 && (
-            <div>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                  Screenshots
-                </div>
-                {selectedScreenshotUrl && (
-                  <button
-                    type="button"
-                    className="btn-secondary btn-sm"
-                    onClick={() => setPreview(selectedScreenshotUrl)}
-                  >
-                    Preview
-                  </button>
-                )}
-              </div>
-              {selectedScreenshotUrl && (
-                <button
-                  type="button"
-                  onClick={() => setPreview(selectedScreenshotUrl)}
-                  className="mb-3 block aspect-video w-full overflow-hidden rounded-md border border-slate-200 bg-white text-left dark:border-white/10 dark:bg-slate-950"
-                  title="Open screenshot preview"
-                >
-                  <img
-                    src={selectedScreenshotUrl!}
-                    alt={selectedScreenshot ?? 'Screenshot'}
-                    className="h-full w-full object-contain"
-                  />
-                </button>
-              )}
-              <div className="grid grid-cols-6 gap-1">
-                {screenshots.slice(0, 12).map((f, index) => {
-                  // `f` is already a path relative to OUTPUT_FOLDER
-                  // (e.g. "5(1).png" or "batch 3/5(1).png"). Do NOT prepend
-                  // screenshotFolder â€” that double-prefixed the path and
-                  // silently fell back to a basename walk that could pick
-                  // the wrong batch.
-                  const url = api.screenshotUrl(f)
-                  return (
-                    <button
-                      key={f}
-                      type="button"
-                      onClick={() => openScreenshot(index)}
-                      className={
-                        index === previewIndex
-                          ? 'block aspect-video overflow-hidden rounded border border-brand-400 bg-brand-50 text-left ring-1 ring-brand-400 dark:border-brand-400 dark:bg-brand-500/10'
-                          : 'block aspect-video overflow-hidden rounded border border-slate-200 bg-slate-50 text-left dark:border-white/10 dark:bg-white/[0.03]'
-                      }
-                      title={`Preview ${f.split('/').pop() ?? f}`}
-                    >
-                      <img src={url} alt={f} loading="lazy" className="h-full w-full object-cover" />
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
             </div>
           )}
 
@@ -1498,7 +1424,7 @@ export function HistoryRow({ entry }: { entry: HistoryEntry }) {
           {entry.input_preview || '(no input recorded)'}
         </p>
         <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-          {entry.screenshot_count ?? 0} screenshots Â· {entry.html_file ?? 'â€”'}
+          {entry.screenshot_count ?? 0} screenshots · {entry.html_file ?? '—'}
         </p>
       </div>
       {entry.html_file && (
@@ -2460,7 +2386,7 @@ export default function Processes() {
                       applyBackendDetail(localRun, detail.run, detail.run.operation_id ?? operationId)
                     }
                   } catch {
-                    // ignore â€” fallback poll will cover it
+                    // ignore — fallback poll will cover it
                   }
                 })()
                 break
@@ -2470,7 +2396,7 @@ export default function Processes() {
           },
         })
         .catch(() => {
-          // Network drop / abort â€” let the fallback poll re-establish on next tick.
+          // Network drop / abort — let the fallback poll re-establish on next tick.
         })
         .finally(() => {
           sseHandlesRef.current.delete(operationId)
@@ -2581,7 +2507,7 @@ export default function Processes() {
   const remainingHistory = useMemo(() => {
     const query = processQuery.trim().toLowerCase()
     // Dedupe history entries against the tracked runs. Match on any of
-    // (operation_id, html_file, or input_preview + tight time window) â€”
+    // (operation_id, html_file, or input_preview + tight time window) —
     // the backend now emits operation_id on history entries (primary key)
     // but older entries only have html_file, and a very recently completed
     // run may briefly have neither populated on the tracked side. The
@@ -2864,7 +2790,7 @@ export default function Processes() {
           </div>
           <h1 className="h-page mt-2">Runs</h1>
           <p className="mt-2 text-sm text-muted">
-            Every generation run, its input, how long it took, and the files it produced â€” all
+            Every generation run, its input, how long it took, and the files it produced — all
             in one place.
           </p>
         </div>
@@ -2886,7 +2812,7 @@ export default function Processes() {
         />
         <Stat
           label="Total runtime"
-          value={totalRuntime > 0 ? formatRuntime(totalRuntime) : 'â€”'}
+          value={totalRuntime > 0 ? formatRuntime(totalRuntime) : '—'}
         />
         <Stat
           label="Cache entries"
@@ -2895,7 +2821,7 @@ export default function Processes() {
               ? String(cache.total_entries)
               : typeof cache?.active_entries === 'number'
               ? String(cache.active_entries)
-              : 'â€”'
+              : '—'
           }
         />
       </div>
@@ -3064,7 +2990,7 @@ export default function Processes() {
           }
         >
           {queuePausedReason === 'in_flight'
-            ? 'The previous run was rejected because another run is already in progress on the backend. Resuming would just hit the same 409 â€” wait for the active run to finish, then resume.'
+            ? 'The previous run was rejected because another run is already in progress on the backend. Resuming would just hit the same 409 — wait for the active run to finish, then resume.'
             : queuePausedReason === 'duplicate'
             ? 'The previous run was rejected as a duplicate of a recent submission. Tweak the input or wait a few seconds before resuming.'
             : queuePausedReason === 'unknown'
@@ -3129,7 +3055,7 @@ export default function Processes() {
                 (!!highlightOp &&
                   (r.operationId === highlightOp || r.id === highlightOp)) ||
                 // Highlight the newest running row when we landed via
-                // /processes?queue=â€¦ â€” the queue id is transient, so we key
+                // /processes?queue=… — the queue id is transient, so we key
                 // off status+recency instead of a direct match.
                 (!!highlightQueue &&
                   r.status === 'running' &&

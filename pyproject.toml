@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "textbro-backend"
+version = "2.0.0"
+requires-python = ">=3.10"
+description = "Tracked AI-to-video export backend"
+
+[tool.setuptools.packages.find]
+include = ["backend*"]
+
+[tool.setuptools.package-data]
+backend = ["templates/powerpoint/*"]

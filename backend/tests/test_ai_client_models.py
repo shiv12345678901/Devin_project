@@ -1,19 +1,16 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from core import ai_client  # noqa: E402
+from backend.src.core import ai_client
 
 
 def test_resolve_model_config_upgrades_deprecated_balanced_slug(monkeypatch):
-    monkeypatch.setitem(ai_client.MODELS_CONFIG, "balanced", {
+    models = {key: dict(value) for key, value in ai_client.MODELS_CONFIG.items()}
+    models["balanced"] = {
         "model": "z-ai/glm-4.7",
         "temperature": 0.2,
         "top_p": 0.9,
         "max_tokens": 32768,
         "api_key": "test-key",
-    })
+    }
+    monkeypatch.setattr(ai_client, "MODELS_CONFIG", models)
 
     resolved = ai_client.resolve_model_config("balanced")
 

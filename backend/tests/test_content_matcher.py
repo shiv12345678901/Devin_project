@@ -1,9 +1,4 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from utils.content_matcher import match_input_to_html  # noqa: E402
+from backend.src.utils.content_matcher import match_input_to_html
 
 
 def test_match_input_to_html_reports_full_coverage_for_same_words():

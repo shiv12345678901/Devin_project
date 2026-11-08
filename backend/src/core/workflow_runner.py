@@ -3,9 +3,14 @@ from __future__ import annotations
 
 import queue
 import threading
+import logging
+import time
 from typing import Any
 
-from core import run_manager
+from . import run_manager
+from ..storage.retention import apply_artifact_retention
+
+logger = logging.getLogger("textbro.workflow")
 
 
 _SUBSCRIBERS: dict[str, list[queue.Queue]] = {}
@@ -91,6 +96,7 @@ class WorkflowContext:
         self.run_id = run_id
         self.operation_id = operation_id
         self.cancel_event = cancel_event
+        self.started_at = time.monotonic()
 
     def emit(self, event: dict[str, Any]) -> None:
         event.setdefault("run_id", self.run_id)
@@ -103,21 +109,25 @@ class WorkflowContext:
         self.emit({"type": "started", "message": message, "progress": 0})
 
     def progress(self, stage: str, progress: int, message: str, data: dict[str, Any] | None = None) -> None:
+        details = dict(data or {})
+        if "eta_seconds" not in details and 0 < progress < 100:
+            elapsed = max(time.monotonic() - self.started_at, 0.001)
+            details["eta_seconds"] = round(elapsed * (100 - progress) / progress, 1)
         run_manager.add_event(
             self.run_id,
             event_type="progress",
             stage=stage,
             progress=progress,
             message=message,
-            data=data or {},
+            data=details,
         )
-        print(f"[{self.operation_id}] {stage} {progress}% - {message}", flush=True)
+        logger.info("run.progress", extra={"run_id": self.run_id, "operation_id": self.operation_id, "stage": stage, "progress": progress, "engine": details.get("engine"), "eta_seconds": details.get("eta_seconds")})
         self.emit({
             "type": "progress",
             "stage": stage,
             "progress": progress,
             "message": message,
-            **(data or {}),
+            **details,
         })
 
     def output(self, key: str, value: Any) -> None:
@@ -145,6 +155,7 @@ class WorkflowContext:
             "message": message,
             "data": {"success": True, "message": message, **(outputs or {})},
         })
+        apply_artifact_retention()
 
     def fail(self, message: str, progress: int | None = None) -> None:
         run_manager.finish_run(self.run_id, status="failed", message=message, progress=progress)

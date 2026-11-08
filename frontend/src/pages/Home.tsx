@@ -203,8 +203,8 @@ export default function Home() {
           <p className="mt-4 max-w-2xl text-[15px] leading-relaxed text-muted">
             Paste a chapter, a transcript, or raw HTML. TextBro renders it
             with a real browser engine and exports crisp screenshots or HTML
-            — all from a single, scriptable backend. PowerPoint and MP4 exports
-            are available on Windows hosts.
+            — all from a single, scriptable backend. MP4 export uses FFmpeg on
+            Linux/macOS or PowerPoint on Windows.
           </p>
           <div className="mt-7 flex flex-wrap items-center gap-2">
             <Link to="/workspace" className="btn-primary btn-lg">
@@ -218,7 +218,7 @@ export default function Home() {
               <Library size={15} /> Browse library
             </Link>
           </div>
-          {preflightSummary && (
+          {preflightSummary && !preflightErr && (
             <Link
               to="/settings"
               title={preflightSummary.detail}
@@ -409,7 +409,7 @@ export default function Home() {
           <ProcessStep
             n="03"
             title="Export"
-            body="Download screenshots, the underlying HTML, or — on Windows — a PowerPoint deck and MP4 export."
+            body="Download screenshots, the underlying HTML, an MP4 video on any supported host, or a PowerPoint deck on Windows."
           />
         </ol>
       </section>

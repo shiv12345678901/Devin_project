@@ -6,7 +6,7 @@ export interface PreflightCheck {
 }
 
 export interface VideoEngineCheck extends PreflightCheck {
-  engines?: Array<'powerpoint' | 'moviepy'>
+  engines?: Array<'powerpoint' | 'ffmpeg' | 'moviepy'>
 }
 
 export interface PreflightResponse {
@@ -73,7 +73,7 @@ export interface GenerateSettings {
   output_name?: string
   screenshot_folder?: string
   html_folder?: string
-  // Images → MP4 / PowerPoint export (Windows-only; pass-through otherwise)
+  // Images → MP4 / PowerPoint export
   resolution?: '720p' | '1080p' | '1440p' | '4k'
   video_quality?: number
   fps?: number
@@ -81,6 +81,13 @@ export interface GenerateSettings {
   close_powerpoint_before_start?: boolean
   auto_timing_screenshot_slides?: boolean
   fixed_seconds_per_screenshot_slide?: number
+  // Linux FFmpeg media layers. Paths must be readable by the backend VM.
+  intro_video_path?: string
+  outro_video_path?: string
+  narration_audio?: string
+  background_music?: string
+  logo_path?: string
+  voiceover_files?: Array<string | null>
   // Intro thumbnail — inserted on slide 2 of the deck.
   intro_thumbnail_enabled?: boolean
   intro_thumbnail_filename?: string

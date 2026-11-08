@@ -12,8 +12,8 @@ from datetime import datetime
 from pathlib import Path
 
 from flask import Blueprint, request, jsonify, send_file, Response
-from core.thumbnail_builder import ThumbnailParams, render_thumbnail_png
-from core.thumbnail_template_renderer import render_template_png
+from backend.src.core.thumbnail_builder import ThumbnailParams, render_thumbnail_png
+from backend.src.core.thumbnail_template_renderer import render_template_png
 
 THUMBNAILS_FOLDER = 'output/thumbnails'
 THUMBNAIL_TEMPLATES_FILE = 'output/thumbnail_templates.json'
@@ -26,9 +26,9 @@ os.makedirs(VIDEOS_FOLDER, exist_ok=True)
 os.makedirs(PPTX_PREVIEWS_FOLDER, exist_ok=True)
 os.makedirs(os.path.dirname(THUMBNAIL_TEMPLATES_FILE), exist_ok=True)
 
-from core.ai_client import cache
-from utils.performance_metrics import metrics_tracker
-from routes.helpers import (
+from backend.src.core.ai_client import cache
+from backend.src.utils.performance_metrics import metrics_tracker
+from backend.routes.helpers import (
     OUTPUT_FOLDER, HTML_FOLDER,
     get_next_batch_id, sanitize_folder_path,
     take_screenshots, get_history, clear_history,
@@ -853,7 +853,7 @@ def get_run_log(operation_id):
     ``?tail=200`` to control how many lines are returned (default 200,
     max 2000). Returns 404 if no log file exists for the given id.
     """
-    from utils.run_logger import run_log_path
+    from backend.src.utils.run_logger import run_log_path
     path = run_log_path(operation_id)
     if not os.path.isfile(path):
         return jsonify({'error': 'Log file not found', 'operation_id': operation_id}), 404

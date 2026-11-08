@@ -28,10 +28,8 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 COPY backend backend
 COPY --from=frontend-builder /app/frontend/dist frontend/dist
 
-RUN cp backend/config/config.example.py backend/config/config.py \
-    && mkdir -p backend/output/screenshots backend/output/html backend/output/presentations backend/output/videos
+RUN mkdir -p output/screenshots output/html output/presentations output/videos
 
-WORKDIR /app/backend
 EXPOSE 7860
 
-CMD ["gunicorn", "--bind", "0.0.0.0:7860", "--timeout", "300", "--workers", "1", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:7860", "--timeout", "300", "--workers", "1", "backend.wsgi:app"]

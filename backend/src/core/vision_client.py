@@ -10,19 +10,16 @@ import io
 import base64
 from openai import OpenAI
 from PIL import Image, ImageEnhance, ImageFilter
-import sys
+from ..settings import settings
 
-# Add config to path
-config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config')
-if config_path not in sys.path:
-    sys.path.insert(0, config_path)
-from config import API_KEY, API_URL
+API_KEY = settings.api_key
+API_URL = settings.api_url
 
 # Vision model — document OCR specialist
-MODEL_VISION = "nvidia/llama-3.1-nemotron-nano-vl-8b-v1"
+MODEL_VISION = settings.model_vision
 
 # Fallback model if primary unavailable
-MODEL_VISION_FALLBACK = "meta/llama-3.2-90b-vision-instruct"
+MODEL_VISION_FALLBACK = settings.model_vision_fallback
 
 
 # ─── Image Preprocessing ────────────────────────────────────────────

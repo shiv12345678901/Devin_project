@@ -281,7 +281,7 @@ const OUTPUT_OPTIONS: { value: OutputFormat; label: string; desc: string }[] = [
   { value: 'html', label: 'HTML file', desc: 'Raw AI-generated HTML only' },
   { value: 'images', label: 'Screenshots', desc: 'HTML rendered to PNG images (default)' },
   { value: 'pptx', label: 'PowerPoint', desc: 'Images packed into a .pptx (Windows only)' },
-  { value: 'video', label: 'MP4 video', desc: 'Rendered to MP4 via PowerPoint (Windows) or MoviePy (Linux/macOS).' },
+  { value: 'video', label: 'MP4 video', desc: 'Rendered via PowerPoint (Windows) or direct FFmpeg (Linux/macOS).' },
 ]
 
 // ─── Validation ────────────────────────────────────────────────────────────
@@ -487,21 +487,24 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
   )
 
   useEffect(() => {
-    const draft = consumeProcessEditHandoff(
-      sourceMode === 'html'
-        ? 'html-to-video'
-        : sourceMode === 'youtube'
-          ? 'youtube-to-video'
-          : 'text-to-video',
-    )
-    if (!draft) return
-    setText(draft.text)
-    setSettings((prev) => ({ ...prev, ...draft.settings }))
-    setReplaceTargets(draft.replaceTargets)
-    setStepId('project')
-    setErroredSteps(new Set())
-    setDraftSnapshot(null)
-    clearDraftSnapshot(sourceMode)
+    const timer = window.setTimeout(() => {
+      const draft = consumeProcessEditHandoff(
+        sourceMode === 'html'
+          ? 'html-to-video'
+          : sourceMode === 'youtube'
+            ? 'youtube-to-video'
+            : 'text-to-video',
+      )
+      if (!draft) return
+      setText(draft.text)
+      setSettings((prev) => ({ ...prev, ...draft.settings }))
+      setReplaceTargets(draft.replaceTargets)
+      setStepId('project')
+      setErroredSteps(new Set())
+      setDraftSnapshot(null)
+      clearDraftSnapshot(sourceMode)
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [sourceMode])
 
   const set = <K extends keyof GenerateSettings>(key: K, v: GenerateSettings[K]) => {
@@ -1196,7 +1199,7 @@ function Tabs({
   }
 
   return (
-    <ol role="tablist" aria-label="Wizard steps" className="flex w-full flex-wrap items-center gap-1">
+    <ol role="tablist" aria-label="Wizard steps" className="grid w-full grid-cols-2 gap-1 sm:flex sm:flex-wrap sm:items-center">
       {steps.map((s, i) => {
         const active = s.id === currentId
         const valid = stepValid(s.id)
@@ -1208,7 +1211,7 @@ function Tabs({
         // the one currently being edited.
         const hasError = showErrors(s.id) && !valid && !active
         return (
-          <li key={s.id} role="presentation" className="flex min-w-0 flex-1 items-center gap-1">
+          <li key={s.id} role="presentation" className="flex min-w-0 items-center gap-1 sm:flex-1">
             <button
               ref={(el) => {
                 tabRefs.current[i] = el
@@ -1231,7 +1234,7 @@ function Tabs({
                   : s.label
               }
               className={
-                'flex min-w-0 flex-1 items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors ' +
+                'flex min-w-0 flex-1 items-center gap-2 rounded-md border px-2.5 py-2 text-xs font-medium transition-colors sm:px-3 ' +
                 (active
                   ? 'border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-500/10 dark:text-brand-200'
                   : hasError
@@ -1435,7 +1438,7 @@ function OutputFormatPicker({
           const tooltip = pptxBlocked
             ? 'PowerPoint deck export requires a Windows host with PowerPoint installed — this backend reports a non-Windows OS.'
             : videoBlocked
-              ? 'No video engine available — install MoviePy (pip install moviepy) or run on Windows with PowerPoint.'
+              ? 'No video engine available — install FFmpeg + ffprobe, or run on Windows with PowerPoint.'
               : undefined
           return (
             <button
@@ -1476,7 +1479,7 @@ function OutputFormatPicker({
                   )}
                   {o.value === 'video' && engineOnly(o.value) && videoEngineReady && (
                     <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                      {platform === 'windows' ? 'PowerPoint' : 'MoviePy'}
+                      {platform === 'windows' ? 'PowerPoint' : 'FFmpeg'}
                     </span>
                   )}
                 </div>
@@ -1484,7 +1487,7 @@ function OutputFormatPicker({
                   {pptxBlocked
                     ? 'Unavailable — backend isn’t Windows.'
                     : videoBlocked
-                      ? 'Unavailable — install MoviePy or run on Windows.'
+                      ? 'Unavailable — install FFmpeg + ffprobe, or run on Windows.'
                       : o.desc}
                 </div>
               </div>
@@ -1565,15 +1568,16 @@ function WindowsOnlyWarning({ outputFormat }: { outputFormat: OutputFormat }) {
     return (
       <p className="mt-2 rounded-md border border-rose-300/60 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
         <strong>MP4 video</strong> export won't work — no video engine is available on this
-        backend. Install MoviePy (<code>pip install moviepy</code>) or run on a Windows host
-        with PowerPoint installed.
+        backend. Install FFmpeg + ffprobe, or run on a Windows host with PowerPoint
+        installed.
       </p>
     )
   }
   if (outputFormat === 'video' && platform !== 'windows') {
     return (
       <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-        MP4 export will use the <strong>MoviePy</strong> engine (libx264 ultrafast, 4K @ 30 fps).
+        MP4 export will use the <strong>FFmpeg</strong> engine (libx264, 4K-capable), with
+        MoviePy retained only as a compatibility fallback.
       </p>
     )
   }

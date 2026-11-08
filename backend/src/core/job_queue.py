@@ -8,10 +8,10 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable
 
-from core.ai_client import unregister_operation
-from core import run_manager
-from core.workflow_runner import WorkflowContext, publish_run_event
-from utils.run_guard import RunRejected, begin_run, end_run
+from .ai_client import unregister_operation
+from . import run_manager
+from .workflow_runner import WorkflowContext, publish_run_event
+from ..utils.run_guard import RunRejected, begin_run, end_run
 
 
 @dataclass

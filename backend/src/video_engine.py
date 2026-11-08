@@ -23,31 +23,110 @@ import platform
 import re
 import shutil
 import subprocess
+import queue
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, List, Optional
+
+from .settings import settings
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_use_powerpoint() -> bool:
-    """Read ``USE_POWERPOINT`` from config, falling back to OS detection.
+def _run_ffmpeg_process(
+    cmd: List[str],
+    *,
+    cancel_event=None,
+    expected_duration: float | None = None,
+    progress_callback: Optional[Callable[[dict], None]] = None,
+    progress_range: tuple[int, int] = (90, 99),
+    engine: str = "ffmpeg",
+) -> None:
+    """Run FFmpeg and translate ``-progress`` media time into stable ETA data."""
+    command = list(cmd)
+    if "-progress" not in command:
+        command[1:1] = ["-progress", "pipe:1", "-nostats"]
+    proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+    # Lightweight test/process adapters may expose only ``communicate``.
+    if not hasattr(proc, "stdout") or not hasattr(proc, "stderr"):
+        stdout, stderr = proc.communicate()
+        if proc.returncode:
+            raise VideoEngineError(f"FFmpeg export failed: {(stderr or stdout or 'unknown error').strip()}")
+        return
+    lines: queue.Queue[str | None] = queue.Queue()
+    stderr_lines: list[str] = []
 
-    Routes import VideoStudio after backend ``config`` has been added to
-    ``sys.path`` (see ``app.py``). We re-resolve on every instantiation
-    so flipping the env var without restarting picks up the new value.
-    """
+    def read_stdout() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            lines.put(line.rstrip())
+        lines.put(None)
+
+    def read_stderr() -> None:
+        assert proc.stderr is not None
+        stderr_lines.extend(proc.stderr)
+
+    threading.Thread(target=read_stdout, daemon=True, name="ffmpeg-progress").start()
+    threading.Thread(target=read_stderr, daemon=True, name="ffmpeg-stderr").start()
+    started = time.monotonic()
+    last_emit = 0.0
+    progress_values: dict[str, str] = {}
+    try:
+        while proc.poll() is None or not lines.empty():
+            if cancel_event is not None and cancel_event.is_set():
+                proc.terminate()
+                raise VideoEngineError("Cancelled by user")
+            try:
+                line = lines.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if line is None:
+                continue
+            key, separator, value = line.partition("=")
+            if separator:
+                progress_values[key] = value
+            if key != "progress" or not progress_callback or not expected_duration:
+                continue
+            raw_us = progress_values.get("out_time_us") or progress_values.get("out_time_ms") or "0"
+            try:
+                encoded_seconds = max(0.0, float(raw_us) / 1_000_000.0)
+            except ValueError:
+                encoded_seconds = 0.0
+            ratio = min(1.0, encoded_seconds / max(expected_duration, 0.001))
+            now = time.monotonic()
+            if now - last_emit < 0.5 and value != "end":
+                continue
+            last_emit = now
+            low, high = progress_range
+            percent = low + round((high - low) * ratio)
+            elapsed = max(now - started, 0.001)
+            eta = max(0.0, elapsed * (1.0 - ratio) / ratio) if ratio > 0 else None
+            speed = progress_values.get("speed", "").strip()
+            progress_callback({
+                "stage": "ffmpeg",
+                "engine": engine,
+                "progress": percent,
+                "encoded_seconds": round(encoded_seconds, 2),
+                "total_seconds": round(expected_duration, 2),
+                "eta_seconds": round(eta, 1) if eta is not None else None,
+                "speed": speed or None,
+                "message": f"Encoding with {engine}: {ratio * 100:.0f}% of media time" + (f" at {speed}" if speed else ""),
+            })
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    proc.wait()
+    if proc.returncode:
+        raise VideoEngineError(f"FFmpeg export failed: {(''.join(stderr_lines) or 'unknown error').strip()}")
+
+
+def _resolve_use_powerpoint() -> bool:
+    """Read ``USE_POWERPOINT`` from the environment or typed settings."""
     override = os.environ.get("USE_POWERPOINT")
     if override is not None and override.strip():
         return override.strip().lower() in {"1", "true", "yes", "on"}
-    try:
-        import config  # type: ignore
-
-        flag = getattr(config, "USE_POWERPOINT", None)
-        if flag is not None:
-            return bool(flag)
-    except Exception:  # pragma: no cover - config import is best-effort
-        pass
-    return platform.system() == "Windows"
+    return settings.use_powerpoint
 
 
 class VideoEngineError(Exception):
@@ -121,7 +200,7 @@ class VideoStudio:
     # Windows — PowerPoint COM
     # ──────────────────────────────────────────────────────────────────
     def _build_with_powerpoint(self, cfg: dict) -> dict:
-        from core.powerpoint.controller import PowerPointController
+        from .core.powerpoint.controller import PowerPointController
 
         controller = PowerPointController()
         result = controller.create_and_export_video(
@@ -193,12 +272,14 @@ class VideoStudio:
         if not shutil.which("ffmpeg"):
             return False
 
-        transition_type, _transition_duration = self._transition_settings(cfg)
-        if transition_type != "none":
-            return False
-
         image_files = list(cfg.get("image_files") or [])
         if not image_files or any(not Path(p).is_file() for p in image_files):
+            return False
+
+        transition_type, _transition_duration = self._transition_settings(cfg)
+        # A single still has no boundary to animate, so a requested transition
+        # is equivalent to a cut and can use the sparse VFR path.
+        if transition_type != "none" and len(image_files) > 1:
             return False
 
         for key in (
@@ -230,16 +311,10 @@ class VideoStudio:
         transition_type = cfg.get("transition_type")
         transition_duration = cfg.get("transition_duration")
         if transition_type is None or transition_duration is None:
-            try:
-                import config  # type: ignore
-
-                if transition_type is None:
-                    transition_type = getattr(config, "DEFAULT_TRANSITION_TYPE", "fade")
-                if transition_duration is None:
-                    transition_duration = getattr(config, "DEFAULT_TRANSITION_DURATION", 0.5)
-            except Exception:
-                transition_type = transition_type or "fade"
-                transition_duration = transition_duration or 0.5
+            if transition_type is None:
+                transition_type = settings.default_transition_type
+            if transition_duration is None:
+                transition_duration = settings.default_transition_duration
 
         transition_type = str(transition_type or "fade").strip().lower()
         aliases = {
@@ -593,6 +668,7 @@ class VideoStudio:
                 resolution_label = f"{width}x{height}"
                 progress_callback({
                     "stage": "ffmpeg",
+                    "engine": "ffmpeg-transitions",
                     "progress": 90,
                     "message": (
                         f"Encoding {resolution_label} MP4 with FFmpeg ({transition_label}, "
@@ -602,33 +678,17 @@ class VideoStudio:
             except Exception:
                 logger.exception("progress_callback raised")
 
-        proc = subprocess.Popen(
+        _run_ffmpeg_process(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            cancel_event=cancel_event,
+            expected_duration=total_duration,
+            progress_callback=progress_callback,
+            engine="ffmpeg-transitions",
         )
-        try:
-            while proc.poll() is None:
-                if cancel_event is not None and cancel_event.is_set():
-                    proc.terminate()
-                    raise VideoEngineError("Cancelled by user")
-                try:
-                    proc.wait(timeout=0.5)
-                except subprocess.TimeoutExpired:
-                    pass
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-
-        stdout, stderr = proc.communicate()
-        if proc.returncode:
-            detail = (stderr or stdout or "ffmpeg transition export failed").strip()
-            raise VideoEngineError(f"ffmpeg transition export failed: {detail}")
 
         if progress_callback:
             try:
-                progress_callback({"stage": "ffmpeg", "progress": 99, "message": "MP4 written to disk."})
+                progress_callback({"stage": "ffmpeg", "engine": "ffmpeg-transitions", "progress": 99, "eta_seconds": 0, "message": "MP4 written to disk."})
             except Exception:
                 logger.exception("progress_callback raised")
 
@@ -674,7 +734,7 @@ class VideoStudio:
             if progress_callback:
                 try:
                     progress_callback(
-                        {"stage": "ffmpeg", "progress": progress, "message": message}
+                        {"stage": "ffmpeg", "engine": "ffmpeg-static-vfr", "progress": progress, "message": message}
                     )
                 except Exception:
                     logger.exception("progress_callback raised")
@@ -723,30 +783,19 @@ class VideoStudio:
             escaped = Path(path).resolve().as_posix().replace("'", "'\\''")
             return f"file '{escaped}'"
 
-        def _run_ffmpeg(cmd: List[str]) -> None:
-            proc = subprocess.Popen(
+        def _run_ffmpeg(
+            cmd: List[str],
+            expected_duration: float | None = None,
+            progress_range: tuple[int, int] = (90, 98),
+        ) -> None:
+            _run_ffmpeg_process(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                cancel_event=cancel_event,
+                expected_duration=expected_duration,
+                progress_callback=progress_callback,
+                progress_range=progress_range,
+                engine="ffmpeg-static-vfr",
             )
-            try:
-                while proc.poll() is None:
-                    if cancel_event is not None and cancel_event.is_set():
-                        proc.terminate()
-                        raise VideoEngineError("Cancelled by user")
-                    try:
-                        proc.wait(timeout=0.5)
-                    except subprocess.TimeoutExpired:
-                        pass
-            finally:
-                if proc.poll() is None:
-                    proc.kill()
-
-            stdout, stderr = proc.communicate()
-            if proc.returncode:
-                detail = (stderr or stdout or "ffmpeg failed").strip()
-                raise VideoEngineError(f"ffmpeg export failed: {detail}")
 
         def _video_segment(input_path: str, output_path: Path) -> None:
             cmd = [
@@ -875,7 +924,9 @@ class VideoStudio:
                     "2",
                     "-shortest",
                     str(slide_segment_path),
-                ]
+                ],
+                expected_duration=total_slide_duration,
+                progress_range=(90, 97),
             )
             segment_paths.append(slide_segment_path)
 
@@ -1029,7 +1080,7 @@ class VideoStudio:
                     "-t", f"{total_duration:.6f}", "-movflags", "+faststart",
                     output_video_path,
                 ])
-                _run_ffmpeg(media_cmd)
+                _run_ffmpeg(media_cmd, expected_duration=total_duration, progress_range=(97, 99))
         finally:
             for path in [
                 slide_concat_path,
@@ -1062,9 +1113,9 @@ class VideoStudio:
             )
         except ImportError as exc:  # pragma: no cover - exercised on hosts w/o moviepy
             raise MovieEngineUnavailableError(
-                "MoviePy is not installed on this host. The Linux/macOS "
-                "video engine requires `moviepy>=2.0` and `ffmpeg`. "
-                "Install with: pip install 'moviepy>=2.0' && apt-get install ffmpeg"
+                "The direct FFmpeg path is unavailable and the optional MoviePy "
+                "fallback is not installed. Install the system `ffmpeg` + "
+                "`ffprobe` binaries."
             ) from exc
 
         image_files: List[str] = self._sort_image_files_like_powerpoint(

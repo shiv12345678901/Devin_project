@@ -132,7 +132,7 @@
     @apply surface shadow-glass-lg;
   }
 
-  .card     { @apply glass p-6; }
+  .card     { @apply glass p-4 sm:p-6; }
   .card-sm  { @apply glass p-4; }
 
   .divider {

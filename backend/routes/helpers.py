@@ -6,43 +6,15 @@ import json
 import time
 import threading
 
+from backend.src.storage.database import database
+
 # Process-wide in-memory lock that serializes history read-modify-write.
 # SSE runs execute on separate Flask worker threads and can finish at the same
 # time; without serializing the JSON file RMW, concurrent writes would clobber
 # each other and silently drop entries (classic TOCTOU).
 _HISTORY_LOCK = threading.Lock()
 
-# Cross-process advisory file lock. Only engaged on POSIX (fcntl). Windows
-# uses msvcrt.locking — we detect at import time.
-try:  # pragma: no cover — platform-dependent
-    import fcntl  # type: ignore
-
-    def _file_lock(fh):
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-
-    def _file_unlock(fh):
-        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-except ImportError:  # Windows
-    try:
-        import msvcrt  # type: ignore
-
-        def _file_lock(fh):
-            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
-
-        def _file_unlock(fh):
-            try:
-                fh.seek(0)
-                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-            except OSError:
-                pass
-    except ImportError:  # neither available — degrade to thread-only lock
-        def _file_lock(_fh):
-            return None
-
-        def _file_unlock(_fh):
-            return None
-
-from screenshot_engines.playwright_engine import take_screenshot_playwright
+from backend.src.screenshot_engines.playwright_engine import take_screenshot_playwright
 
 # Output folders (shared config)
 OUTPUT_FOLDER = "output/screenshots"
@@ -319,54 +291,27 @@ def save_html(html_content, prefix="html_notes", folder=None):
 # ─── History Log (#8) ─────────────────────────────────────────────────────
 
 def log_generation(entry):
-    """
-    Append a generation entry to the history log.
-
-    Uses a process-wide threading.Lock plus an advisory file lock so the
-    read-modify-write cycle on HISTORY_FILE can't be raced by concurrent
-    SSE workers (two runs completing at once would otherwise silently drop
-    one entry).
-    """
+    """Append a generation entry to SQLite, importing legacy JSON once."""
     entry.setdefault('timestamp', time.time())
     entry.setdefault('datetime', time.strftime('%Y-%m-%d %H:%M:%S'))
 
     with _HISTORY_LOCK:
         try:
-            # Ensure file exists so we can grab an advisory lock on it.
-            if not os.path.exists(HISTORY_FILE):
-                os.makedirs(os.path.dirname(HISTORY_FILE) or '.', exist_ok=True)
-                with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-                    f.write('[]')
-
-            with open(HISTORY_FILE, 'r+', encoding='utf-8') as f:
-                _file_lock(f)
+            # Import old history before the first new write. Keeping the source
+            # file makes rollback possible; all subsequent writes use SQLite.
+            if os.path.exists(HISTORY_FILE) and not database.migration_applied("legacy_history_json_v1"):
                 try:
-                    raw = f.read()
-                    try:
-                        history = json.loads(raw) if raw.strip() else []
-                    except json.JSONDecodeError:
-                        # Corrupted file — start fresh. Do NOT os.replace the
-                        # file while we still hold `f` open: on POSIX that
-                        # just renames the inode and leaves our write stream
-                        # pointing at the .corrupt path, so the fresh entry
-                        # would vanish with the renamed file. Instead save
-                        # a forensic copy via read-and-write, then truncate
-                        # the original in place below.
-                        try:
-                            with open(HISTORY_FILE + '.corrupt', 'w', encoding='utf-8') as forensic:
-                                forensic.write(raw)
-                        except OSError:
-                            pass
-                        history = []
-
-                    history.append(entry)
-                    history = history[-200:]
-
-                    f.seek(0)
-                    f.truncate()
-                    json.dump(history, f, indent=2, ensure_ascii=False)
-                finally:
-                    _file_unlock(f)
+                    if not database.history(limit=1):
+                        with open(HISTORY_FILE, 'r', encoding='utf-8') as legacy_file:
+                            legacy = json.load(legacy_file)
+                        for old_entry in legacy if isinstance(legacy, list) else []:
+                            if isinstance(old_entry, dict):
+                                database.add_history(old_entry)
+                except Exception:
+                    pass
+            database.mark_migration("legacy_history_json_v1")
+            database.add_history(entry)
+            database.apply_retention()
         except Exception as e:
             print(f"Warning: Failed to log generation history: {e}")
 
@@ -374,30 +319,17 @@ def log_generation(entry):
 def get_history():
     """Read the generation history."""
     try:
-        if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
+        return database.history()
     except Exception as e:
         print(f"Warning: Failed to read history: {e}")
     return []
 
 
 def clear_history():
-    """Clear the generation history file."""
+    """Clear persisted generation history."""
     with _HISTORY_LOCK:
         try:
-            os.makedirs(os.path.dirname(HISTORY_FILE) or '.', exist_ok=True)
-            if not os.path.exists(HISTORY_FILE):
-                with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-                    f.write('[]')
-            with open(HISTORY_FILE, 'r+', encoding='utf-8') as f:
-                _file_lock(f)
-                try:
-                    f.seek(0)
-                    f.truncate()
-                    f.write('[]')
-                finally:
-                    _file_unlock(f)
+            database.clear_history()
             return True
         except Exception as e:
             print(f"Warning: Failed to clear history: {e}")

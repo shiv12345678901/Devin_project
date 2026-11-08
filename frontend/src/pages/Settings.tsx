@@ -139,7 +139,8 @@ export default function Settings() {
   }
 
   useEffect(() => {
-    void runSystemCheck()
+    const timer = window.setTimeout(() => void runSystemCheck(), 0)
+    return () => window.clearTimeout(timer)
   }, [runSystemCheck])
 
   return (
@@ -348,7 +349,7 @@ export default function Settings() {
               <option value="video">MP4 video</option>
             </select>
             <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-              Pre-selected on the Text → Video wizard. PowerPoint / MP4 require Windows.
+              Pre-selected on the Text → Video wizard. PPTX requires Windows; MP4 uses FFmpeg on Linux/macOS.
             </p>
           </div>
         </div>
@@ -754,9 +755,9 @@ function systemCheckItems(response: PreflightResponse) {
   const checks = response.checks
   return [
     checkItem('backend', 'Backend online', checks.backend, 'Start the Flask backend and verify the backend URL override.'),
-    checkItem('ai_config', 'API key configured', checks.ai_config, 'Edit backend/config/config.py and set a real API key.'),
+    checkItem('ai_config', 'API key configured', checks.ai_config, 'Set API_KEY in .env or the backend service environment.'),
     checkItem('powerpoint', 'PowerPoint detected', checks.powerpoint, 'Install PowerPoint and pywin32, or use screenshot-only outputs.'),
-    checkItem('video_engine', 'MoviePy / ffmpeg detected', checks.video_engine, 'Install MoviePy/ffmpeg or run on Windows with PowerPoint.'),
+    checkItem('video_engine', 'FFmpeg / video engine detected', checks.video_engine, 'Install FFmpeg + ffprobe, or run on Windows with PowerPoint.'),
     checkItem('youtube_cookies', 'YouTube cookies valid', checks.youtube_cookies, 'Optional: export YouTube cookies to backend/config/cookies.txt.'),
     checkItem('output_folders', 'Output folders writable', checks.output_folders, 'Check permissions for output/html, screenshots, presentations, videos, and runs.'),
   ]

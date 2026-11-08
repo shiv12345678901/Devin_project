@@ -2,30 +2,23 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
+from ..settings import settings
+from ..storage.database import database
+
 
 RUNS_DIR = Path("output") / "runs"
-INDEX_PATH = RUNS_DIR / "index.json"
 _LOCK = threading.RLock()
 _ROOT_DIR = Path.cwd().resolve()
+_MIGRATED = False
 
 
 def _now() -> float:
     return time.time()
-
-
-def _ensure_dir() -> None:
-    RUNS_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _run_path(run_id: str) -> Path:
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(run_id))
-    return RUNS_DIR / f"{safe}.json"
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -36,40 +29,6 @@ def _read_json(path: Path, default: Any) -> Any:
             return json.load(f)
     except Exception:
         return default
-
-
-def _write_json(path: Path, data: Any) -> None:
-    _ensure_dir()
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with tmp_path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-    # On Windows, os.replace raises PermissionError (WinError 5) if another
-    # process momentarily holds a handle on the destination (antivirus, file
-    # indexer, a concurrent reader). Retry with a short backoff before giving up.
-    last_err: Exception | None = None
-    for attempt in range(10):
-        try:
-            os.replace(tmp_path, path)
-            return
-        except PermissionError as exc:  # WinError 5 / 32
-            last_err = exc
-            time.sleep(0.05 * (attempt + 1))
-
-    # Last resort: write directly to the destination so a transient lock
-    # doesn't lose the update. Then clean up the temp file.
-    try:
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    finally:
-        try:
-            if tmp_path.exists():
-                tmp_path.unlink()
-        except OSError:
-            pass
-    if last_err is not None and not path.exists():
-        raise last_err
-
 
 def _normalize_path_string(value: str) -> str:
     normalized = value.replace("\\", "/")
@@ -103,12 +62,15 @@ def _normalize_outputs(outputs: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _load_index() -> list[dict[str, Any]]:
-    index = _read_json(INDEX_PATH, [])
-    return index if isinstance(index, list) else []
+    _migrate_legacy_runs_once()
+    return [_summarize(run) for run in database.list_runs(limit=settings.retention.max_runs)]
 
 
 def _save_index(index: list[dict[str, Any]]) -> None:
-    _write_json(INDEX_PATH, index[:500])
+    # Kept as a no-op compatibility seam for old tests/extensions. SQLite's
+    # indexed ``runs`` table is now the canonical list; no second index file
+    # is required.
+    del index
 
 
 def _summarize(run: dict[str, Any]) -> dict[str, Any]:
@@ -139,17 +101,27 @@ def _summarize(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def _upsert_index_summary(run: dict[str, Any]) -> None:
-    summary = _summarize(run)
-    index = [item for item in _load_index() if item.get("run_id") != run.get("run_id")]
-    index.insert(0, summary)
-    index.sort(
-        key=lambda item: item.get("created_at")
-        or item.get("started_at")
-        or item.get("queued_at")
-        or 0,
-        reverse=True,
-    )
-    _save_index(index)
+    database.upsert_run(run)
+
+
+def _migrate_legacy_runs_once() -> None:
+    """Import old per-run JSON records without deleting the recovery source."""
+    global _MIGRATED
+    if _MIGRATED:
+        return
+    with _LOCK:
+        if _MIGRATED:
+            return
+        database.initialize()
+        if not database.migration_applied("legacy_runs_json_v1") and RUNS_DIR.is_dir():
+            for path in RUNS_DIR.glob("*.json"):
+                if path.name == "index.json":
+                    continue
+                run = _read_json(path, None)
+                if isinstance(run, dict) and run.get("run_id"):
+                    database.upsert_run(run)
+        database.mark_migration("legacy_runs_json_v1")
+        _MIGRATED = True
 
 
 def create_run(
@@ -201,8 +173,8 @@ def create_run(
             "progress": 0,
             "message": run["message"],
         })
-        _write_json(_run_path(run_id), run)
         _upsert_index_summary(run)
+        database.apply_retention()
         return run
 
 
@@ -219,7 +191,8 @@ def update_run(
     queue_position: int | None = None,
 ) -> dict[str, Any] | None:
     with _LOCK:
-        run = _read_json(_run_path(run_id), None)
+        _migrate_legacy_runs_once()
+        run = database.get_run(run_id)
         if not isinstance(run, dict):
             return None
         ts = _now()
@@ -250,7 +223,6 @@ def update_run(
                 except Exception:
                     pass
         run["updated_at"] = ts
-        _write_json(_run_path(run_id), run)
         _upsert_index_summary(run)
         return run
 
@@ -265,7 +237,8 @@ def add_event(
     data: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     with _LOCK:
-        run = _read_json(_run_path(run_id), None)
+        _migrate_legacy_runs_once()
+        run = database.get_run(run_id)
         if not isinstance(run, dict):
             return None
         ts = _now()
@@ -284,7 +257,6 @@ def add_event(
             run["progress"] = max(0, min(100, int(progress)))
         run["message"] = message
         run["updated_at"] = ts
-        _write_json(_run_path(run_id), run)
         _upsert_index_summary(run)
         return run
 
@@ -307,7 +279,8 @@ def finish_run(
     metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     with _LOCK:
-        run = _read_json(_run_path(run_id), None)
+        _migrate_legacy_runs_once()
+        run = database.get_run(run_id)
         if not isinstance(run, dict):
             return None
         ts = _now()
@@ -334,14 +307,14 @@ def finish_run(
             "progress": run.get("progress"),
             "message": message,
         })
-        _write_json(_run_path(run_id), run)
         _upsert_index_summary(run)
         return run
 
 
 def get_run(run_id: str, include_input: bool = False) -> dict[str, Any] | None:
     with _LOCK:
-        run = _read_json(_run_path(run_id), None)
+        _migrate_legacy_runs_once()
+        run = database.get_run(run_id)
         if not isinstance(run, dict):
             return None
         run = dict(run)
@@ -353,7 +326,8 @@ def get_run(run_id: str, include_input: bool = False) -> dict[str, Any] | None:
 
 def list_runs(limit: int = 100) -> list[dict[str, Any]]:
     with _LOCK:
-        return [dict(item) for item in _load_index()[:limit] if isinstance(item, dict)]
+        _migrate_legacy_runs_once()
+        return [_summarize(item) for item in database.list_runs(limit=limit)]
 
 
 def _recovered_outputs_for_interrupted_run(run: dict[str, Any]) -> dict[str, Any] | None:
@@ -384,21 +358,9 @@ def _recovered_outputs_for_interrupted_run(run: dict[str, Any]) -> dict[str, Any
     # canonical-stem helper lives under ``backend/routes``. Importing at
     # module load would create a cycle.
     try:
-        import sys as _sys
-        _here = Path(__file__).resolve()
-        _backend = _here.parents[2]
-        for _path in (_backend, _backend / "routes", _backend / "config"):
-            if str(_path) not in _sys.path:
-                _sys.path.insert(0, str(_path))
-        from helpers import youtube_video_stem  # type: ignore
-        try:
-            from config import (  # type: ignore
-                POWERPOINT_OUTPUT_FOLDER,
-                POWERPOINT_VIDEO_FOLDER,
-            )
-        except Exception:
-            POWERPOINT_OUTPUT_FOLDER = "output/presentations"
-            POWERPOINT_VIDEO_FOLDER = "output/videos"
+        from ...routes.helpers import youtube_video_stem
+        POWERPOINT_OUTPUT_FOLDER = settings.powerpoint_output_folder
+        POWERPOINT_VIDEO_FOLDER = settings.powerpoint_video_folder
     except Exception:
         return None
 
@@ -488,7 +450,7 @@ def mark_interrupted_active_runs() -> dict[str, int]:
             run_id = str(item.get("run_id") or "")
             if not run_id:
                 continue
-            full_run = _read_json(_run_path(run_id), None)
+            full_run = database.get_run(run_id)
             recovered_outputs = (
                 _recovered_outputs_for_interrupted_run(full_run)
                 if isinstance(full_run, dict)

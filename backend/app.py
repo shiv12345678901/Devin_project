@@ -14,7 +14,10 @@ import io
 import json
 import logging
 import os
+import shutil
 import sys
+import time
+import uuid
 from datetime import datetime
 
 # Force UTF-8-safe, unbuffered output for Windows terminals/services.
@@ -24,9 +27,7 @@ if sys.version_info >= (3, 7):
     if isinstance(sys.stderr, io.TextIOWrapper):
         sys.stderr.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
 
-# Add src to path so blueprints can import `core.*`, `utils.*` unprefixed.
 BACKEND_DIR = os.path.abspath(os.path.dirname(__file__))
-sys.path.insert(0, os.path.join(BACKEND_DIR, 'src'))
 
 # Optional .env loader. We only fail soft — having python-dotenv missing
 # means the user has to set env vars another way (export, systemd unit, etc.).
@@ -54,6 +55,13 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 from flask import Flask, jsonify, request, send_from_directory  # noqa: E402
+from backend.src.settings import settings as app_settings  # noqa: E402
+from backend.src.observability import configure_logging, log_context, reset_log_context  # noqa: E402
+from backend.src.openapi import OPENAPI  # noqa: E402
+from backend.src.storage.retention import apply_artifact_retention  # noqa: E402
+
+configure_logging()
+logger = logging.getLogger("textbro.http")
 
 # Locate the built React frontend, if any.
 FRONTEND_DIST = os.path.abspath(os.path.join(BACKEND_DIR, '..', 'frontend', 'dist'))
@@ -65,21 +73,23 @@ def has_frontend_build() -> bool:
     running (Flask's reloader only watches .py files)."""
     return os.path.isfile(os.path.join(FRONTEND_DIST, 'index.html'))
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=None)
 
 # Cap incoming request bodies to a reasonable size so a malicious or buggy
 # client can't OOM the process by streaming a multi-GB upload. 64 MB is
 # generous for thumbnails (max 4096×4096 PNG ~ a few MB) but tight enough
 # to bounce abuse. Override via env var for unusual workloads.
-app.config['MAX_CONTENT_LENGTH'] = int(
-    os.environ.get('MAX_CONTENT_LENGTH_BYTES', 64 * 1024 * 1024)
-)
+app.config['MAX_CONTENT_LENGTH'] = app_settings.max_content_length_bytes
 
 # CORS — pinned by default to local dev origins. To allow access from a
 # remote machine, set ``CORS_ORIGINS`` to a comma-separated allowlist (or
 # the literal string ``*`` to disable the allowlist for prototyping).
 # Wide-open ``*`` is also allowed but logged as a warning.
-_cors_raw = os.environ.get('CORS_ORIGINS') or os.environ.get('ALLOWED_ORIGINS', '*')
+_cors_raw = os.environ.get('CORS_ORIGINS') or os.environ.get(
+    'ALLOWED_ORIGINS',
+    'http://localhost:5173,http://127.0.0.1:5173,'
+    'http://localhost:4173,http://127.0.0.1:4173',
+)
 _cors_raw = _cors_raw.strip()
 if _cors_raw == '*':
     CORS_ORIGINS: list = ['*']
@@ -134,17 +144,38 @@ if _env_bool('RATE_LIMIT', False):
 # Log every request to terminal
 @app.before_request
 def log_request():
-    print(f"📡 Request: {request.method} {request.path}", flush=True)
+    request.environ["textbro.started_at"] = time.monotonic()
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    request.environ["textbro.request_id"] = request_id
+    request.environ["textbro.log_token"] = log_context(request_id=request_id)
+    logger.info("request.started", extra={"method": request.method, "path": request.path})
+
+
+@app.after_request
+def log_response(response):
+    elapsed = time.monotonic() - request.environ.get("textbro.started_at", time.monotonic())
+    request_id = request.environ.get("textbro.request_id", "")
+    response.headers["X-Request-ID"] = request_id
+    logger.info("request.completed", extra={"method": request.method, "path": request.path, "status_code": response.status_code, "duration_ms": round(elapsed * 1000, 2)})
+    token = request.environ.get("textbro.log_token")
+    if token is not None:
+        reset_log_context(token)
+    return response
+
+
+@app.route('/openapi.json')
+def openapi_contract():
+    return jsonify(OPENAPI)
 
 
 # ─── Register Blueprints ──────────────────────────────────────────────────
 
-from routes.generate import generate_bp  # noqa: E402
-from routes.html_routes import html_bp  # noqa: E402
-from routes.image_routes import image_bp  # noqa: E402
-from routes.resources import resources_bp  # noqa: E402
-from routes.runs import runs_bp  # noqa: E402
-from core.run_manager import mark_interrupted_active_runs  # noqa: E402
+from backend.routes.generate import generate_bp  # noqa: E402
+from backend.routes.html_routes import html_bp  # noqa: E402
+from backend.routes.image_routes import image_bp  # noqa: E402
+from backend.routes.resources import resources_bp  # noqa: E402
+from backend.routes.runs import runs_bp  # noqa: E402
+from backend.src.core.run_manager import mark_interrupted_active_runs  # noqa: E402
 
 app.register_blueprint(generate_bp)
 app.register_blueprint(html_bp)
@@ -154,7 +185,7 @@ app.register_blueprint(runs_bp)
 
 # YouTube Screenshots — isolated optional tool. Safe to remove entirely.
 try:
-    from routes.youtube_screenshots import youtube_screenshots_bp  # noqa: E402
+    from backend.routes.youtube_screenshots import youtube_screenshots_bp  # noqa: E402
     app.register_blueprint(youtube_screenshots_bp)
     print("🎬 YouTube Screenshots tool loaded", flush=True)
 except ImportError:
@@ -167,6 +198,15 @@ def restart_server():
     """Restart the backend process. The frontend can trigger this."""
     import subprocess
     import threading
+
+    remote_addr = request.remote_addr or ''
+    is_loopback = remote_addr in {'127.0.0.1', '::1'}
+    if not is_loopback and not _env_bool('ALLOW_REMOTE_RESTART', False):
+        return jsonify({
+            'success': False,
+            'error': 'Remote restart is disabled',
+            'detail': 'Set ALLOW_REMOTE_RESTART=1 only on a trusted, authenticated deployment.',
+        }), 403
 
     def _do_restart():
         import time
@@ -244,6 +284,8 @@ if _recovered_count:
         flush=True,
     )
 
+apply_artifact_retention()
+
 
 # ─── Health & Preflight ───────────────────────────────────────────────────
 
@@ -256,8 +298,7 @@ def healthz():
     every blueprint individually.
     """
     try:
-        sys.path.insert(0, os.path.join(BACKEND_DIR, 'src'))
-        from utils.run_guard import current_run  # type: ignore  # noqa: E402
+        from backend.src.utils.run_guard import current_run
         active = current_run()
     except Exception:
         active = None
@@ -323,7 +364,7 @@ def preflight():
     Response shape (each check: {ok: bool, detail: str}):
       - platform:    always ok; reports OS / python version.
       - backend:     always ok when this handler responds.
-      - ai_config:   ok when config/config.py exists and defines a non-empty API_KEY.
+      - ai_config:   ok when typed environment settings contain an API key.
       - powerpoint:  ok only on Windows with pywin32 and PowerPoint.Application COM.
 
     Bypass the cache with ``?fresh=1``.
@@ -354,13 +395,10 @@ def preflight():
         'output_folders': {'ok': False, 'detail': ''},
     }
 
-    # AI config: does config/config.py have a non-placeholder API_KEY and at
-    # least one real api_key in MODELS_CONFIG?
+    # AI config: typed settings must have at least one non-placeholder key.
     try:
-        config_dir = os.path.join(BACKEND_DIR, 'config')
-        if config_dir not in sys.path:
-            sys.path.insert(0, config_dir)
-        from config import API_KEY, MODELS_CONFIG  # type: ignore
+        API_KEY = app_settings.api_key
+        MODELS_CONFIG = app_settings.models
         placeholder = {'', 'your-api-key-here', 'REPLACE_ME'}
         top_ok = isinstance(API_KEY, str) and API_KEY.strip() not in placeholder
         model_ok = any(
@@ -371,7 +409,7 @@ def preflight():
             checks['ai_config']['ok'] = True
             checks['ai_config']['detail'] = f"{sum(1 for m in MODELS_CONFIG.values() if m.get('api_key'))} model(s) configured"
         else:
-            checks['ai_config']['detail'] = 'API_KEY is empty or placeholder — edit backend/config/config.py'
+            checks['ai_config']['detail'] = 'API_KEY is empty or placeholder — set it in .env or the service environment'
     except Exception as e:  # pragma: no cover — surfaces in UI
         checks['ai_config']['detail'] = f'Failed to load config: {e}'
 
@@ -425,13 +463,18 @@ def preflight():
             f'PowerPoint COM is Windows-only; this host is {_platform.system()}'
         )
 
-    # MoviePy / ffmpeg availability. This is the Linux side of the dual
-    # engine — if it's usable we can export MP4 video even when
-    # PowerPoint COM isn't. We don't probe the encoder (cheap import is
-    # enough for the gate) so the preflight stays fast.
+    # FFmpeg / MoviePy availability. Direct FFmpeg is the preferred Linux
+    # engine; MoviePy remains a compatibility fallback. Checking executable
+    # discovery is cheap and lets the UI distinguish the preferred native
+    # engine from an optional MoviePy-only fallback.
     engines: list = []
     if checks['powerpoint']['ok']:
         engines.append('powerpoint')
+    ffmpeg_path = shutil.which('ffmpeg')
+    ffprobe_path = shutil.which('ffprobe')
+    ffmpeg_ok = bool(ffmpeg_path and ffprobe_path)
+    if ffmpeg_ok:
+        engines.append('ffmpeg')
     moviepy_ok = False
     try:
         import moviepy  # type: ignore  # noqa: F401
@@ -446,18 +489,18 @@ def preflight():
     checks['video_engine']['engines'] = engines
     if engines:
         checks['video_engine']['ok'] = True
-        if moviepy_ok and checks['powerpoint']['ok']:
-            checks['video_engine']['detail'] = (
-                f'Dual engine ready — PowerPoint (COM) + MoviePy'
-            )
-        elif moviepy_ok:
-            checks['video_engine']['detail'] = moviepy_detail
-        else:
-            checks['video_engine']['detail'] = 'PowerPoint COM engine ready'
+        details: list[str] = []
+        if checks['powerpoint']['ok']:
+            details.append('PowerPoint COM ready')
+        if ffmpeg_ok:
+            details.append('FFmpeg + ffprobe ready')
+        if moviepy_ok:
+            details.append(moviepy_detail)
+        checks['video_engine']['detail'] = ' · '.join(details)
     else:
         checks['video_engine']['detail'] = (
-            f'No video engine available — install MoviePy ({moviepy_detail}) '
-            'or run on Windows with PowerPoint.'
+            f'No video engine available — install FFmpeg + ffprobe, or run on '
+            f'Windows with PowerPoint. Optional fallback status: {moviepy_detail}'
         )
 
     cookies_path = os.path.join(BACKEND_DIR, 'config', 'cookies.txt')
@@ -513,8 +556,9 @@ def check_models():
     try:
         from openai import OpenAI  # type: ignore
         import httpx  # type: ignore
-        from config import API_URL, MODELS_CONFIG  # type: ignore
-        from core.ai_client import resolve_model_config  # type: ignore
+        API_URL = app_settings.api_url
+        MODELS_CONFIG = app_settings.models
+        from backend.src.core.ai_client import resolve_model_config
     except Exception as exc:
         return jsonify({
             'success': False,
@@ -713,6 +757,7 @@ _API_PATH_PREFIXES = (
     '/cache/',
     '/metrics/',
     '/logs/',
+    '/static/',
 )
 
 

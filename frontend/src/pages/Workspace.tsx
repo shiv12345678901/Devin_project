@@ -21,7 +21,7 @@ const CREATE_TOOLS: ToolCard[] = [
     description: 'Paste source text, set project metadata, tune AI and rendering, then start a tracked run.',
     icon: FileText,
     accent: 'brand',
-    badges: ['AI required', 'PowerPoint required'],
+    badges: ['AI required', 'MP4 cross-platform'],
     highlights: ['Review before start', 'Logs and retry in Runs'],
   },
   {
@@ -31,7 +31,7 @@ const CREATE_TOOLS: ToolCard[] = [
     description: 'Paste or upload raw HTML and send it through the shared screenshot and export pipeline.',
     icon: Code2,
     accent: 'sky',
-    badges: ['PowerPoint required', 'Fast'],
+    badges: ['MP4 cross-platform', 'Fast'],
     highlights: ['Skip AI generation', 'MP4 / PPTX output'],
   },
   {
@@ -51,7 +51,7 @@ const CREATE_TOOLS: ToolCard[] = [
     description: 'Upload screenshots you already have and run only the MP4 / PowerPoint export steps.',
     icon: Images,
     accent: 'amber',
-    badges: ['PowerPoint required', 'Fast'],
+    badges: ['MP4 cross-platform', 'Fast'],
     highlights: ['Drag-drop images', 'Canonical output names'],
   },
   {
@@ -61,7 +61,7 @@ const CREATE_TOOLS: ToolCard[] = [
     description: 'Capture frames from a YouTube URL at specific timestamps, then export them as video.',
     icon: Video,
     accent: 'rose',
-    badges: ['PowerPoint required'],
+    badges: ['MP4 cross-platform'],
     highlights: ['Manual timestamps', 'Quality selection'],
   },
 ]

@@ -1,9 +1,6 @@
-import sys
 from pathlib import Path
 
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src import video_engine
+from backend.src import video_engine
 
 
 class _FinishedProcess:
@@ -121,4 +118,27 @@ def test_static_engine_keeps_vfr_and_copies_video_for_audio_only(tmp_path, monke
     final_text = " ".join(final_command)
     assert "adelay=3000:all=1" in final_text
     assert "volume=0.1" in final_text
+
+
+def test_single_slide_ignores_transition_and_uses_static_ffmpeg(tmp_path, monkeypatch):
+    (slide,) = _media(tmp_path, "slide (1).png")
+    commands = []
+    monkeypatch.setattr(video_engine.shutil, "which", lambda _name: "/usr/bin/tool")
+    monkeypatch.setattr(
+        video_engine.subprocess,
+        "Popen",
+        lambda command, **_kwargs: _FinishedProcess(command, commands),
+    )
+
+    result = video_engine.VideoStudio(use_powerpoint=False).build_video(
+        {
+            "image_files": [slide],
+            "output_video_path": str(tmp_path / "result.mp4"),
+            "transition_type": "fade",
+            "transition_duration": 0.5,
+        }
+    )
+
+    assert result["engine"] == "ffmpeg"
+    assert all("xfade=" not in " ".join(command) for command in commands)
 

@@ -8,15 +8,13 @@ now colocated with the React frontend in this repo.
 ## Running locally
 
 ```bash
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+python -m venv backend/.venv && source backend/.venv/bin/activate
+pip install -r backend/requirements.txt
 playwright install chromium
 
-cp config/config.example.py config/config.py   # add your API_KEY/API_URL/MODEL
-cp .env.example .env                           # tweak security knobs
+cp backend/.env.example .env                   # add API_KEY and tweak knobs
 
-python start.py
+python -m backend.start
 # → http://127.0.0.1:5000
 ```
 
@@ -30,10 +28,10 @@ Use a real WSGI server. The repo ships `wsgi.py` and pins both `gunicorn`
 
 ```bash
 # Linux/Mac
-gunicorn -w 4 -b 127.0.0.1:5000 wsgi:app
+gunicorn -w 1 -b 127.0.0.1:5000 backend.wsgi:app
 
 # Windows
-waitress-serve --listen=127.0.0.1:5000 wsgi:app
+waitress-serve --listen=127.0.0.1:5000 backend.wsgi:app
 ```
 
 `app.run(debug=True)` is **never** invoked unless `FLASK_DEBUG=1` is set, and
@@ -87,15 +85,13 @@ backend/
 ├── wsgi.py           # Production WSGI entrypoint (gunicorn / waitress)
 ├── requirements.txt
 ├── .env.example
-├── config/
-│   └── config.example.py   # copy to config.py and fill in
 ├── routes/           # generate / html / image / resources blueprints
 ├── src/
 │   ├── core/         # AI + vision clients
 │   ├── screenshot_engines/   # Playwright wrapper
-│   └── utils/        # cache, metrics, ETA, retry helpers
-├── static/
-└── templates/
+│   ├── storage/      # SQLite persistence + retention
+│   └── utils/        # metrics, ETA, retry helpers
+└── templates/powerpoint/  # active PowerPoint assets (not a Flask UI)
 ```
 
 ## Backend endpoints used by the React frontend
@@ -103,7 +99,10 @@ backend/
 | Path                          | Method | Purpose                          |
 | ----------------------------- | ------ | -------------------------------- |
 | `/healthz`                    | GET    | Liveness probe                   |
-| `/generate-sse`               | POST   | Text → HTML → screenshots (SSE)  |
+| `/runs/text-to-video`         | POST   | Queue the unified text export pipeline |
+| `/runs/<run_id>/events`       | GET    | Engine-aware SSE progress + ETA  |
+| `/generate-sse`               | POST   | Deprecated compatibility adapter |
+| `/openapi.json`               | GET    | OpenAPI 3.1 contract             |
 | `/generate-html`              | POST   | HTML → screenshots               |
 | `/image-to-screenshots-sse`   | POST   | Image/PDF → screenshots (SSE)    |
 | `/cancel/<operation_id>`      | POST   | Cancel an in-progress generation |

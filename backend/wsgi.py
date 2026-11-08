@@ -11,12 +11,7 @@ Bind to 127.0.0.1 unless you have an authenticating reverse proxy in front
 exposed port is acceptable for trusted users but not a substitute for TLS.
 """
 import os
-import sys
-
-# Match app.py's path setup so blueprints can resolve `core.*` and `utils.*`
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-
-from app import app  # noqa: E402  re-export Flask app as WSGI callable
+from backend.app import app  # re-export Flask app as WSGI callable
 
 # Some WSGI servers look for `application` rather than `app`.
 application = app

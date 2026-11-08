@@ -3,9 +3,9 @@ import time
 
 from flask import Blueprint, request, jsonify
 
-from utils.html_beautifier import HTMLBeautifier
-from utils.run_guard import begin_run, end_run, RunRejected
-from routes.helpers import (
+from backend.src.utils.html_beautifier import HTMLBeautifier
+from backend.src.utils.run_guard import begin_run, end_run, RunRejected
+from backend.routes.helpers import (
     OUTPUT_FOLDER, HTML_FOLDER,
     get_next_batch_id,
     take_screenshots, save_html, log_generation,

@@ -14,7 +14,7 @@ function likelyCause(message: string): string {
 function nextAction(message: string): string {
   const m = message.toLowerCase()
   if (m.includes('powerpoint') || m.includes('ppt')) return 'Close PowerPoint windows, dismiss any dialogs, then retry the export.'
-  if (m.includes('moviepy') || m.includes('ffmpeg')) return 'Install MoviePy/ffmpeg or switch to screenshots/PPTX where available.'
+  if (m.includes('moviepy') || m.includes('ffmpeg')) return 'Install FFmpeg + ffprobe, or switch to screenshots/PPTX where available.'
   if (m.includes('api') || m.includes('key') || m.includes('model')) return 'Open Settings, verify the API key, then run System Check again.'
   if (m.includes('youtube') || m.includes('sign in') || m.includes('cookies')) return 'Export YouTube cookies to backend/config/cookies.txt, then retry.'
   if (m.includes('permission') || m.includes('access') || m.includes('write')) return 'Check output folder permissions and disk space, then retry.'
