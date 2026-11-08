@@ -7,10 +7,9 @@ engines directly. The studio inspects the host OS (and the
 - **Windows** → ``core.powerpoint.controller.PowerPointController`` driving
   PowerPoint via COM automation. Same behaviour the project has shipped
   on Windows since day one.
-- **Linux / macOS** → MoviePy + ffmpeg. Stitches the same screenshot
-  list into a 4K H.264 MP4 with the same intro / outro thumbnail
-  layering plus optional intro / outro video clips, watermark, and an
-  audio bed (per-slide voiceovers + 10 %-volume background music).
+- **Linux / macOS** → FFmpeg first, with MoviePy as a compatibility fallback.
+  Static slides use a variable-frame-rate pipeline while animated transitions,
+  intro / outro clips, watermarking, and audio mixing stay inside FFmpeg.
 
 Both engines accept the same ``config_data`` dict (see
 :meth:`VideoStudio.build_video`) and return the same shape so the calling
@@ -102,13 +101,10 @@ class VideoStudio:
             ``progress_callback``   – ``fn(payload: dict)``
             ``cancel_event``        – threading.Event for cooperative cancel
 
-        Optional ffmpeg / MoviePy keys:
+        Optional FFmpeg / MoviePy keys:
             ``intro_video_path``    – intro MP4 before the screenshot slides
             ``outro_video_path``    – outro MP4 after the screenshot slides
-
-        MoviePy-only optional keys:
             ``voiceover_files``     – ``list[Optional[str]]`` (one per slide)
-            ``intro_video_path`` / ``outro_video_path`` – video segments
 
         Returns:
             ``{'presentation_path': str | None, 'video_path': str, 'warning': str | None}``
@@ -205,17 +201,21 @@ class VideoStudio:
         if not image_files or any(not Path(p).is_file() for p in image_files):
             return False
 
-        unsupported_keys = ("narration_audio", "background_music", "logo_path")
-        if any(cfg.get(key) for key in unsupported_keys):
-            return False
-
-        for key in ("intro_video_path", "outro_video_path"):
+        for key in (
+            "intro_video_path",
+            "outro_video_path",
+            "narration_audio",
+            "background_music",
+            "logo_path",
+        ):
             path = cfg.get(key)
             if path and not Path(path).is_file():
                 return False
 
         voiceover_files = [p for p in list(cfg.get("voiceover_files") or []) if p]
-        if voiceover_files:
+        if any(not Path(p).is_file() for p in voiceover_files):
+            return False
+        if (voiceover_files or cfg.get("intro_video_path") or cfg.get("outro_video_path")) and not shutil.which("ffprobe"):
             return False
 
         return True
@@ -260,10 +260,8 @@ class VideoStudio:
     def _can_build_ffmpeg_transitions(self, cfg: dict) -> bool:
         """Return whether a still-image timeline can use FFmpeg natively.
 
-        Full-track narration, looping background music, and a watermark are
-        handled inside FFmpeg. Per-slide voiceovers and video intro/outro
-        clips remain on the MoviePy path because they need separate timeline
-        handling.
+        Full-track narration, per-slide voiceovers, looping background music,
+        video intro/outro clips, and a watermark are handled inside FFmpeg.
         """
         if not shutil.which("ffmpeg"):
             return False
@@ -273,23 +271,75 @@ class VideoStudio:
         image_files = list(cfg.get("image_files") or [])
         if len(image_files) < 2 or any(not Path(p).is_file() for p in image_files):
             return False
-        for key in ("narration_audio", "background_music", "logo_path"):
+        for key in (
+            "narration_audio",
+            "background_music",
+            "logo_path",
+            "intro_video_path",
+            "outro_video_path",
+        ):
             path = cfg.get(key)
             if path and not Path(path).is_file():
                 return False
-        if any(p for p in list(cfg.get("voiceover_files") or []) if p):
+        voiceover_files = [p for p in list(cfg.get("voiceover_files") or []) if p]
+        if any(not Path(p).is_file() for p in voiceover_files):
             return False
-        if cfg.get("intro_video_path") or cfg.get("outro_video_path"):
+        if (voiceover_files or cfg.get("intro_video_path") or cfg.get("outro_video_path")) and not shutil.which("ffprobe"):
             return False
         return True
 
-    def _build_with_ffmpeg_transitions(self, cfg: dict) -> dict:
-        """Encode a 4K still-image timeline and media layers with FFmpeg.
+    def _ffprobe_duration(self, path: str) -> float:
+        """Return media duration in seconds, raising a useful engine error."""
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        try:
+            duration = float(probe.stdout.strip())
+        except (TypeError, ValueError):
+            duration = 0.0
+        if probe.returncode or duration <= 0:
+            detail = (probe.stderr or "duration unavailable").strip()
+            raise VideoEngineError(f"ffprobe could not read {path}: {detail}")
+        return duration
 
-        Unlike MoviePy, frame generation, transitions, audio mixing, and
-        watermark compositing stay inside FFmpeg. This is materially lighter
-        on a small Linux VM and leaves the Windows PowerPoint path untouched.
-        """
+    def _ffprobe_has_audio(self, path: str) -> bool:
+        if not shutil.which("ffprobe"):
+            return False
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=index",
+                "-of",
+                "csv=p=0",
+                path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        return probe.returncode == 0 and bool(probe.stdout.strip())
+
+    def _build_with_ffmpeg_transitions(self, cfg: dict) -> dict:
+        """Encode a smoothly transitioned mixed-media timeline with FFmpeg."""
         image_files = self._sort_image_files_like_powerpoint(
             list(cfg.get("image_files") or [])
         )
@@ -317,26 +367,72 @@ class VideoStudio:
         progress_callback: Optional[Callable[[dict], None]] = cfg.get("progress_callback")
         cancel_event = cfg.get("cancel_event")
 
-        timeline: List[tuple[str, float]] = []
+        voiceover_files: List[Optional[str]] = list(cfg.get("voiceover_files") or [])
+        voiceover_files += [None] * max(0, len(image_files) - len(voiceover_files))
+        voiceover_files = voiceover_files[:len(image_files)]
+
+        timeline: List[dict[str, Any]] = []
+        intro_video = cfg.get("intro_video_path")
+        if intro_video:
+            timeline.append({
+                "kind": "video",
+                "path": str(intro_video),
+                "duration": self._ffprobe_duration(str(intro_video)),
+                "native_audio": self._ffprobe_has_audio(str(intro_video)),
+            })
         intro_thumb = cfg.get("intro_thumbnail_path")
         if intro_thumb and Path(intro_thumb).is_file():
-            timeline.append(
-                (str(intro_thumb), float(cfg.get("intro_thumbnail_duration", 5.0)))
-            )
-        timeline.extend((str(path), slide_duration) for path in image_files)
+            timeline.append({
+                "kind": "image",
+                "path": str(intro_thumb),
+                "duration": float(cfg.get("intro_thumbnail_duration", 5.0)),
+            })
+        for path, voiceover in zip(image_files, voiceover_files):
+            voice_duration = self._ffprobe_duration(str(voiceover)) if voiceover else None
+            timeline.append({
+                "kind": "image",
+                "path": str(path),
+                # Match the legacy MoviePy behavior: a voiceover controls its
+                # slide length; otherwise use the configured still duration.
+                "duration": max(voice_duration or slide_duration, 0.1),
+                "voiceover": str(voiceover) if voiceover else None,
+            })
         outro_thumb = cfg.get("outro_thumbnail_path")
         if outro_thumb and Path(outro_thumb).is_file():
-            timeline.append(
-                (str(outro_thumb), float(cfg.get("outro_thumbnail_duration", 5.0)))
-            )
+            timeline.append({
+                "kind": "image",
+                "path": str(outro_thumb),
+                "duration": float(cfg.get("outro_thumbnail_duration", 5.0)),
+            })
+        outro_video = cfg.get("outro_video_path")
+        if outro_video:
+            timeline.append({
+                "kind": "video",
+                "path": str(outro_video),
+                "duration": self._ffprobe_duration(str(outro_video)),
+                "native_audio": self._ffprobe_has_audio(str(outro_video)),
+            })
 
         if len(timeline) < 2:
             return self._build_simple_with_ffmpeg({**cfg, "transition_type": "none"})
 
         width, height = int(resolution[0]), int(resolution[1])
-        total_duration = sum(duration for _path, duration in timeline)
-        if transition_type != "none":
-            total_duration -= transition_duration * (len(timeline) - 1)
+        boundary_durations = [
+            min(
+                transition_duration,
+                float(timeline[index - 1]["duration"]) / 2,
+                float(timeline[index]["duration"]) / 2,
+            ) if transition_type != "none" else 0.0
+            for index in range(1, len(timeline))
+        ]
+        starts = [0.0]
+        for index in range(1, len(timeline)):
+            starts.append(
+                starts[-1]
+                + float(timeline[index - 1]["duration"])
+                - boundary_durations[index - 1]
+            )
+        total_duration = starts[-1] + float(timeline[-1]["duration"])
 
         transition_map = {
             "fade": "fade",
@@ -347,24 +443,37 @@ class VideoStudio:
         transition_label = xfade_name or "cut"
 
         cmd: List[str] = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
-        for path, duration in timeline:
-            cmd.extend(["-loop", "1", "-framerate", str(fps), "-t", str(duration), "-i", path])
+        for item in timeline:
+            if item["kind"] == "image":
+                cmd.extend([
+                    "-loop", "1", "-framerate", str(fps),
+                    "-t", f"{float(item['duration']):.6f}", "-i", str(item["path"]),
+                ])
+            else:
+                cmd.extend(["-i", str(item["path"])])
+
+        voice_inputs: dict[int, int] = {}
+        for timeline_index, item in enumerate(timeline):
+            if item.get("voiceover"):
+                voice_inputs[timeline_index] = len(timeline) + len(voice_inputs)
+                cmd.extend(["-i", str(item["voiceover"])])
 
         audio_inputs: dict[str, int] = {}
         if cfg.get("narration_audio"):
-            audio_inputs["narration_audio"] = len(timeline)
+            audio_inputs["narration_audio"] = len(timeline) + len(voice_inputs)
             cmd.extend(["-i", str(cfg["narration_audio"])])
         if cfg.get("background_music"):
-            audio_inputs["background_music"] = len(timeline) + len(audio_inputs)
+            audio_inputs["background_music"] = len(timeline) + len(voice_inputs) + len(audio_inputs)
             cmd.extend(["-stream_loop", "-1", "-i", str(cfg["background_music"])])
 
         logo_index: int | None = None
         if cfg.get("logo_path"):
-            logo_index = len(timeline) + len(audio_inputs)
+            logo_index = len(timeline) + len(voice_inputs) + len(audio_inputs)
             cmd.extend(["-loop", "1", "-i", str(cfg["logo_path"])])
 
         filters: List[str] = []
-        for index, (_path, duration) in enumerate(timeline):
+        for index, item in enumerate(timeline):
+            duration = float(item["duration"])
             filters.append(
                 f"[{index}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
                 f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
@@ -380,16 +489,15 @@ class VideoStudio:
             )
             current_label = "vout"
         else:
-            accumulated_duration = timeline[0][1]
             for index in range(1, len(timeline)):
-                offset = max(0.0, accumulated_duration - transition_duration)
+                boundary_duration = boundary_durations[index - 1]
+                offset = starts[index]
                 next_label = f"x{index}"
                 filters.append(
                     f"[{current_label}][v{index}]xfade=transition={xfade_name}:"
-                    f"duration={transition_duration:.6f}:offset={offset:.6f}[{next_label}]"
+                    f"duration={boundary_duration:.6f}:offset={offset:.6f}[{next_label}]"
                 )
                 current_label = next_label
-                accumulated_duration += timeline[index][1] - transition_duration
 
         if logo_index is not None:
             filters.extend([
@@ -401,6 +509,28 @@ class VideoStudio:
             current_label = "vfinal"
 
         audio_labels: List[str] = []
+        for timeline_index, item in enumerate(timeline):
+            if item.get("native_audio"):
+                label = f"clipaudio{timeline_index}"
+                delay_ms = max(0, round(starts[timeline_index] * 1000))
+                filters.append(
+                    f"[{timeline_index}:a]aresample=48000,"
+                    "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                    f"atrim=duration={float(item['duration']):.6f},asetpts=PTS-STARTPTS,"
+                    f"adelay={delay_ms}:all=1[{label}]"
+                )
+                audio_labels.append(label)
+            if timeline_index in voice_inputs:
+                label = f"voice{timeline_index}"
+                delay_ms = max(0, round(starts[timeline_index] * 1000))
+                input_index = voice_inputs[timeline_index]
+                filters.append(
+                    f"[{input_index}:a]aresample=48000,"
+                    "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                    f"atrim=duration={float(item['duration']):.6f},asetpts=PTS-STARTPTS,"
+                    f"adelay={delay_ms}:all=1[{label}]"
+                )
+                audio_labels.append(label)
         if "narration_audio" in audio_inputs:
             index = audio_inputs["narration_audio"]
             filters.append(
@@ -416,15 +546,20 @@ class VideoStudio:
             )
             audio_labels.append("music")
 
-        if len(audio_labels) == 2:
+        if len(audio_labels) > 1:
+            mix_inputs = "".join(f"[{label}]" for label in audio_labels)
             filters.append(
-                f"[{audio_labels[0]}][{audio_labels[1]}]amix=inputs=2:"
-                f"duration=longest:dropout_transition=0,atrim=duration={total_duration:.6f}[aout]"
+                f"{mix_inputs}amix=inputs={len(audio_labels)}:"
+                "duration=longest:dropout_transition=0:normalize=0,"
+                "alimiter=limit=0.95,apad,"
+                f"atrim=duration={total_duration:.6f}[aout]"
             )
         elif len(audio_labels) == 1:
-            filters.append(f"[{audio_labels[0]}]anull[aout]")
+            filters.append(
+                f"[{audio_labels[0]}]apad,atrim=duration={total_duration:.6f}[aout]"
+            )
         else:
-            silence_input = len(timeline) + len(audio_inputs) + (1 if logo_index is not None else 0)
+            silence_input = len(timeline) + len(voice_inputs) + len(audio_inputs) + (1 if logo_index is not None else 0)
             cmd.extend([
                 "-f", "lavfi",
                 "-t", f"{total_duration:.6f}",
@@ -505,6 +640,11 @@ class VideoStudio:
         }
 
     def _build_simple_with_ffmpeg(self, cfg: dict) -> dict:
+        """Build a cut-only timeline with sparse VFR frames for still holds.
+
+        Audio-only additions keep the already encoded video stream untouched.
+        A watermark is the only media layer that requires a final video pass.
+        """
         image_files: List[str] = self._sort_image_files_like_powerpoint(
             list(cfg.get("image_files") or [])
         )
@@ -526,6 +666,9 @@ class VideoStudio:
         )
         progress_callback: Optional[Callable[[dict], None]] = cfg.get("progress_callback")
         cancel_event = cfg.get("cancel_event")
+        voiceover_files: List[Optional[str]] = list(cfg.get("voiceover_files") or [])
+        voiceover_files += [None] * max(0, len(image_files) - len(voiceover_files))
+        voiceover_files = voiceover_files[:len(image_files)]
 
         def _emit(progress: int, message: str) -> None:
             if progress_callback:
@@ -544,22 +687,37 @@ class VideoStudio:
             return parsed if parsed > 0 else default
 
         timeline: List[tuple[str, float]] = []
+        voice_starts: List[tuple[str, float, float]] = []
+        slide_cursor = 0.0
         intro_thumb = cfg.get("intro_thumbnail_path")
         if intro_thumb and Path(intro_thumb).is_file():
+            intro_thumb_duration = _duration(cfg.get("intro_thumbnail_duration"), 5.0)
             timeline.append(
-                (str(intro_thumb), _duration(cfg.get("intro_thumbnail_duration"), 5.0))
+                (str(intro_thumb), intro_thumb_duration)
             )
-        timeline.extend((str(path), slide_duration) for path in image_files)
+            slide_cursor += intro_thumb_duration
+        for path, voiceover in zip(image_files, voiceover_files):
+            duration = self._ffprobe_duration(str(voiceover)) if voiceover else slide_duration
+            duration = max(duration, 0.1)
+            timeline.append((str(path), duration))
+            if voiceover:
+                voice_starts.append((str(voiceover), slide_cursor, duration))
+            slide_cursor += duration
         outro_thumb = cfg.get("outro_thumbnail_path")
         if outro_thumb and Path(outro_thumb).is_file():
+            outro_thumb_duration = _duration(cfg.get("outro_thumbnail_duration"), 5.0)
             timeline.append(
-                (str(outro_thumb), _duration(cfg.get("outro_thumbnail_duration"), 5.0))
+                (str(outro_thumb), outro_thumb_duration)
             )
+            slide_cursor += outro_thumb_duration
 
         width, height = int(resolution[0]), int(resolution[1])
         # Keep still-slide exports variable-frame-rate: one encoded frame can
         # be held for the slide duration instead of duplicating it to match fps.
-        vf = f"scale={width}:{height},setsar=1,format=yuv420p"
+        vf = (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p"
+        )
 
         def _concat_path(path: str) -> str:
             escaped = Path(path).resolve().as_posix().replace("'", "'\\''")
@@ -590,29 +748,6 @@ class VideoStudio:
                 detail = (stderr or stdout or "ffmpeg failed").strip()
                 raise VideoEngineError(f"ffmpeg export failed: {detail}")
 
-        def _has_audio(path: str) -> bool:
-            if not shutil.which("ffprobe"):
-                return True
-            probe = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-select_streams",
-                    "a:0",
-                    "-show_entries",
-                    "stream=index",
-                    "-of",
-                    "csv=p=0",
-                    path,
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
-            return bool(probe.stdout.strip())
-
         def _video_segment(input_path: str, output_path: Path) -> None:
             cmd = [
                 "ffmpeg",
@@ -624,7 +759,7 @@ class VideoStudio:
                 input_path,
             ]
             audio_index = "0:a:0"
-            if not _has_audio(input_path):
+            if not self._ffprobe_has_audio(input_path):
                 cmd.extend(
                     [
                         "-f",
@@ -641,7 +776,9 @@ class VideoStudio:
                     "-map",
                     audio_index,
                     "-vf",
-                    f"scale={width}:{height},setsar=1,fps={fps},format=yuv420p",
+                    f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                    f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
+                    f"fps={fps},format=yuv420p",
                     "-c:v",
                     encode_codec,
                     "-preset",
@@ -656,24 +793,31 @@ class VideoStudio:
                     "48000",
                     "-ac",
                     "2",
-                    "-shortest",
-                    str(output_path),
                 ]
             )
+            if audio_index == "0:a:0":
+                cmd.extend(["-af", "apad"])
+            cmd.extend(["-shortest", str(output_path)])
             _run_ffmpeg(cmd)
 
         _emit(
             90,
-            f"Encoding MP4 with ffmpeg ({encode_codec} {encode_preset}, crf={encode_crf}, threads={thread_count})...",
+            f"Encoding static VFR MP4 with ffmpeg ({encode_codec} {encode_preset}, crf={encode_crf}, threads={thread_count})...",
         )
         output_path = Path(output_video_path)
         slide_concat_path = output_path.with_suffix(".slides.ffconcat")
         segment_concat_path = output_path.with_suffix(".segments.ffconcat")
         slide_segment_path = output_path.with_suffix(".slides.mp4")
+        combined_path = output_path.with_suffix(".combined.mp4")
         segment_paths: List[Path] = []
+        intro_video_duration = 0.0
+        outro_video_duration = 0.0
+        native_clip_audio = False
         try:
             intro_video = cfg.get("intro_video_path")
             if intro_video:
+                intro_video_duration = self._ffprobe_duration(str(intro_video))
+                native_clip_audio = native_clip_audio or self._ffprobe_has_audio(str(intro_video))
                 intro_segment_path = output_path.with_suffix(".intro.mp4")
                 _video_segment(str(intro_video), intro_segment_path)
                 segment_paths.append(intro_segment_path)
@@ -737,6 +881,8 @@ class VideoStudio:
 
             outro_video = cfg.get("outro_video_path")
             if outro_video:
+                outro_video_duration = self._ffprobe_duration(str(outro_video))
+                native_clip_audio = native_clip_audio or self._ffprobe_has_audio(str(outro_video))
                 outro_segment_path = output_path.with_suffix(".outro.mp4")
                 _video_segment(str(outro_video), outro_segment_path)
                 segment_paths.append(outro_segment_path)
@@ -748,6 +894,13 @@ class VideoStudio:
                 encoding="utf-8",
             )
 
+            needs_media_pass = bool(
+                voice_starts
+                or cfg.get("narration_audio")
+                or cfg.get("background_music")
+                or cfg.get("logo_path")
+            )
+            concat_output_path = combined_path if needs_media_pass else output_path
             _run_ffmpeg(
                 [
                 "ffmpeg",
@@ -765,13 +918,123 @@ class VideoStudio:
                 "copy",
                 "-movflags",
                 "+faststart",
-                output_video_path,
+                str(concat_output_path),
                 ]
             )
+
+            if needs_media_pass:
+                total_duration = intro_video_duration + total_slide_duration + outro_video_duration
+                media_cmd: List[str] = [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", str(combined_path),
+                ]
+                voice_input_indexes: List[tuple[int, float, float]] = []
+                for voice_path, start, duration in voice_starts:
+                    input_index = 1 + len(voice_input_indexes)
+                    voice_input_indexes.append(
+                        (input_index, intro_video_duration + start, duration)
+                    )
+                    media_cmd.extend(["-i", voice_path])
+
+                narration_index: int | None = None
+                if cfg.get("narration_audio"):
+                    narration_index = 1 + len(voice_input_indexes)
+                    media_cmd.extend(["-i", str(cfg["narration_audio"])])
+
+                music_index: int | None = None
+                if cfg.get("background_music"):
+                    music_index = 1 + len(voice_input_indexes) + (1 if narration_index is not None else 0)
+                    media_cmd.extend(["-stream_loop", "-1", "-i", str(cfg["background_music"])])
+
+                logo_index: int | None = None
+                if cfg.get("logo_path"):
+                    logo_index = (
+                        1 + len(voice_input_indexes)
+                        + (1 if narration_index is not None else 0)
+                        + (1 if music_index is not None else 0)
+                    )
+                    media_cmd.extend(["-loop", "1", "-i", str(cfg["logo_path"])])
+
+                filters: List[str] = []
+                audio_labels: List[str] = []
+                if native_clip_audio:
+                    filters.append(
+                        f"[0:a]atrim=duration={total_duration:.6f},asetpts=PTS-STARTPTS[clipaudio]"
+                    )
+                    audio_labels.append("clipaudio")
+                for number, (input_index, start, duration) in enumerate(voice_input_indexes):
+                    label = f"voice{number}"
+                    delay_ms = max(0, round(start * 1000))
+                    filters.append(
+                        f"[{input_index}:a]aresample=48000,"
+                        "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                        f"atrim=duration={duration:.6f},asetpts=PTS-STARTPTS,"
+                        f"adelay={delay_ms}:all=1[{label}]"
+                    )
+                    audio_labels.append(label)
+                if narration_index is not None:
+                    filters.append(
+                        f"[{narration_index}:a]aresample=48000,apad,"
+                        f"atrim=duration={total_duration:.6f},asetpts=PTS-STARTPTS[narration]"
+                    )
+                    audio_labels.append("narration")
+                if music_index is not None:
+                    filters.append(
+                        f"[{music_index}:a]aresample=48000,volume={_BG_MUSIC_VOLUME},"
+                        f"atrim=duration={total_duration:.6f},asetpts=PTS-STARTPTS[music]"
+                    )
+                    audio_labels.append("music")
+
+                if len(audio_labels) > 1:
+                    mix_inputs = "".join(f"[{label}]" for label in audio_labels)
+                    filters.append(
+                        f"{mix_inputs}amix=inputs={len(audio_labels)}:duration=longest:"
+                        "dropout_transition=0:normalize=0,"
+                        "alimiter=limit=0.95,apad,"
+                        f"atrim=duration={total_duration:.6f}[aout]"
+                    )
+                elif len(audio_labels) == 1:
+                    filters.append(
+                        f"[{audio_labels[0]}]apad,"
+                        f"atrim=duration={total_duration:.6f}[aout]"
+                    )
+
+                video_map = "0:v:0"
+                if logo_index is not None:
+                    filters.extend([
+                        f"[{logo_index}:v]format=rgba,scale=iw*0.12:-1,"
+                        f"colorchannelmixer=aa={_WATERMARK_OPACITY}[logo]",
+                        "[0:v][logo]overlay=x=W-w-32:y=H-h-32:"
+                        "eof_action=repeat:format=auto[vout]",
+                    ])
+                    video_map = "[vout]"
+
+                if filters:
+                    media_cmd.extend(["-filter_complex", ";".join(filters)])
+                media_cmd.extend(["-map", video_map])
+                if audio_labels:
+                    media_cmd.extend(["-map", "[aout]"])
+                else:
+                    media_cmd.extend(["-map", "0:a:0"])
+                if logo_index is not None:
+                    media_cmd.extend([
+                        "-c:v", encode_codec, "-preset", encode_preset,
+                        "-crf", str(encode_crf), "-threads", str(thread_count),
+                        "-pix_fmt", "yuv420p", "-fps_mode", "vfr",
+                    ])
+                else:
+                    media_cmd.extend(["-c:v", "copy"])
+                media_cmd.extend([
+                    "-c:a", "aac", "-ar", "48000", "-ac", "2",
+                    "-t", f"{total_duration:.6f}", "-movflags", "+faststart",
+                    output_video_path,
+                ])
+                _run_ffmpeg(media_cmd)
         finally:
             for path in [
                 slide_concat_path,
                 segment_concat_path,
+                combined_path,
                 *segment_paths,
             ]:
                 try:

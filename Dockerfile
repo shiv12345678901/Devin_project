@@ -10,6 +10,12 @@ FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
 
 WORKDIR /app
 
+# ffmpeg-python and MoviePy do not install the system FFmpeg/ffprobe binaries.
+# The Linux video engine needs both for probing voiceovers/clips and encoding.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONUNBUFFERED=1 \
     PORT=7860 \
     HOST=0.0.0.0 \
