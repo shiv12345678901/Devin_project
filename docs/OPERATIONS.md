@@ -56,3 +56,9 @@ FFmpeg progress is based on encoded media timestamps. Events include engine,
 encoded seconds, total seconds, speed, and ETA, so a 4K encode is not presented
 as an arbitrary frame-count task.
 
+The browser Settings page stores `Auto`, `FFmpeg`, or `MoviePy` as the video
+engine preference. Auto uses FFmpeg first and MoviePy only as a compatibility
+fallback. Explicit selections are strict and fail with an actionable message
+when unavailable. Windows PowerPoint export remains unchanged. Each run stores
+the requested engine in settings and the actual engine in metrics.
+

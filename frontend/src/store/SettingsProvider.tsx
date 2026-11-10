@@ -14,7 +14,11 @@ function loadInitial(): AppSettings {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY)
     if (!raw) return DEFAULT_SETTINGS
     const parsed = JSON.parse(raw) as Partial<AppSettings>
-    return { ...DEFAULT_SETTINGS, ...parsed }
+    const merged = { ...DEFAULT_SETTINGS, ...parsed }
+    if (!['auto', 'ffmpeg', 'moviepy'].includes(String(merged.videoEngine))) {
+      merged.videoEngine = 'auto'
+    }
+    return merged
   } catch {
     return DEFAULT_SETTINGS
   }

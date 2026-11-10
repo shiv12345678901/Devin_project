@@ -31,6 +31,7 @@ export interface RunSettings {
   resolution?: string
   fps?: number
   video_quality?: number
+  video_engine?: 'auto' | 'ffmpeg' | 'moviepy'
   slide_duration_sec?: number
   intro_thumbnail_enabled?: boolean
   outro_thumbnail_enabled?: boolean

@@ -65,6 +65,7 @@ export interface GenerateSettings {
   model_choice?: string
   system_prompt?: string
   concurrent_pipeline_runs?: boolean
+  video_engine?: 'auto' | 'ffmpeg' | 'moviepy'
   // YouTube source mode
   youtube_url?: string
   youtube_timestamps?: number[]

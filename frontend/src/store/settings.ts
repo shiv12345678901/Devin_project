@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
+export type VideoEnginePreference = 'auto' | 'ffmpeg' | 'moviepy'
 
 export interface BrandSwatch {
   id: string
@@ -157,6 +158,8 @@ export interface AppSettings {
   backendUrl: string
   concurrentPipelineRuns: boolean
   autoThumbnailBuilder: boolean
+  /** Linux/macOS MP4 renderer preference. Windows continues to use PowerPoint. */
+  videoEngine: VideoEnginePreference
   /**
    * Per-user override of the wizard's Class options. Empty array uses
    * the curated default list (Nepali curriculum classes 1–12).
@@ -205,6 +208,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   backendUrl: '',
   concurrentPipelineRuns: false,
   autoThumbnailBuilder: false,
+  videoEngine: 'auto',
   customClassOptions: [],
   customSubjectOptions: [],
   sidebarCollapsed: false,

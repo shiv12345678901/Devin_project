@@ -188,12 +188,37 @@ class VideoStudio:
         Returns:
             ``{'presentation_path': str | None, 'video_path': str, 'warning': str | None}``
         """
+        requested_engine = str(config_data.get("video_engine") or "auto").strip().lower()
+        if requested_engine not in {"auto", "ffmpeg", "moviepy"}:
+            raise VideoEngineError(
+                f"Unknown video engine '{requested_engine}'. Choose auto, ffmpeg, or moviepy."
+            )
+
+        # Windows behavior intentionally remains unchanged: PowerPoint COM is
+        # the established export path and takes precedence over this Linux/macOS
+        # compatibility preference.
         if self.use_powerpoint:
             return self._build_with_powerpoint(config_data)
+
+        if requested_engine == "moviepy":
+            return self._build_with_moviepy(config_data)
+
         if self._can_build_simple_with_ffmpeg(config_data):
             return self._build_simple_with_ffmpeg(config_data)
         if self._can_build_ffmpeg_transitions(config_data):
             return self._build_with_ffmpeg_transitions(config_data)
+
+        if requested_engine == "ffmpeg":
+            if not shutil.which("ffmpeg"):
+                raise MovieEngineUnavailableError(
+                    "FFmpeg was explicitly selected, but the ffmpeg executable is not available. "
+                    "Install FFmpeg (and ffprobe for audio/video inputs), or choose Auto."
+                )
+            raise MovieEngineUnavailableError(
+                "FFmpeg was explicitly selected, but this export cannot use the native FFmpeg "
+                "pipeline. Check that every slide and optional media path exists and that "
+                "ffprobe is installed when using voiceovers or intro/outro clips."
+            )
         return self._build_with_moviepy(config_data)
 
     # ──────────────────────────────────────────────────────────────────
@@ -1144,7 +1169,7 @@ class VideoStudio:
             if progress_callback:
                 try:
                     progress_callback(
-                        {"stage": stage, "progress": progress, "message": message}
+                        {"stage": stage, "engine": "moviepy", "progress": progress, "message": message}
                     )
                 except Exception:  # never let a buggy callback crash the build
                     logger.exception("progress_callback raised")
@@ -1366,6 +1391,7 @@ class _ProgressBarLogger(_BaseLogger):  # type: ignore[misc]
             self._cb(
                 {
                     "stage": "moviepy",
+                    "engine": "moviepy",
                     "progress": pct,
                     "message": f"Encoding... {value}/{total}",
                 }

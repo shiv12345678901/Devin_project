@@ -206,6 +206,8 @@ function processSearchText(run: Run): string {
     run.settings?.title,
     run.settings?.model_choice,
     run.settings?.output_format,
+    run.settings?.video_engine,
+    run.metrics?.video_engine,
   ]
     .filter(Boolean)
     .join(' ')
@@ -877,6 +879,12 @@ function RunRow({
               {run.settings?.output_format && (
                 <KV label="Output format" value={String(run.settings.output_format)} />
               )}
+              {(run.metrics?.video_engine || run.settings?.video_engine) && (
+                <KV
+                  label="Video engine"
+                  value={String(run.metrics?.video_engine || run.settings?.video_engine)}
+                />
+              )}
               {(run.settings?.class_name || run.settings?.subject || run.settings?.title) && (
                 <KV
                   label="Project"
@@ -1299,6 +1307,9 @@ function RunDetailDrawer({
               <KV label="Started" value={new Date(run.startedAt).toLocaleString()} />
               <KV label="Ended" value={run.endedAt ? new Date(run.endedAt).toLocaleString() : 'Still running'} />
               <KV label="Duration" value={formatRuntime(runtime)} />
+              {(run.metrics?.video_engine || run.settings?.video_engine) && (
+                <KV label="Video engine" value={String(run.metrics?.video_engine || run.settings?.video_engine)} />
+              )}
               {run.progress != null && <KV label="Progress" value={`${Math.round(run.progress)}%`} />}
               {run.operationId && <KV label="Operation ID" value={<code className="text-[10px]">{run.operationId}</code>} />}
             </div>

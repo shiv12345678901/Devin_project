@@ -4,6 +4,7 @@ import {
   Check,
   Code2,
   FileText,
+  Film,
   GitBranch,
   Image as ImageIcon,
   Monitor,
@@ -25,6 +26,7 @@ import {
   DEFAULT_SUBJECT_OPTIONS,
   useSettings,
   type ThemeMode,
+  type VideoEnginePreference,
 } from '../store/settings'
 import { useToast } from '../store/toast'
 import { useConfirm } from '../components/ConfirmDialog'
@@ -142,6 +144,32 @@ export default function Settings() {
     const timer = window.setTimeout(() => void runSystemCheck(), 0)
     return () => window.clearTimeout(timer)
   }, [runSystemCheck])
+
+  const detectedVideoEngines = systemCheck?.checks.video_engine?.engines ?? []
+  const powerPointDetected = detectedVideoEngines.includes('powerpoint')
+  const videoEngineOptions: Array<{
+    value: VideoEnginePreference
+    label: string
+    description: string
+    badge?: string
+  }> = [
+    {
+      value: 'auto',
+      label: 'Auto',
+      description: 'Automatically select the most suitable engine.',
+      badge: 'Recommended',
+    },
+    {
+      value: 'ffmpeg',
+      label: 'FFmpeg — Fast',
+      description: 'Use the optimized native FFmpeg pipeline.',
+    },
+    {
+      value: 'moviepy',
+      label: 'MoviePy — Compatibility',
+      description: 'Use Python-based video composition and encoding.',
+    },
+  ]
 
   return (
     <div className="container-form space-y-8">
@@ -461,6 +489,72 @@ export default function Settings() {
             spellCheck={false}
           />
         </div>
+        </div>
+      </Section>
+
+      <Section title="Video Rendering Engine" icon={<Film size={16} />}>
+        <div className="space-y-4">
+          <div>
+            <p className="text-sm text-slate-700 dark:text-slate-200">
+              Choose how TextBro generates MP4 videos.
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              Explicit choices are strict: TextBro will show an error instead of silently switching engines.
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3" role="radiogroup" aria-label="Video rendering engine">
+            {videoEngineOptions.map((option) => {
+              const selected = settings.videoEngine === option.value
+              const unavailable =
+                systemCheck != null &&
+                !powerPointDetected &&
+                option.value !== 'auto' &&
+                !detectedVideoEngines.includes(option.value)
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => update({ videoEngine: option.value })}
+                  className={
+                    'rounded-lg border p-4 text-left transition-colors ' +
+                    (selected
+                      ? 'border-brand-500 bg-brand-50/70 ring-2 ring-brand-500/20 dark:bg-brand-500/10'
+                      : 'border-slate-200 bg-white hover:border-slate-300 dark:border-white/10 dark:bg-white/[0.02] dark:hover:border-white/20')
+                  }
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">{option.label}</span>
+                    {option.badge && (
+                      <span className="rounded-full bg-brand-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-700 dark:bg-brand-500/15 dark:text-brand-200">
+                        {option.badge}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                    {option.description}
+                  </p>
+                  {unavailable && (
+                    <p className="mt-2 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                      Not detected on the current backend
+                    </p>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-white/10 dark:bg-white/[0.03]">
+            <span className="text-slate-600 dark:text-slate-300">Selected engine</span>
+            <strong className="text-slate-900 dark:text-slate-50">
+              {settings.videoEngine === 'auto' ? 'Auto' : settings.videoEngine === 'ffmpeg' ? 'FFmpeg' : 'MoviePy'}
+            </strong>
+          </div>
+          {powerPointDetected && (
+            <p className="text-xs text-muted">
+              Windows PowerPoint export is detected and remains unchanged; this preference applies to the cross-platform MP4 path.
+            </p>
+          )}
         </div>
       </Section>
 

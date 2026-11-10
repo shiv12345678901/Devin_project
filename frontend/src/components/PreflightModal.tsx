@@ -8,6 +8,8 @@ import { CheckCircle2, Loader2, Server, Cpu, Sparkles, Presentation, Film, XCirc
 import { api } from '../api/client'
 import type { OutputFormat, PreflightResponse } from '../api/types'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useSettings } from '../store/settings'
+import type { VideoEnginePreference } from '../store/settings'
 
 type CheckStatus = 'idle' | 'running' | 'pass' | 'fail' | 'warn'
 
@@ -49,6 +51,7 @@ const OUTPUT_LABELS: Record<OutputFormat, string> = {
 function fixSuggestion(
   key: keyof PreflightResponse['checks'],
   outputFormat: OutputFormat,
+  selectedEngine: VideoEnginePreference,
 ): string {
   if (key === 'backend') return 'Restart the Flask backend, then use Retry from Settings or run preflight again.'
   if (key === 'ai_config') return 'Open Settings, confirm the backend URL, then set API_KEY in the backend .env or service environment.'
@@ -57,12 +60,18 @@ function fixSuggestion(
       ? 'Install Microsoft PowerPoint on this Windows host, or switch the output to screenshots/HTML.'
       : 'PowerPoint is optional for this output, but PPTX export will stay unavailable until it is installed.'
   }
-  if (key === 'video_engine') return 'Install FFmpeg + ffprobe, or use PowerPoint export on Windows, then retry.'
+  if (key === 'video_engine') {
+    if (selectedEngine === 'ffmpeg') return 'FFmpeg is selected. Install FFmpeg + ffprobe, or choose Auto or MoviePy in Settings, then retry.'
+    if (selectedEngine === 'moviepy') return 'MoviePy is selected. Install the backend MoviePy dependencies, or choose Auto or FFmpeg in Settings, then retry.'
+    return 'Install FFmpeg + ffprobe or MoviePy, or use PowerPoint export on Windows, then retry.'
+  }
   if (key === 'platform') return 'This app works best on Windows for PowerPoint/PPTX features; use screenshots or HTML on unsupported hosts.'
   return 'Fix the failed dependency, then run preflight again.'
 }
 
 export default function PreflightModal({ outputFormat, onCancel, onProceed }: PreflightModalProps) {
+  const { settings } = useSettings()
+  const selectedEngine = settings.videoEngine
   const [data, setData] = useState<PreflightResponse | null>(null)
   const [loadingKey, setLoadingKey] = useState<keyof PreflightResponse['checks'] | null>('platform')
   const [error, setError] = useState<string | null>(null)
@@ -109,7 +118,10 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
   const needsPpt = outputFormat === 'pptx'
   const needsVideo = outputFormat === 'video'
   const pptOk = data?.checks.powerpoint.ok ?? false
-  const videoEngineOk = data?.checks.video_engine?.ok ?? pptOk
+  const availableEngines = data?.checks.video_engine?.engines ?? []
+  const videoEngineOk = pptOk || (selectedEngine === 'auto'
+    ? data?.checks.video_engine?.ok === true
+    : availableEngines.includes(selectedEngine))
   const aiOk = data?.checks.ai_config.ok ?? false
   const backendOk = !!data
   const blocked = !data
@@ -126,6 +138,7 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
     }
     const c = data.checks[key]
     if (!c) return 'idle'
+    if (key === 'video_engine' && needsVideo && !videoEngineOk) return 'fail'
     if (c.ok) return 'pass'
     // Soft-fail: PowerPoint only matters for PPTX export; video_engine
     // only matters for MP4. Anything else is always hard-required.
@@ -158,6 +171,9 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
           Verifying the runtime can actually produce{' '}
           <span className="font-medium">{OUTPUT_LABELS[outputFormat]}</span>.
+          {needsVideo && (
+            <> Selected engine: <span className="font-medium capitalize">{selectedEngine}</span>.</>
+          )}
         </p>
 
         <ul className="mt-5 space-y-3">
@@ -185,7 +201,7 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
                   )}
                   {data && s === 'fail' && (
                     <p className="mt-1 rounded-md bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:bg-rose-500/10 dark:text-rose-200">
-                      Fix: {fixSuggestion(row.key, outputFormat)}
+                      Fix: {fixSuggestion(row.key, outputFormat, selectedEngine)}
                     </p>
                   )}
                 </div>
@@ -209,6 +225,12 @@ export default function PreflightModal({ outputFormat, onCancel, onProceed }: Pr
                 Output is <strong>{OUTPUT_LABELS[outputFormat]}</strong> but PowerPoint isn't
                 available. Go back to step 1 and pick <em>HTML file</em> or{' '}
                 <em>screenshots</em>, or install PowerPoint on a Windows host.
+              </p>
+            )}
+            {needsVideo && !videoEngineOk && (
+              <p className="mt-1">
+                The selected <strong className="capitalize">{selectedEngine}</strong> renderer is
+                unavailable. Open Settings to select another engine or install its dependencies.
               </p>
             )}
           </div>

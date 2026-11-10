@@ -45,8 +45,12 @@ interface ScreenshotEntry {
 }
 
 export default function ScreenshotsToVideo() {
+  const { settings: appSettings } = useSettings()
   const [entries, setEntries] = useState<ScreenshotEntry[]>([])
-  const [settings, setSettings] = useState<GenerateSettings>(DEFAULT_SETTINGS)
+  const [settings, setSettings] = useState<GenerateSettings>(() => ({
+    ...DEFAULT_SETTINGS,
+    video_engine: appSettings.videoEngine,
+  }))
   const [dragActive, setDragActive] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [reorderDragKey, setReorderDragKey] = useState<string | null>(null)
@@ -56,7 +60,6 @@ export default function ScreenshotsToVideo() {
   const entriesRef = useRef<ScreenshotEntry[]>([])
   const toast = useToast()
   const runs = useRuns()
-  const { settings: appSettings } = useSettings()
   const nav = useNavigate()
   const classOptions = appSettings.customClassOptions.length > 0
     ? appSettings.customClassOptions
@@ -196,8 +199,12 @@ export default function ScreenshotsToVideo() {
     setShowPreflight(false)
     setSubmitting(true)
     try {
+      const runSettings: GenerateSettings = {
+        ...settings,
+        video_engine: appSettings.videoEngine,
+      }
       const files = entries.map((e) => e.file)
-      const response = await api.startScreenshotsToVideoRun(files, settings)
+      const response = await api.startScreenshotsToVideoRun(files, runSettings)
       // Mirror the text-to-video flow: drop a "running" row into the
       // local Runs store so the user sees the new process show up
       // immediately on the Processes tab without waiting for the next
@@ -214,6 +221,7 @@ export default function ScreenshotsToVideo() {
           resolution: settings.resolution,
           fps: settings.fps,
           video_quality: settings.video_quality,
+          video_engine: appSettings.videoEngine,
         },
         operationId: response.operation_id,
         inputFiles: entries.map((e) => e.file.name),

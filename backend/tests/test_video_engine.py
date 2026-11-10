@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from backend.src import video_engine
 
 
@@ -109,6 +111,7 @@ def test_static_engine_keeps_vfr_and_copies_video_for_audio_only(tmp_path, monke
     )
 
     assert result["engine"] == "ffmpeg"
+    assert all("xfade=" not in " ".join(command) for command in commands)
     slide_command = next(command for command in commands if ".slides.ffconcat" in " ".join(command))
     assert "-fps_mode" in slide_command
     assert slide_command[slide_command.index("-fps_mode") + 1] == "vfr"
@@ -141,4 +144,47 @@ def test_single_slide_ignores_transition_and_uses_static_ffmpeg(tmp_path, monkey
 
     assert result["engine"] == "ffmpeg"
     assert all("xfade=" not in " ".join(command) for command in commands)
+
+
+def test_explicit_moviepy_bypasses_available_ffmpeg(monkeypatch):
+    studio = video_engine.VideoStudio(use_powerpoint=False)
+    monkeypatch.setattr(studio, "_can_build_simple_with_ffmpeg", lambda _cfg: True)
+    monkeypatch.setattr(studio, "_can_build_ffmpeg_transitions", lambda _cfg: True)
+    monkeypatch.setattr(
+        studio,
+        "_build_with_moviepy",
+        lambda _cfg: {"engine": "moviepy", "video_path": "moviepy.mp4"},
+    )
+
+    result = studio.build_video({"video_engine": "moviepy"})
+
+    assert result["engine"] == "moviepy"
+
+
+def test_explicit_ffmpeg_never_falls_back_to_moviepy(monkeypatch):
+    studio = video_engine.VideoStudio(use_powerpoint=False)
+    monkeypatch.setattr(studio, "_can_build_simple_with_ffmpeg", lambda _cfg: False)
+    monkeypatch.setattr(studio, "_can_build_ffmpeg_transitions", lambda _cfg: False)
+    monkeypatch.setattr(video_engine.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        studio,
+        "_build_with_moviepy",
+        lambda _cfg: pytest.fail("explicit FFmpeg must not call MoviePy"),
+    )
+
+    with pytest.raises(video_engine.MovieEngineUnavailableError, match="explicitly selected"):
+        studio.build_video({"video_engine": "ffmpeg"})
+
+
+def test_windows_powerpoint_path_ignores_cross_platform_preference(monkeypatch):
+    studio = video_engine.VideoStudio(use_powerpoint=True)
+    monkeypatch.setattr(
+        studio,
+        "_build_with_powerpoint",
+        lambda _cfg: {"engine": "powerpoint", "video_path": "powerpoint.mp4"},
+    )
+
+    result = studio.build_video({"video_engine": "moviepy"})
+
+    assert result["engine"] == "powerpoint"
 

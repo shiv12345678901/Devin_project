@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { useSettings } from '../store/settings'
 
 export type BackendPlatform = 'windows' | 'non-windows' | 'unknown'
 
 export interface BackendCapabilities {
   platform: BackendPlatform
   /**
-   * True when the backend reports a usable video engine (PowerPoint COM
-   * on Windows *or* MoviePy on Linux/macOS). Controls the MP4 output
-   * option in the wizard.
+   * True when the backend reports the selected video engine, or any usable
+   * engine in Auto mode. PowerPoint remains the Windows MP4 path.
    */
   videoEngineReady: boolean
   /**
@@ -23,15 +23,16 @@ export interface BackendCapabilities {
  * Peek at the backend's platform + video engine capabilities via the
  * (cached) preflight response.
  *
- * Used to gate MP4 / PowerPoint output. The MP4 gate now opens when
- * *either* engine is available so a Linux backend with MoviePy can
- * export video even though PowerPoint COM is Windows-only.
+ * Used to gate MP4 / PowerPoint output. Explicit engine preferences only
+ * open the MP4 gate when that engine is actually available.
  */
 export function useBackendPlatform(): BackendPlatform {
   return useBackendCapabilities().platform
 }
 
 export function useBackendCapabilities(): BackendCapabilities {
+  const { settings } = useSettings()
+  const selectedEngine = settings.videoEngine
   const [caps, setCaps] = useState<BackendCapabilities>({
     platform: 'unknown',
     videoEngineReady: false,
@@ -51,8 +52,10 @@ export function useBackendCapabilities(): BackendCapabilities {
             ? 'non-windows'
             : 'unknown'
         const pptxReady = r.checks.powerpoint?.ok === true
-        const videoEngineReady =
-          r.checks.video_engine?.ok === true || pptxReady
+        const availableEngines = r.checks.video_engine?.engines ?? []
+        const videoEngineReady = pptxReady || (selectedEngine === 'auto'
+          ? r.checks.video_engine?.ok === true
+          : availableEngines.includes(selectedEngine))
         setCaps({ platform, videoEngineReady, pptxReady })
       })
       .catch(() => {
@@ -67,7 +70,7 @@ export function useBackendCapabilities(): BackendCapabilities {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [selectedEngine])
 
   return caps
 }

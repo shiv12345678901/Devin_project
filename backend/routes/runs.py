@@ -223,6 +223,12 @@ def _thumbnail_path(filename: str | None) -> str | None:
     return str(candidate) if candidate.is_file() else None
 
 
+def _source_value(source, key: str, default=None):
+    if request.form and key in request.form:
+        return request.form.get(key)
+    return source.get(key, default) if hasattr(source, "get") else default
+
+
 def _media_settings(source) -> dict:
     """Normalize optional Linux FFmpeg media layers from JSON or form data."""
     result = {}
@@ -233,11 +239,11 @@ def _media_settings(source) -> dict:
         "background_music",
         "logo_path",
     ):
-        value = str(source.get(key) or "").strip()
+        value = str(_source_value(source, key) or "").strip()
         if value:
             result[key] = value
 
-    raw_voiceovers = source.get("voiceover_files")
+    raw_voiceovers = _source_value(source, "voiceover_files")
     if isinstance(raw_voiceovers, str):
         try:
             parsed = json.loads(raw_voiceovers)
@@ -247,6 +253,13 @@ def _media_settings(source) -> dict:
     if isinstance(raw_voiceovers, list):
         result["voiceover_files"] = [str(item).strip() if item else None for item in raw_voiceovers]
     return result
+
+
+def _video_engine_choice(source) -> str:
+    value = str(_source_value(source, "video_engine") or "auto").strip().lower()
+    if value not in {"auto", "ffmpeg", "moviepy"}:
+        raise ValueError("video_engine must be 'auto', 'ffmpeg', or 'moviepy'")
+    return value
 
 
 def _cancel_after_stage_requested(run_id: str, stage: str) -> bool:
@@ -357,6 +370,7 @@ def _run_media_export(
     outro_thumbnail_enabled: bool,
     outro_thumbnail_duration: float,
     media_settings: dict | None = None,
+    video_engine: str = "auto",
     starting_progress: int = 88,
 ) -> tuple[str | None, str | None]:
     """Run the shared PowerPoint/FFmpeg export half of the pipeline.
@@ -436,6 +450,7 @@ def _run_media_export(
         if output_format == "video":
             studio = VideoStudio()
             if studio.use_powerpoint:
+                ctx.metrics({"video_engine": "powerpoint", "requested_video_engine": video_engine})
                 controller = PowerPointController()
                 ctx.progress("powerpoint", 90, "Building PowerPoint deck...")
                 presentation_file = controller.create_template_presentation(
@@ -486,6 +501,7 @@ def _run_media_export(
                         "outro_thumbnail_path": outro_thumbnail_path,
                         "outro_thumbnail_duration": outro_thumbnail_duration,
                         **(media_settings or {}),
+                        "video_engine": video_engine,
                         "progress_callback": _ppt_progress,
                         "cancel_event": ctx.cancel_event,
                     }
@@ -494,6 +510,10 @@ def _run_media_export(
                 raise RuntimeError(str(exc)) from exc
             presentation_file = _rel(result.get("presentation_path"))
             video_file = _rel(result.get("video_path"))
+            ctx.metrics({
+                "video_engine": str(result.get("engine") or video_engine),
+                "requested_video_engine": video_engine,
+            })
             if not video_file or not Path(video_file).exists():
                 raise RuntimeError(result.get("warning") or "Video engine did not produce an MP4 file")
         else:
@@ -789,6 +809,10 @@ def cancel_run(run_id: str):
 @runs_bp.route("/runs/text-to-video", methods=["POST"])
 def start_text_to_video():
     data = request.get_json(silent=True) or {}
+    try:
+        video_engine = _video_engine_choice(data)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     text = str(data.get("text") or "")
     if not text.strip():
         return jsonify({"success": False, "error": "Text is required"}), 400
@@ -867,6 +891,7 @@ def start_text_to_video():
         "quality": quality,
         "concurrent_pipeline_runs": concurrent_pipeline_runs,
         "media": _media_settings(data),
+        "video_engine": video_engine,
     }
     input_fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -918,6 +943,7 @@ def start_text_to_video():
     settings = dict(data)
     settings.update({
         "output_name": output_name,
+        "video_engine": video_engine,
         "input_fingerprint": input_fingerprint,
         "estimated_total_seconds": estimated_total_seconds,
     })
@@ -1172,6 +1198,7 @@ def start_text_to_video():
                     outro_thumbnail_enabled=outro_thumbnail_enabled,
                     outro_thumbnail_duration=outro_thumbnail_duration,
                     media_settings=_media_settings(data),
+                    video_engine=video_engine,
                 )
                 export_outputs = {
                     "html_filename": html_filename,
@@ -1268,6 +1295,10 @@ def start_text_to_video():
 @runs_bp.route("/runs/youtube-to-video", methods=["POST"])
 def start_youtube_to_video():
     data = request.get_json(silent=True) or {}
+    try:
+        video_engine = _video_engine_choice(data)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     youtube_url = str(data.get("youtube_url") or data.get("url") or "").strip()
     if not youtube_url:
         return jsonify({"success": False, "error": "No YouTube URL provided"}), 400
@@ -1345,6 +1376,7 @@ def start_youtube_to_video():
         "outro_thumbnail_enabled": outro_thumbnail_enabled,
         "outro_thumbnail_filename": outro_thumbnail_filename,
         "media": _media_settings(data),
+        "video_engine": video_engine,
     }
     input_fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -1391,6 +1423,7 @@ def start_youtube_to_video():
         "media": _media_settings(data),
         "input_fingerprint": input_fingerprint,
         "estimated_total_seconds": estimated_total_seconds,
+        "video_engine": video_engine,
     }
     run = create_run(
         tool="youtube-to-video",
@@ -1474,6 +1507,7 @@ def start_youtube_to_video():
                 outro_thumbnail_enabled=outro_thumbnail_enabled,
                 outro_thumbnail_duration=outro_thumbnail_duration,
                 media_settings=_media_settings(data),
+                video_engine=video_engine,
                 starting_progress=55,
             )
             outputs = {
@@ -1565,6 +1599,10 @@ def start_youtube_to_video():
 def start_html_to_video():
     """Queue HTML -> screenshots -> optional PPTX/MP4 using the shared engine."""
     data = request.get_json(silent=True) or {}
+    try:
+        video_engine = _video_engine_choice(data)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     html_content = str(data.get("html") or "")
     if not html_content.strip():
         return jsonify({"success": False, "error": "HTML is required"}), 400
@@ -1645,6 +1683,7 @@ def start_html_to_video():
         "quality": quality,
         "concurrent_pipeline_runs": concurrent_pipeline_runs,
         "media": _media_settings(data),
+        "video_engine": video_engine,
     }
     input_fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -1672,6 +1711,7 @@ def start_html_to_video():
     settings.update({
         "output_format": output_format,
         "output_name": output_name,
+        "video_engine": video_engine,
         "input_fingerprint": input_fingerprint,
         "estimated_total_seconds": estimated_total_seconds,
         **_media_settings(data),
@@ -1833,6 +1873,7 @@ def start_html_to_video():
                     outro_thumbnail_enabled=outro_thumbnail_enabled,
                     outro_thumbnail_duration=outro_thumbnail_duration,
                     media_settings=_media_settings(data),
+                    video_engine=video_engine,
                 )
                 export_outputs = {
                     "html_filename": html_filename,
@@ -1991,6 +2032,10 @@ def start_screenshots_to_video():
     # also accept a JSON-only body that points at existing screenshots
     # (``screenshot_files`` = list of paths under ``output/screenshots``).
     data = request.get_json(silent=True) or {}
+    try:
+        video_engine = _video_engine_choice(data)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     uploads = _collect_uploaded_screenshots()
 
     project_info = {
@@ -2132,6 +2177,7 @@ def start_screenshots_to_video():
         "fixed_seconds_per_screenshot_slide": fixed_seconds_per_screenshot_slide,
         "concurrent_pipeline_runs": concurrent_pipeline_runs,
         "media": _media_settings(data),
+        "video_engine": video_engine,
     }
     input_fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -2172,6 +2218,7 @@ def start_screenshots_to_video():
         "concurrent_pipeline_runs": concurrent_pipeline_runs,
         "input_fingerprint": input_fingerprint,
         "estimated_total_seconds": estimated_total_seconds,
+        "video_engine": video_engine,
         **_media_settings(data),
     }
     run = create_run(
@@ -2235,6 +2282,7 @@ def start_screenshots_to_video():
                 outro_thumbnail_enabled=outro_thumbnail_enabled,
                 outro_thumbnail_duration=outro_thumbnail_duration,
                 media_settings=_media_settings(data),
+                video_engine=video_engine,
                 starting_progress=20,
             )
             export_outputs = {

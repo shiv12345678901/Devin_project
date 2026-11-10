@@ -444,6 +444,7 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
   const { settings: appSettings } = useSettings()
   const [settings, setSettings] = useState<GenerateSettings>(() => ({
     ...DEFAULT_SETTINGS,
+    video_engine: appSettings.videoEngine,
     output_format: sourceMode === 'html'
       ? 'video'
       : sourceMode === 'youtube'
@@ -816,6 +817,7 @@ export default function TextToVideo({ sourceMode = 'text' }: { sourceMode?: Sour
     payload.subject = (payload.subject ?? '').trim() || undefined
     payload.title = (payload.title ?? '').trim() || undefined
     payload.concurrent_pipeline_runs = appSettings.concurrentPipelineRuns
+    payload.video_engine = appSettings.videoEngine
     if (sourceMode === 'youtube') {
       payload.youtube_url = (payload.youtube_url ?? '').trim()
       payload.youtube_timestamps = parseYoutubeTimestamps(text)
